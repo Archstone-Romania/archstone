@@ -1,0 +1,14 @@
+{
+  "name": "@archstone/provider-rest",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "REST provider (#6): map capability input -> HTTP request, HTTP response -> result.",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@archstone/compiler": "workspace:*"
+  }
+}

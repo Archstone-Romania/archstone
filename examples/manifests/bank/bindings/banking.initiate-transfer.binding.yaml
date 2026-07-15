@@ -1,0 +1,10 @@
+# NOT CDL — implementation (how), separate from the capability (what).
+
+binding:
+  capabilityId: banking.initiate-transfer
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${CORE_BANKING_URL}"
+      method: POST
+      path: /v2/transfers

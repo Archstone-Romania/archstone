@@ -1,0 +1,34 @@
+# CDL 0.2 — the hardest case: money moves, irreversibly
+# Showcases: effect: irreversible, failures, human-approval intent, lifecycle, ref inputs
+
+capability:
+  id: banking.initiate-transfer
+  description: Send money from a customer account to a beneficiary account.
+  effect: irreversible
+  lifecycle: beta
+
+  input:
+    source:
+      ref: Account
+    beneficiary:
+      ref: Beneficiary
+    amount:
+      type: money
+    reference:
+      type: text
+      required: false
+
+  output:
+    transfer:
+      type: Transfer
+
+  failures:
+    insufficient-funds: Source account cannot cover the amount and fees.
+    limit-exceeded: Amount exceeds the customer's transfer limits.
+    beneficiary-invalid: The beneficiary account cannot receive this transfer.
+
+  policies:
+    - authenticated
+    - human-approval
+    - rate-limited
+  provider: core-banking

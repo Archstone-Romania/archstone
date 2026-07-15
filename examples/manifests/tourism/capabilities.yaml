@@ -1,0 +1,13 @@
+# capabilities.yaml — Wanderlust Travel's contract with the AI world.
+# Deploy: archstone serve examples/manifests/tourism
+
+company:
+  id: wanderlust
+  name: Wanderlust Travel
+  description: A travel agency exposing accommodation search to AI agents.
+
+capabilities:
+  - tourism.search
+
+providers:
+  - booking-engine

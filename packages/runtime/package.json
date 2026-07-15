@@ -1,0 +1,17 @@
+{
+  "name": "@archstone/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime (#5 Registry, #7 MCP emitter): list/resolve tools over IR, serve over stdio.",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@archstone/schema": "workspace:*",
+    "@archstone/compiler": "workspace:*",
+    "@archstone/provider-rest": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  }
+}

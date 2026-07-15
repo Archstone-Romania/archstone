@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/policy.schema.json",
+  "title": "Policy",
+  "description": "Rules governing whether and how a Capability may be invoked. Evaluated before Connector execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "archstone/v1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "Policy"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "provider": { "type": "string" },
+        "scope": {
+          "type": "string",
+          "enum": ["provider", "capability"],
+          "description": "Whether policy applies to all capabilities or one"
+        },
+        "capabilityId": {
+          "type": "string",
+          "description": "Required when scope is capability"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Principal patterns or roles allowed to invoke"
+        },
+        "deny": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rateLimit": {
+          "type": "object",
+          "properties": {
+            "maxInvocations": { "type": "integer", "minimum": 1 },
+            "windowSeconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Business guardrails (e.g. maxRefundAmount)"
+        }
+      }
+    }
+  }
+}

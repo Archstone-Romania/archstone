@@ -1,0 +1,22 @@
+# CDL 0.2 — a pure assessment (read); the "quote" half of quote -> commit
+
+capability:
+  id: banking.quote-transfer
+  description: Calculate fees, exchange rate, and arrival estimate for a transfer.
+  effect: read
+
+  input:
+    source:
+      ref: Account
+    beneficiary:
+      ref: Beneficiary
+    amount:
+      type: money
+
+  output:
+    quote:
+      type: TransferQuote
+
+  policies:
+    - authenticated
+  provider: core-banking

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/workflow.schema.json",
+  "title": "Workflow",
+  "description": "Ordered composition of Capabilities across multiple steps. Post-MVP orchestration — schema defined now for coherence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "archstone/v1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "Workflow"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "provider": { "type": "string" }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["steps"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "capabilityId"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Step identifier within this workflow"
+              },
+              "capabilityId": {
+                "type": "string",
+                "description": "Reference to a Capability metadata.id"
+              },
+              "dependsOn": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Step ids that must complete first"
+              },
+              "inputMapping": {
+                "type": "object",
+                "description": "Map prior step outputs or workflow input to capability input"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

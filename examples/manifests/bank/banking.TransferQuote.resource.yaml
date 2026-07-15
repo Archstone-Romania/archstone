@@ -1,0 +1,12 @@
+resource:
+  name: banking.TransferQuote
+  description: A costed, time-boxed estimate for a transfer.
+  fields:
+    amount:
+      type: money
+    fee:
+      type: money
+    arrivesOn:
+      type: date
+    expiresAt:
+      type: datetime

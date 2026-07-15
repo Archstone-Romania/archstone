@@ -1,0 +1,28 @@
+# CDL — Capability Definition Language
+# Business only. No REST. No HTTP. No JSON Schema.
+# Binding: tourism.search-accommodation.binding.yaml
+
+capability:
+  id: tourism.search-accommodation
+
+  description: Find accommodation matching customer preferences.
+
+  input:
+    destination:
+      type: location
+    dates:
+      type: date-range
+    travelers:
+      type: party
+    preferences:
+      type: preference-set
+
+  output:
+    accommodations:
+      collection: Accommodation
+
+  policies:
+    - authenticated
+    - rate-limited
+
+  provider: booking-engine

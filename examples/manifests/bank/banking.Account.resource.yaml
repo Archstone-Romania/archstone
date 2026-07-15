@@ -1,0 +1,17 @@
+# Resource Definition (a manifest, not a language primitive) — CDL 0.2
+# State is a field (status enum); there is no state-machine block (RQ-002).
+
+resource:
+  name: banking.Account
+  description: A customer bank account.
+  fields:
+    number:
+      type: identifier
+    currency:
+      type: enum
+      values: [EUR, USD, GBP]
+    balance:
+      type: money
+    status:
+      type: enum
+      values: [active, frozen, closed]

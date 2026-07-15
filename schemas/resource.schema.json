@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/resource.schema.json",
+  "title": "Resource Definition (*.resource.yaml)",
+  "description": "A named business entity capabilities read or mutate. A MANIFEST, not a language primitive — the primitive is the Resource Reference (ref). Resource state is a field (enum status + date timestamps); no states/transitions block.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resource"],
+  "properties": {
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fields"],
+      "properties": {
+        "name": {
+          "$ref": "https://archstone.dev/schema/v1/cdl.schema.json#/$defs/resourceName"
+        },
+        "description": { "type": "string" },
+        "fields": {
+          "$ref": "https://archstone.dev/schema/v1/cdl.schema.json#/$defs/fieldMap"
+        }
+      }
+    }
+  }
+}

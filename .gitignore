@@ -1,0 +1,26 @@
+# Dependencies & build output
+node_modules/
+dist/
+build/
+out/
+*.tsbuildinfo
+coverage/
+.turbo/
+.cache/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS & editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/connector.schema.json",
+  "title": "Connector",
+  "description": "Implementation binding — how a Capability is fulfilled against a backend system.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["rest", "graphql", "grpc", "sql", "soap"],
+      "description": "Connector protocol. MVP supports rest only."
+    },
+    "rest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "Base URL for the backend (may use env placeholder)"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+        },
+        "path": {
+          "type": "string",
+          "description": "URL path (may include {param} placeholders from input)"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": {
+          "type": "string",
+          "description": "Body template or mapping reference"
+        }
+      }
+    },
+    "graphql": {
+      "type": "object",
+      "description": "Post-MVP",
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri" },
+        "operation": { "type": "string" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "rest" } }, "required": ["type"] },
+      "then": { "required": ["rest"] }
+    }
+  ]
+}

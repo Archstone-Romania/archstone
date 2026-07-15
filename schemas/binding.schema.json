@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/binding.schema.json",
+  "title": "Capability Binding",
+  "description": "Implementation binding for a CDL capability. Separate from CDL — describes how, not what.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding"],
+  "properties": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capabilityId", "connector"],
+      "properties": {
+        "capabilityId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+        },
+        "connector": {
+          "$ref": "connector.schema.json"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/execution.schema.json",
+  "title": "Execution",
+  "description": "Record of a single capability invocation attempt — atomic unit of audit and telemetry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec", "status"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "archstone/v1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "Execution"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "capabilityId", "startedAt"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique execution identifier"
+        },
+        "capabilityId": {
+          "type": "string",
+          "description": "Capability that was invoked"
+        },
+        "provider": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "workflowId": { "type": "string" },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input"],
+      "properties": {
+        "input": {
+          "type": "object",
+          "description": "Input payload passed to the capability"
+        },
+        "consumer": {
+          "type": "string",
+          "description": "Consumer that initiated the invocation (e.g. mcp, function-calling)"
+        },
+        "principal": {
+          "type": "string",
+          "description": "Identity principal if resolved"
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase"],
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": ["pending", "running", "succeeded", "failed", "denied"]
+        },
+        "message": { "type": "string" },
+        "output": {
+          "type": "object",
+          "description": "Capability result on success"
+        },
+        "denialReason": {
+          "type": "string",
+          "description": "Policy denial reason when phase is denied"
+        }
+      }
+    }
+  }
+}

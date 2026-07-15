@@ -1,0 +1,18 @@
+# capabilities.yaml — the iconic Archstone manifest (CDL 0.2)
+# Second example company beside booking/ — the regulated-domain showcase.
+# Deploy: archstone apply ./bank/
+
+company:
+  id: bank
+  name: Meridian Bank
+  description: Retail banking capabilities exposed to AI agents.
+
+capabilities:
+  - banking.list-accounts
+  - banking.quote-transfer
+  - banking.initiate-transfer
+  - banking.generate-statement
+
+providers:
+  - core-banking
+  - statements

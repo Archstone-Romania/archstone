@@ -1,0 +1,19 @@
+# capabilities.yaml — the iconic Archstone manifest
+# Like openapi.yaml · main.tf · docker-compose.yaml · deployment.yaml
+# Deploy: archstone apply capabilities.yaml
+
+company:
+  id: booking
+  name: Booking Holdings
+  description: Global accommodation and travel services exposed to AI agents.
+
+capabilities:
+  - tourism.search
+  - tourism.book
+  - tourism.cancel
+  - tourism.invoice
+
+providers:
+  - booking-api
+  - crm
+  - payment

@@ -1,0 +1,23 @@
+{
+  "name": "archstone",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.3.0",
+  "description": "Archstone — a compiler that (in its first MVP) generates an MCP server. Zero manual integration.",
+  "scripts": {
+    "apply": "tsx packages/cli/src/index.ts apply",
+    "serve": "tsx packages/cli/src/index.ts serve",
+    "demo:booking": "tsx packages/cli/src/index.ts apply examples/manifests/booking",
+    "demo:tourism": "tsx packages/cli/src/index.ts serve examples/manifests/tourism",
+    "demo:mock": "node examples/demo/mock-stays-server.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

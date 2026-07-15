@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/cdl.schema.json",
+  "title": "Capability Definition Language (CDL) v0.2",
+  "description": "Business-only capability declaration (CDL 0.2, Experimental). No REST, HTTP, or JSON Schema in the authoring format. Bindings live in separate files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capability"],
+  "properties": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "effect"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+          "description": "Namespaced capability ID (domain.action), e.g. banking.initiate-transfer"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "effect": {
+          "type": "string",
+          "enum": ["read", "write", "irreversible"],
+          "description": "Reversibility of INVOKING the capability, not of its business consequences (Constitution Axiom A-1)"
+        },
+        "input": { "$ref": "#/$defs/fieldMap" },
+        "output": { "$ref": "#/$defs/fieldMap" },
+        "failures": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "description": "Business failure states: kebab-case token -> one-line description"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": ["experimental", "beta", "stable", "deprecated", "retired"],
+          "default": "stable",
+          "description": "Business stability fact. Absent = stable. Visibility/audience is Policy, not here."
+        },
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "authenticated",
+              "rate-limited",
+              "tenant-scoped",
+              "human-approval",
+              "consent-required"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider identifier; must appear in capabilities.yaml providers"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "resourceName": {
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9-]*\\.)?[A-Z][A-Za-z0-9]*$",
+      "description": "Resource name, optionally domain-qualified: banking.Account or Account"
+    },
+    "fieldMap": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "$ref": "#/$defs/semanticField" },
+          { "$ref": "#/$defs/refField" },
+          { "$ref": "#/$defs/collectionField" },
+          { "$ref": "#/$defs/resourceTypeField" }
+        ]
+      }
+    },
+    "semanticField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "location",
+            "date-range",
+            "party",
+            "preference-set",
+            "money",
+            "identifier",
+            "string",
+            "text",
+            "time-slot",
+            "quantity",
+            "enum",
+            "date",
+            "datetime"
+          ]
+        },
+        "required": { "type": "boolean", "default": true },
+        "description": { "type": "string" },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Closed value set — required iff type is enum"
+        }
+      },
+      "if": { "properties": { "type": { "const": "enum" } } },
+      "then": { "required": ["type", "values"] },
+      "else": { "not": { "required": ["values"] } }
+    },
+    "refField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/resourceName" },
+        "required": { "type": "boolean", "default": true },
+        "description": { "type": "string" }
+      }
+    },
+    "collectionField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collection"],
+      "properties": {
+        "collection": { "$ref": "#/$defs/resourceName" },
+        "description": { "type": "string" }
+      }
+    },
+    "resourceTypeField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "$ref": "#/$defs/resourceName" },
+        "required": { "type": "boolean", "default": true },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

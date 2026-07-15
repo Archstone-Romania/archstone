@@ -1,0 +1,11 @@
+resource:
+  name: banking.Beneficiary
+  description: A payee that can receive transfers.
+  fields:
+    name:
+      type: string
+    account:
+      type: identifier
+    status:
+      type: enum
+      values: [pending, verified, rejected]

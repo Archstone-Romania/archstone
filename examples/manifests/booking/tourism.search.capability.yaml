@@ -1,0 +1,28 @@
+# Deploy: archstone apply tourism.search.capability.yaml
+# CDL 0.2
+
+capability:
+  id: tourism.search
+  description: Find accommodation matching customer preferences.
+  effect: read
+
+  input:
+    destination:
+      type: location
+    dates:
+      type: date-range
+    travelers:
+      type: party
+    preferences:
+      type: preference-set
+      required: false
+
+  output:
+    accommodations:
+      collection: Accommodation
+
+  policies:
+    - authenticated
+    - rate-limited
+
+  provider: booking-api

@@ -1,0 +1,26 @@
+# CDL 0.2
+
+capability:
+  id: tourism.book
+  description: Reserve accommodation for a guest.
+  effect: write
+
+  input:
+    accommodation:
+      ref: Accommodation
+    travelers:
+      type: party
+    dates:
+      type: date-range
+
+  output:
+    booking:
+      type: Booking
+
+  failures:
+    no-availability: The accommodation cannot host this party for these dates.
+    price-changed: The quoted price is no longer valid; re-run tourism.search.
+
+  policies:
+    - authenticated
+  provider: booking-api

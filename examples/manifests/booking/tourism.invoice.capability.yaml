@@ -1,0 +1,19 @@
+# CDL 0.2
+
+capability:
+  id: tourism.invoice
+  description: Issue an invoice for a completed booking.
+  effect: write
+
+  input:
+    booking:
+      ref: Booking
+
+  output:
+    invoice:
+      type: Invoice
+
+  policies:
+    - authenticated
+    - tenant-scoped
+  provider: payment

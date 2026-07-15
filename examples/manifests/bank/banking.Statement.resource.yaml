@@ -1,0 +1,8 @@
+resource:
+  name: banking.Statement
+  description: A rendered account statement for a period.
+  fields:
+    period:
+      type: date-range
+    issuedAt:
+      type: date

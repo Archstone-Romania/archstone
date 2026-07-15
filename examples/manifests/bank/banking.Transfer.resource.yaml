@@ -1,0 +1,16 @@
+# The RQ-001 + RQ-002 result made concrete:
+#   status  -> state is a field (the state machine is derived, not authored)
+#   settlesAt -> the mutable date instant a future trigger would watch
+
+resource:
+  name: banking.Transfer
+  description: A money movement between two accounts.
+  fields:
+    amount:
+      type: money
+    status:
+      type: enum
+      values: [pending, settled, failed]
+    settlesAt:
+      type: datetime
+      description: When settlement is due — the instant an initiation trigger would watch (RQ-001).

@@ -1,0 +1,25 @@
+# CDL 0.2
+
+capability:
+  id: tourism.cancel
+  description: Cancel an existing accommodation reservation.
+  effect: write
+
+  input:
+    booking:
+      ref: Booking
+    reason:
+      type: text
+      required: false
+
+  output:
+    confirmation:
+      type: identifier
+
+  failures:
+    already-cancelled: The reservation is already cancelled.
+    non-refundable: The reservation is past its free-cancellation window.
+
+  policies:
+    - authenticated
+  provider: booking-api

@@ -1,0 +1,14 @@
+{
+  "name": "@archstone/compiler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Compiler (#4): Semantic Model -> IR. The IR is the physical form of the moat.",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@archstone/schema": "workspace:*"
+  }
+}

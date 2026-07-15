@@ -1,0 +1,15 @@
+# CDL 0.2 — a no-input read
+
+capability:
+  id: banking.list-accounts
+  description: List the customer's accounts.
+  effect: read
+
+  output:
+    accounts:
+      collection: Account
+
+  policies:
+    - authenticated
+    - tenant-scoped
+  provider: core-banking

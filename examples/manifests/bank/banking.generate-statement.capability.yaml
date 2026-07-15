@@ -1,0 +1,22 @@
+# CDL 0.2 — a deprecated read (lifecycle showcase)
+
+capability:
+  id: banking.generate-statement
+  description: Produce an account statement for a period.
+  effect: read
+  lifecycle: deprecated
+
+  input:
+    account:
+      ref: Account
+    period:
+      type: date-range
+
+  output:
+    statement:
+      type: Statement
+
+  policies:
+    - authenticated
+    - tenant-scoped
+  provider: statements
