@@ -1,5 +1,8 @@
 packages:
   - "packages/*"
   - "providers/*"
+  - "examples/demo/*"
 allowBuilds:
   esbuild: true
+  sharp: false
+  workerd: true

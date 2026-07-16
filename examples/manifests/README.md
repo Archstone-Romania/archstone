@@ -22,9 +22,9 @@ Every ecosystem has one file developers recognize:
 
 | Pattern | Schema | Role |
 |---|---|---|
-| **`capabilities.yaml`** | [`capabilities.schema.json`](../../schemas/capabilities.schema.json) | **Iconic company contract with the AI world** |
-| `*.capability.yaml` | [`cdl.schema.json`](../../schemas/cdl.schema.json) | **One deployable capability** |
-| `bindings/*.binding.yaml` | [`binding.schema.json`](../../schemas/binding.schema.json) | Implementation (how) |
+| **`capabilities.yaml`** | [`capabilities.schema.json`](../../packages/schema/schemas/capabilities.schema.json) | **Iconic company contract with the AI world** |
+| `*.capability.yaml` | [`cdl.schema.json`](../../packages/schema/schemas/cdl.schema.json) | **One deployable capability** |
+| `bindings/*.binding.yaml` | [`binding.schema.json`](../../packages/schema/schemas/binding.schema.json) | Implementation (how) |
 
 ---
 
@@ -35,7 +35,7 @@ Every ecosystem has one file developers recognize:
   `human-approval`, `lifecycle`, and `*.resource.yaml` Resource Definitions whose
   state is a `status` enum field + `date` timestamps.
 
-All manifests validate against the [schemas](../../schemas/) — 17/17, both valid-accept and invalid-reject checks pass.
+All manifests validate against the [schemas](../../packages/schema/schemas/) — 17/17, both valid-accept and invalid-reject checks pass.
 
 ```
 booking/                              bank/

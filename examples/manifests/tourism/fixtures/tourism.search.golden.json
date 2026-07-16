@@ -1,0 +1,12 @@
+{
+  "capabilityId": "tourism.search",
+  "recordedAt": "2026-07-16T00:00:00Z",
+  "request": {
+    "destination": "Nice",
+    "dates": { "from": "2026-08-01", "to": "2026-08-05" },
+    "travelers": { "adults": 2 }
+  },
+  "expects": {
+    "collectionNonEmpty": true
+  }
+}

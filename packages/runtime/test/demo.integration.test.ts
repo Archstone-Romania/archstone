@@ -19,7 +19,11 @@ function startMock(): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((res) => {
     const server = createServer((_req, resp) => {
       resp.setHeader("content-type", "application/json");
-      resp.end(JSON.stringify({ stays: [{ id: "azur-01", name: "Hotel Azur", pricePerNight: 118 }] }));
+      resp.end(
+        JSON.stringify({
+          stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+        }),
+      );
     });
     server.listen(0, () => {
       const addr = server.address();

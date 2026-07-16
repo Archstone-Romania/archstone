@@ -1,17 +1,32 @@
 {
   "name": "@archstone/runtime",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "description": "Runtime (#5 Registry, #7 MCP emitter): list/resolve tools over IR, serve over stdio.",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@archstone/schema": "workspace:*",
     "@archstone/compiler": "workspace:*",
     "@archstone/provider-rest": "workspace:*",
+    "@archstone/schema": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
   }
 }

@@ -1,0 +1,20 @@
+# Resource Definition — CDL 0.2. A reservation for an accommodation.
+# Transitively references Accommodation (bare, same-domain shorthand → tourism.Accommodation).
+
+resource:
+  name: tourism.Booking
+  description: A confirmed reservation of an accommodation for a party of travelers.
+  fields:
+    reference:
+      type: identifier
+      description: The booking reference code.
+    accommodation:
+      ref: Accommodation
+      description: The reserved accommodation.
+    dates:
+      type: date-range
+      description: Stay window for the reservation.
+    status:
+      type: enum
+      values: [confirmed, pending, cancelled]
+      description: Current reservation state.

@@ -7,3 +7,24 @@ binding:
       baseUrl: "${STAYS_API_URL}"
       method: POST
       path: /v1/search
+
+  # Provider body → Stay resource (ADD-12). The resource is the anchor; these JSONPaths
+  # are the only thing that moves if the backend renames a field. Required fields (name,
+  # location, pricePerNight) missing → contract VIOLATION; rating is optional → DEGRADED.
+  response:
+    collection: "$.stays[*]"
+    resource: Stay
+    map:
+      name: "$.name"
+      location: "$.location"
+      pricePerNight: "$.pricePerNight"
+      rating: "$.rating"
+
+  # What we last verified the mock backend returns (ADD-18). `archstone verify` replays
+  # fixtures/tourism.search.golden.json's `request` live and compares the response shape.
+  contract:
+    source: recorded
+    fingerprint: "sha256:cabe202bbd2f2d4c6aef739c652a1fba3de20333539a1df42ea5cc187dfb1273"
+    verifiedAt: "2026-07-16T00:00:00Z"
+    probe:
+      fixture: fixtures/tourism.search.golden.json

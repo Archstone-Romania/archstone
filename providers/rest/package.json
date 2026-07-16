@@ -1,14 +1,29 @@
 {
   "name": "@archstone/provider-rest",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "description": "REST provider (#6): map capability input -> HTTP request, HTTP response -> result.",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
     "@archstone/compiler": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
   }
 }

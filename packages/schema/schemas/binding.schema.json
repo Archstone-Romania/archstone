@@ -18,6 +18,12 @@
         },
         "connector": {
           "$ref": "connector.schema.json"
+        },
+        "response": {
+          "$ref": "response.schema.json"
+        },
+        "contract": {
+          "$ref": "contract.schema.json"
         }
       }
     }

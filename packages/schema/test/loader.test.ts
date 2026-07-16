@@ -37,6 +37,21 @@ describe("load — valid fixtures", () => {
     // effect enum is honoured (bank has an irreversible transfer)
     expect(r.capabilityDocs.map((d) => d.capability.effect)).toContain("irreversible");
   });
+
+  it("loads *.resource.yaml into resourceDocs (bank has 5)", () => {
+    const r = load(join(manifests, "bank"));
+    expect(r.resourceDocs).toHaveLength(5);
+    const account = r.resourceDocs.find((d) => d.resource.name === "banking.Account");
+    expect(account).toBeDefined();
+    expect(account!.file).toBe("banking.Account.resource.yaml");
+    expect(Object.keys(account!.resource.fields)).toContain("balance");
+  });
+
+  it("loads the tourism demo's Stay resource", () => {
+    const r = load(join(manifests, "tourism"));
+    expect(r.ok).toBe(true);
+    expect(r.resourceDocs.map((d) => d.resource.name)).toContain("tourism.Stay");
+  });
 });
 
 describe("load — rejections (validation actually bites)", () => {
@@ -66,6 +81,17 @@ describe("load — rejections (validation actually bites)", () => {
     const r = load(dir);
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.file === "capabilities.yaml" && /missing/.test(i.message))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports a malformed resource file, naming it (missing required 'fields')", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: ok\ncapabilities:\n  - shop.search\nproviders:\n  - store\n",
+      "Bad.resource.yaml": "resource:\n  name: Bad\n",
+    });
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.file === "Bad.resource.yaml" && /fields/.test(i.message))).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 

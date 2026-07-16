@@ -2,5 +2,8 @@
 // Semantic Validator (#3) runs on the loaded model; compile (#4) lowers it to the
 // IR — the target-agnostic contract every emitter consumes.
 export * from "./ir";
+export * from "./resolve";
+export * from "./path";
+export * from "./fingerprint";
 export * from "./validate";
 export * from "./compile";

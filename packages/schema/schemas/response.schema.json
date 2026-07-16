@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/response.schema.json",
+  "title": "Response Mapping",
+  "description": "Binding block that maps a live provider response body onto a named resource. Implementation, not CDL — the resource is the stable anchor; provider paths (JSONPath) drift. Validated + executed above the connector (ADD-12 / RFC-0006).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resource", "map"],
+  "properties": {
+    "collection": {
+      "type": "string",
+      "description": "JSONPath to the list of items in the provider body (e.g. $.results[*]). Absent = a single resource object at the response root."
+    },
+    "resource": {
+      "$ref": "https://archstone.dev/schema/v1/cdl.schema.json#/$defs/resourceName"
+    },
+    "map": {
+      "type": "object",
+      "description": "resource field name → JSONPath into a single item (relative to `collection`, else the response root).",
+      "minProperties": 1,
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "JSONPath; the mapped field keeps the resource's own required-ness."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string" },
+              "required": {
+                "const": false,
+                "description": "Only `false` is allowed — a mapping may loosen a required field to degrade gracefully, never tighten one."
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

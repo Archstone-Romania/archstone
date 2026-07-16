@@ -1,0 +1,14 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "types": ["node", "@cloudflare/workers-types"],
+    "paths": {
+      "@archstone/schema": ["../../../packages/schema/src/index.ts"],
+      "@archstone/compiler": ["../../../packages/compiler/src/index.ts"],
+      "@archstone/runtime": ["../../../packages/runtime/src/index.ts"],
+      "@archstone/provider-rest": ["../../../providers/rest/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
+}

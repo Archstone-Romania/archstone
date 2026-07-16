@@ -1,0 +1,20 @@
+# Resource Definition (a manifest, not a language primitive) — CDL 0.2
+# The unit tourism.search returns: a place to stay. State is a field, not a block.
+
+resource:
+  name: tourism.Stay
+  description: A bookable place to stay matching a traveler's search.
+  fields:
+    name:
+      type: text
+      description: The property's display name.
+    location:
+      type: location
+      description: Where the stay is — city, region, or address.
+    pricePerNight:
+      type: quantity
+      description: Nightly rate for the stay.
+    rating:
+      type: quantity
+      required: false
+      description: Guest review score, when available.

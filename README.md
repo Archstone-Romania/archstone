@@ -32,9 +32,18 @@ integration code. Archstone compiles that to a target-agnostic **IR**, and an em
 the IR into tools an AI agent can call. Swap the backend; the CDL and the generated tool do
 not change.
 
+Capability outputs reference named **resources** (`*.resource.yaml`); the compiler resolves
+them into a typed, described `outputSchema`, and a binding's `response:` mapping enforces
+that shape at every call — a required field missing from the provider's response fails
+closed (a structured error, never a silent raw pass-through). `archstone verify` replays a
+recorded fixture against the live backend on demand and reports a 🟢/🟡/🔴 health status per
+binding, so contract drift shows up before an agent hits it.
+
 ---
 
 ## Quick start
+
+**From source (this repository):**
 
 ```bash
 pnpm install
@@ -44,6 +53,23 @@ pnpm apply examples/manifests/booking
 
 # Serve it to an AI agent as MCP tools over stdio
 pnpm serve examples/manifests/tourism
+
+# Replay a binding's golden fixture against the live backend; detect drift
+pnpm verify examples/manifests/tourism
+```
+
+**From npm (standalone CLI):**
+
+```bash
+# Install globally or use npx
+npm install -g @archstone/cli
+# or
+npx @archstone/cli apply <manifest-dir>
+
+# Then run the same commands:
+archstone apply examples/manifests/booking
+archstone serve examples/manifests/tourism
+archstone verify examples/manifests/tourism
 ```
 
 New here? Start with the **[onboarding guide](docs/ONBOARDING.md)** — one path for
@@ -58,7 +84,7 @@ Archstone).
 |---|---|
 | **Onboarding** | [`docs/ONBOARDING.md`](docs/ONBOARDING.md) |
 | **CDL by example** | [`examples/manifests/booking/`](examples/manifests/booking/) |
-| **The schemas (wire format)** | [`schemas/`](schemas/) |
+| **The schemas (wire format)** | [`packages/schema/schemas/`](packages/schema/schemas/) |
 | **End-to-end demo (Claude)** | [`examples/demo/README.md`](examples/demo/README.md) |
 
 ---
@@ -68,13 +94,13 @@ Archstone).
 ```
 archstone/
 ├── packages/
-│   ├── schema/       # load + shape-validate CDL manifests
+│   ├── schema/
+│   │   └── schemas/  # JSON Schema — cdl.schema.json validates the language
 │   ├── compiler/     # compile → IR  (src/ir.ts = the moat: target-agnostic)
 │   ├── runtime/      # registry + MCP emitter (stdio)
 │   └── cli/          # `archstone apply` / `serve` — wires the pipeline
 ├── providers/
 │   └── rest/         # REST adapter (providers = adapters)
-├── schemas/          # JSON Schema — cdl.schema.json validates the language
 ├── examples/         # manifests + the Claude demo
 └── docs/             # rfc/ · adr/ · spec/ · glossary/ · ONBOARDING.md
 ```

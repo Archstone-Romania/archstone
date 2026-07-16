@@ -5,8 +5,8 @@
 
 Inspired by Kubernetes, OpenAPI, AsyncAPI, and Terraform — but we model **what a business can do**, not how an API is called.
 
-To learn CDL by example, see [`../examples/manifests/`](../examples/manifests/) and the
-[onboarding guide](../docs/ONBOARDING.md).
+To learn CDL by example, see [`../../../../examples/manifests/`](../../../../examples/manifests/) and the
+[onboarding guide](../../../../docs/ONBOARDING.md).
 
 ---
 

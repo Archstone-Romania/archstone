@@ -8,9 +8,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { IRField, IRTool, SemanticType } from "@archstone/compiler";
+import type { IRField, IRResourceRegistry, IRTool, SemanticType } from "@archstone/compiler";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 import { buildRegistry, Registry } from "./registry";
+import { applyResponseMapping } from "./mapping";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -23,6 +24,7 @@ export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: JsonSchema;
+  outputSchema?: JsonSchema;
 }
 
 function semanticJsonSchema(semantic: SemanticType, values?: string[]): JsonSchema {
@@ -66,24 +68,43 @@ function semanticJsonSchema(semantic: SemanticType, values?: string[]): JsonSche
   }
 }
 
-function fieldJsonSchema(f: IRField): JsonSchema {
+/**
+ * Lower a resolved resource (looked up by canonical name in the registry) to a typed,
+ * described object schema. `visited` guards against recursive/self-referential resources
+ * (R-3): a name already being expanded stops at a generic `{type:object}`. An unknown name
+ * (validation floor) also degrades to `{type:object}` rather than crashing.
+ */
+function resourceJsonSchema(name: string, resources: IRResourceRegistry, visited: ReadonlySet<string>): JsonSchema {
+  const fields = resources[name];
+  if (!fields || visited.has(name)) return { type: "object" };
+  const next = new Set(visited).add(name);
+  return objectJsonSchema(fields, resources, next);
+}
+
+function fieldJsonSchema(f: IRField, resources: IRResourceRegistry, visited: ReadonlySet<string>): JsonSchema {
   const base: JsonSchema = f.description ? { description: f.description } : {};
-  if (f.type.kind === "collection") return { ...base, type: "array", items: { type: "object" } };
-  if (f.type.kind === "resource") return { ...base, type: "object" };
+  if (f.type.kind === "collection") return { ...base, type: "array", items: resourceJsonSchema(f.type.of, resources, visited) };
+  if (f.type.kind === "resource") return { ...base, ...resourceJsonSchema(f.type.name, resources, visited) };
   return { ...base, ...semanticJsonSchema(f.type.semantic, f.type.values) };
 }
 
-/** Lower IR input fields to a JSON Schema object (the tool's inputSchema). */
-export function inputJsonSchema(fields: IRField[]): JsonSchema {
+/** Lower an IR field list to a JSON Schema object, resolving resource/collection field
+ *  types through the registry (typed, described). Used for both input and output schemas. */
+export function objectJsonSchema(fields: IRField[], resources: IRResourceRegistry = {}, visited: ReadonlySet<string> = new Set()): JsonSchema {
   const properties: JsonSchema = {};
   const required: string[] = [];
   for (const f of fields) {
-    properties[f.name] = fieldJsonSchema(f);
+    properties[f.name] = fieldJsonSchema(f, resources, visited);
     if (f.required) required.push(f.name);
   }
   const schema: JsonSchema = { type: "object", properties };
   if (required.length > 0) schema.required = required;
   return schema;
+}
+
+/** Lower IR input fields to a JSON Schema object (the tool's inputSchema). */
+export function inputJsonSchema(fields: IRField[], resources: IRResourceRegistry = {}): JsonSchema {
+  return objectJsonSchema(fields, resources);
 }
 
 /**
@@ -100,17 +121,25 @@ function emittedTools(registry: Registry): Map<string, IRTool> {
   return byName;
 }
 
-/** The MCP tool list: only invocable (bound) capabilities become tools. */
+/** The MCP tool list: only invocable (bound) capabilities become tools. Input and output
+ *  fields lower against the IR resource registry, so a `collection: Stay` output emits a
+ *  typed, described `outputSchema` (not a bare `{type:object}`). */
 export function toolDefinitions(registry: Registry): McpToolDef[] {
-  return [...emittedTools(registry)].map(([name, t]) => ({
-    name,
-    description: t.description,
-    inputSchema: inputJsonSchema(t.input),
-  }));
+  const resources = registry.ir.resources;
+  return [...emittedTools(registry)].map(([name, t]) => {
+    const def: McpToolDef = {
+      name,
+      description: t.description,
+      inputSchema: inputJsonSchema(t.input, resources),
+    };
+    if (t.output.length > 0) def.outputSchema = objectJsonSchema(t.output, resources);
+    return def;
+  });
 }
 
 export interface CallResult {
   content: { type: "text"; text: string }[];
+  structuredContent?: Record<string, unknown>;
   isError: boolean;
 }
 
@@ -126,8 +155,36 @@ export async function callTool(
     return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };
   }
   const result = await invokeRest(tool, args, opts);
-  const text = result.ok ? JSON.stringify(result.data ?? null, null, 2) : (result.error ?? "invocation failed");
-  return { content: [{ type: "text", text }], isError: !result.ok };
+  if (!result.ok) {
+    return { content: [{ type: "text", text: result.error ?? "invocation failed" }], isError: true };
+  }
+
+  // #12 (ADD-12): a binding with a `response:` mapping is now MAPPED + VALIDATED against the
+  // resource — the outputSchema (ADD-11) becomes an enforced contract, not just declared.
+  if (tool.response) {
+    const mapped = applyResponseMapping(tool, result.data, registry.ir.resources);
+    if (mapped.status === "violation") {
+      // Fail closed (D-6): the declared output shape was not met — no raw pass-through.
+      const text = `contract violation: provider response is missing required field(s): ${(mapped.missing ?? []).join(", ")}. Declared output shape not met; raw body withheld.`;
+      return { content: [{ type: "text", text }], isError: true };
+    }
+    const content: CallResult["content"] = [{ type: "text", text: JSON.stringify(mapped.data, null, 2) }];
+    if (mapped.status === "degraded") {
+      content.push({ type: "text", text: `note: optional field(s) absent (degraded): ${(mapped.degraded ?? []).join(", ")}` });
+    }
+    return { content, structuredContent: mapped.data, isError: false };
+  }
+
+  // No response mapping: today's raw pass-through (rollout-safe). The declared outputSchema is
+  // NOT yet enforced for these tools — add a `response:` block to close the loop (ADD-12 R-3).
+  const out: CallResult = { content: [{ type: "text", text: JSON.stringify(result.data ?? null, null, 2) }], isError: false };
+  if (tool.output.length > 0) {
+    const data = result.data;
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      out.structuredContent = data as Record<string, unknown>;
+    }
+  }
+  return out;
 }
 
 /** Build an MCP Server that lists and invokes the registry's tools. */

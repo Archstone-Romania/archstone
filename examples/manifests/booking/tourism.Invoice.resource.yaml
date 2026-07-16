@@ -1,0 +1,18 @@
+# Resource Definition — CDL 0.2. An invoice issued for a completed booking.
+
+resource:
+  name: tourism.Invoice
+  description: A payment document issued for a completed booking.
+  fields:
+    number:
+      type: identifier
+      description: The invoice number.
+    booking:
+      ref: Booking
+      description: The booking this invoice bills for.
+    total:
+      type: money
+      description: Total amount due.
+    issuedAt:
+      type: datetime
+      description: When the invoice was issued.

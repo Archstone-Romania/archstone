@@ -1,15 +1,27 @@
 {
   "name": "@archstone/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "description": "CLI (#1): archstone apply — wires the pipeline (parse -> validate -> IR -> runtime).",
+  "main": "./dist/index.js",
   "bin": {
-    "archstone": "./src/index.ts"
+    "archstone": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@archstone/schema": "workspace:*",
     "@archstone/compiler": "workspace:*",
-    "@archstone/runtime": "workspace:*"
+    "@archstone/runtime": "workspace:*",
+    "@archstone/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
   }
 }

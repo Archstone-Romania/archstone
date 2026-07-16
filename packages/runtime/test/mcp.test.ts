@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { join, dirname, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRegistry } from "../src/registry";
-import { toolDefinitions, callTool, toolName, inputJsonSchema } from "../src/mcp";
-import type { IRField } from "@archstone/compiler";
+import { toolDefinitions, callTool, toolName, inputJsonSchema, objectJsonSchema } from "../src/mcp";
+import type { IRField, IRResourceRegistry } from "@archstone/compiler";
 import type { FetchLike } from "@archstone/provider-rest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const booking = resolve(here, "../../../examples/manifests/booking");
+const tourism = resolve(here, "../../../examples/manifests/tourism");
 const registry = buildRegistry(booking).registry!;
 
 describe("toolName", () => {
@@ -72,6 +73,45 @@ describe("#16 NF-7: inputJsonSchema lowers IR field kinds (crafted IR)", () => {
   });
 });
 
+describe("#11: outputSchema — typed, described resource lowering", () => {
+  const defs = toolDefinitions(buildRegistry(tourism).registry!);
+  const search = defs.find((d) => d.name === "tourism_search")!;
+
+  it("emits an outputSchema; collection Stay → array of typed Stay objects", () => {
+    const out = search.outputSchema as {
+      type: string;
+      properties: Record<string, { type: string; items?: { type: string; properties: Record<string, { type: string; description?: string }> } }>;
+    };
+    expect(out.type).toBe("object");
+    const stays = out.properties.stays;
+    expect(stays.type).toBe("array");
+    // items carry Stay's typed properties — NOT a bare { type: object }.
+    const item = stays.items!;
+    expect(item.type).toBe("object");
+    expect(Object.keys(item.properties)).toEqual(expect.arrayContaining(["name", "location", "pricePerNight", "rating"]));
+    expect(item.properties.location.type).toBe("string"); // location semantic → string
+    expect(item.properties.location.description).toMatch(/city|region|address/i); // described
+  });
+
+  it("cycle-guards a self-referential resource (no infinite expansion)", () => {
+    // Node → Node: the emitter must stop at a generic object on the second visit.
+    const resources: IRResourceRegistry = {
+      Node: [
+        { name: "id", required: true, type: { kind: "scalar", semantic: "identifier" } },
+        { name: "next", required: false, type: { kind: "resource", name: "Node" } },
+      ],
+    };
+    const schema = objectJsonSchema(
+      [{ name: "root", required: true, type: { kind: "resource", name: "Node" } }],
+      resources,
+    ) as { properties: Record<string, { properties: Record<string, { properties?: unknown; type: string }> }> };
+    const root = schema.properties.root;
+    expect(root.properties.id.type).toBe("string"); // first expansion is typed
+    expect(root.properties.next.type).toBe("object"); // recursion stops at a generic object
+    expect(root.properties.next.properties).toBeUndefined();
+  });
+});
+
 describe("callTool — routing to the REST provider", () => {
   it("invokes the backend and returns its response as content", async () => {
     const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ hotels: [{ id: "h1" }] }), { status: 200 });
@@ -83,6 +123,8 @@ describe("callTool — routing to the REST provider", () => {
     );
     expect(r.isError).toBe(false);
     expect(r.content[0].text).toContain("hotels");
+    // #11 R-4: the raw body is surfaced verbatim as structuredContent (pass-through, unmapped).
+    expect(r.structuredContent).toEqual({ hotels: [{ id: "h1" }] });
   });
 
   it("returns an error for an unknown tool", async () => {
@@ -100,5 +142,41 @@ describe("callTool — routing to the REST provider", () => {
     const r = await callTool(registry, "tourism_book", {});
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toMatch(/unknown tool/);
+  });
+});
+
+describe("callTool — response mapping (ADD-12, tourism binding has a response:)", () => {
+  const tourismReg = buildRegistry(tourism).registry!;
+
+  it("maps the provider body to Stay and drops unmapped fields (structuredContent = outputSchema)", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(false);
+    // `id` is not part of Stay → dropped by the mapping; structuredContent is the mapped shape.
+    expect(r.structuredContent).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] });
+  });
+
+  it("fails closed on a missing REQUIRED field — no raw pass-through (D-6)", async () => {
+    // pricePerNight (required) absent → VIOLATION; the raw body must NOT leak through.
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }] }), { status: 200 });
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/contract violation/i);
+    expect(r.content[0].text).toMatch(/pricePerNight/);
+    expect(r.structuredContent).toBeUndefined();
+  });
+
+  it("degrades on a missing OPTIONAL field — result returned with a note", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }), { status: 200 });
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(false);
+    expect(r.structuredContent).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] });
+    expect(r.content.some((c) => /degraded/i.test(c.text))).toBe(true);
   });
 });

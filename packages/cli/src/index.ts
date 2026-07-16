@@ -1,14 +1,18 @@
 #!/usr/bin/env node
-// @archstone/cli — `archstone apply` (#1) + `archstone serve` (#7)
+// @archstone/cli — `archstone apply` (#1) + `archstone serve` (#7) + `archstone verify` (#18-20)
 //
 // apply: parse → shape-validate (#2) → semantic-validate (#3) → compile IR (#4)
 //        → index Registry (#5), and REPORT (human output, exits).
 // serve: build the registry and expose it as an MCP server over stdio (#7),
 //        so Claude/Cursor/ChatGPT can discover and invoke the tools. Blocks.
+// verify: replay each bound capability's golden fixture against the LIVE backend
+//         and report a per-binding health status (ADD-18). The only command that
+//         makes a network call outside a real MCP invocation — on demand, never
+//         scheduled by Archstone itself (wire it into your own CI/cron).
 
 import { load } from "@archstone/schema";
 import { validateSemantics, compile } from "@archstone/compiler";
-import { Registry, serveStdio } from "@archstone/runtime";
+import { Registry, serveStdio, runVerify, type HealthStatus } from "@archstone/runtime";
 
 function runApply(dir: string): void {
   const res = load(dir);
@@ -55,6 +59,32 @@ function runApply(dir: string): void {
   process.exit(ok ? 0 : 1);
 }
 
+const HEALTH_ICON: Record<HealthStatus, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
+
+async function runVerifyCmd(dir: string): Promise<void> {
+  const res = load(dir);
+  const diags = validateSemantics(res);
+  const ok = res.ok && !diags.some((d) => d.severity === "error");
+  if (!ok) {
+    console.error(`archstone verify ${dir}: manifest invalid — run 'archstone apply ${dir}' for details`);
+    process.exit(2);
+  }
+
+  const registry = new Registry(compile(res));
+  const reports = await runVerify(registry.listCapabilities(), dir, registry.ir.resources);
+
+  console.log(`\narchstone verify ${dir}\n`);
+  if (reports.length === 0) {
+    console.log("  (no bindings declare a contract: — nothing to verify)\n");
+    process.exit(0);
+  }
+  for (const r of reports) {
+    console.log(`  ${HEALTH_ICON[r.status]} ${r.capabilityId} — ${r.detail}`);
+  }
+  console.log("");
+  process.exit(reports.some((r) => r.status === "red") ? 1 : 0);
+}
+
 async function main(): Promise<void> {
   const [cmd, dir] = process.argv.slice(2);
 
@@ -66,8 +96,12 @@ async function main(): Promise<void> {
     await serveStdio(dir); // blocks on the stdio transport
     return;
   }
+  if (cmd === "verify" && dir) {
+    await runVerifyCmd(dir);
+    return;
+  }
 
-  console.error("usage: archstone <apply|serve> <manifest-dir>");
+  console.error("usage: archstone <apply|serve|verify> <manifest-dir>");
   process.exit(2);
 }
 

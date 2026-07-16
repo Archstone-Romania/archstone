@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/contract.schema.json",
+  "title": "Contract Snapshot",
+  "description": "What we last verified the provider returns (ADD-18 / RFC-0006 Phase 2). source:recorded only — the golden fixture IS the contract, no upstream spec required. Drives `archstone verify`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "fingerprint", "probe"],
+  "properties": {
+    "source": {
+      "const": "recorded",
+      "description": "Only 'recorded' is supported today; 'openapi' spec-diff is deferred (ADD-18 §Deferred)."
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Hash of the recorded response SHAPE (sorted key paths + value type), not its values."
+    },
+    "verifiedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture"],
+      "properties": {
+        "fixture": {
+          "type": "string",
+          "description": "Path to the golden fixture JSON, relative to the manifest directory."
+        }
+      }
+    }
+  }
+}

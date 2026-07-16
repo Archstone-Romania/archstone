@@ -12,6 +12,7 @@ function modelWith(connector: Record<string, unknown>): LoadResult {
     capabilities: { company: { id: "acme", name: "Acme" }, capabilities: ["svc.do"], providers: [] },
     capabilityDocs: [{ file: "x.capability.yaml", capability: { id: "svc.do", description: "d", effect: "read" } }],
     bindings: [{ file: "svc.do.binding.yaml", binding: { capabilityId: "svc.do", connector } }],
+    resourceDocs: [],
     issues: [],
   };
 }
@@ -42,7 +43,8 @@ describe("compile — booking → IR", () => {
     expect(preferences!.required).toBe(false);
 
     const accommodations = search!.output.find((f) => f.name === "accommodations");
-    expect(accommodations!.type).toEqual({ kind: "collection", of: "Accommodation" });
+    // Bare `Accommodation` canonicalizes to the same-domain qualified form (P-7).
+    expect(accommodations!.type).toEqual({ kind: "collection", of: "tourism.Accommodation" });
 
     expect(search!.connector?.type).toBe("rest");
     expect(search!.connector?.rest?.path).toBe("/api/v1/hotels/search");
@@ -80,5 +82,56 @@ describe("compile — bank → IR", () => {
     const ir = compile(load(join(manifests, "bank")));
     const transfer = ir.tools.find((t) => t.id === "banking.initiate-transfer");
     expect(transfer!.effect).toBe("irreversible");
+  });
+});
+
+describe("compile — resource registry (#11)", () => {
+  it("populates the registry with canonical keys and typed, described fields", () => {
+    const ir = compile(load(join(manifests, "tourism")));
+    // Registry keyed by canonical (qualified) name.
+    expect(Object.keys(ir.resources)).toContain("tourism.Stay");
+    const stay = ir.resources["tourism.Stay"];
+    const location = stay.find((f) => f.name === "location");
+    expect(location!.type).toEqual({ kind: "scalar", semantic: "location" });
+    expect(location!.description).toMatch(/city|region|address/i);
+    const rating = stay.find((f) => f.name === "rating");
+    expect(rating!.required).toBe(false);
+
+    // The tool output references the resource BY canonical name (not inlined).
+    const search = ir.tools.find((t) => t.id === "tourism.search")!;
+    expect(search.output.find((f) => f.name === "stays")!.type).toEqual({ kind: "collection", of: "tourism.Stay" });
+  });
+
+  it("canonicalizes nested resource refs and carries no JSON Schema in the IR", () => {
+    const ir = compile(load(join(manifests, "booking")));
+    // Booking.accommodation: bare `Accommodation` → canonical tourism.Accommodation.
+    const booking = ir.resources["tourism.Booking"];
+    expect(booking.find((f) => f.name === "accommodation")!.type).toEqual({ kind: "resource", name: "tourism.Accommodation" });
+    // No emit-target lowering leaked into the IR.
+    expect(JSON.stringify(ir.resources)).not.toMatch(/properties|inputSchema|"type":\s*"object"/);
+  });
+});
+
+describe("compile — response mapping (ADD-12)", () => {
+  it("lowers the tourism binding's response: canonical resource, output field, parsed paths", () => {
+    const ir = compile(load(join(manifests, "tourism")));
+    const search = ir.tools.find((t) => t.id === "tourism.search")!;
+    expect(search.response).toBeDefined();
+    // Bare `Stay` canonicalizes to tourism.Stay (P-7); bound to the `stays` output field (D-7).
+    expect(search.response!.resource).toBe("tourism.Stay");
+    expect(search.response!.field).toBe("stays");
+    expect(search.response!.collection).toBe("$.stays[*]");
+    const price = search.response!.fields.find((f) => f.name === "pricePerNight");
+    expect(price!.path).toBe("$.pricePerNight");
+  });
+});
+
+describe("compile — contract snapshot (ADD-18)", () => {
+  it("lowers the tourism binding's contract: fingerprint + fixture path", () => {
+    const ir = compile(load(join(manifests, "tourism")));
+    const search = ir.tools.find((t) => t.id === "tourism.search")!;
+    expect(search.contract).toBeDefined();
+    expect(search.contract!.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(search.contract!.probeFixture).toBe("fixtures/tourism.search.golden.json");
   });
 });

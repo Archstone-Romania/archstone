@@ -1,0 +1,19 @@
+# Resource Definition — CDL 0.2. The unit tourism.search returns.
+
+resource:
+  name: tourism.Accommodation
+  description: A bookable property matching customer preferences.
+  fields:
+    name:
+      type: text
+      description: The property's display name.
+    location:
+      type: location
+      description: Where the property is — city, region, or address.
+    pricePerNight:
+      type: money
+      description: Nightly rate.
+    rating:
+      type: quantity
+      required: false
+      description: Guest review score, when available.
