@@ -1,9 +1,16 @@
 {
   "name": "@archstone/compiler",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": false,
   "type": "module",
   "description": "Compiler (#4): Semantic Model -> IR. The IR is the physical form of the moat.",
+  "license": "Apache-2.0",
+  "homepage": "https://archstone.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Archstone-Romania/archstone.git",
+    "directory": "packages/compiler"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,7 +19,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },

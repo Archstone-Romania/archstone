@@ -1,9 +1,16 @@
 {
   "name": "@archstone/provider-rest",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": false,
   "type": "module",
   "description": "REST provider (#6): map capability input -> HTTP request, HTTP response -> result.",
+  "license": "Apache-2.0",
+  "homepage": "https://archstone.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Archstone-Romania/archstone.git",
+    "directory": "providers/rest"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,7 +19,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },
