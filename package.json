@@ -1,9 +1,9 @@
 {
   "name": "archstone",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.3.0",
+  "packageManager": "pnpm@11.13.1",
   "description": "Archstone — a compiler that (in its first MVP) generates an MCP server. Zero manual integration.",
   "scripts": {
     "apply": "tsx packages/cli/src/index.ts apply",
