@@ -3,31 +3,16 @@
 // The product kernel: capabilities queryable at runtime, indexed over the IR.
 // File-backed (no DB) — the IR is derived from manifests on disk. The MCP emitter
 // (#7) consumes this to list and resolve tools.
+//
+// `Registry` (index-only) moved to @archstone/emitter-support (ADD-0008 #27) — re-exported
+// here for back-compat so nothing downstream breaks. This file keeps the fs-touching
+// pipeline (`buildRegistry`), which is why the /http subpath (http.ts) never imports it.
 
 import { load, type LoadResult, type LoadIssue } from "@archstone/schema";
-import { validateSemantics, compile, type Diagnostic, type IR, type IRTool } from "@archstone/compiler";
+import { validateSemantics, compile, type Diagnostic } from "@archstone/compiler";
+import { Registry } from "@archstone/emitter-support";
 
-export class Registry {
-  private readonly byId: Map<string, IRTool>;
-
-  constructor(public readonly ir: IR) {
-    this.byId = new Map(ir.tools.map((t) => [t.id, t]));
-  }
-
-  /** All capabilities, for MCP tool listing. */
-  listCapabilities(): IRTool[] {
-    return [...this.byId.values()];
-  }
-
-  /** Resolve one capability by id, for invocation. */
-  getCapability(id: string): IRTool | undefined {
-    return this.byId.get(id);
-  }
-
-  get size(): number {
-    return this.byId.size;
-  }
-}
+export { Registry } from "@archstone/emitter-support";
 
 export interface BuildResult {
   ok: boolean;

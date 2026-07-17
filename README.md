@@ -51,11 +51,20 @@ pnpm install
 # Compile a manifest: validate + lower to IR
 pnpm apply examples/manifests/booking
 
+# Build a portable IR artifact (for embedding in your own app)
+pnpm build examples/manifests/tourism
+
 # Serve it to an AI agent as MCP tools over stdio
 pnpm serve examples/manifests/tourism
 
+# Serve it as MCP over HTTP (e.g. for Claude API mcp_servers)
+pnpm serve --http examples/manifests/tourism --token my-bearer-token
+
 # Replay a binding's golden fixture against the live backend; detect drift
 pnpm verify examples/manifests/tourism
+
+# Get structured JSON output for integration with CI pipelines and dashboards
+pnpm verify examples/manifests/tourism --json
 ```
 
 **From npm (standalone CLI):**
@@ -68,13 +77,46 @@ npx @archstone/cli apply <manifest-dir>
 
 # Then run the same commands:
 archstone apply examples/manifests/booking
+archstone build examples/manifests/tourism
 archstone serve examples/manifests/tourism
+archstone serve --http examples/manifests/tourism --token my-bearer-token
 archstone verify examples/manifests/tourism
+archstone verify examples/manifests/tourism --json
 ```
 
 New here? Start with the **[onboarding guide](docs/ONBOARDING.md)** — one path for
 **providers** (expose your business to agents) and one for **contributors** (build
 Archstone).
+
+---
+
+## Embedding Archstone
+
+Rather than running `archstone` as a separate CLI or MCP server, you can embed the compiled
+IR directly in your own agent loop. After building a portable IR with `archstone build`,
+consumers can use the **`@archstone/agent`** SDK (RFC-0008):
+
+```typescript
+import { fromIR, tools, execute } from "@archstone/agent";
+const archstone = fromIR(compiledIR);
+
+// Get typed tool definitions in your preferred format
+const myTools = archstone.tools("anthropic"); // or "openai" / "gemini" / "json-schema"
+
+// Invoke capabilities directly — no MCP server process needed
+const result = await archstone.execute("tourism.search", { location: "Paris" });
+```
+
+For those who want HTTP-based MCP (e.g., to expose an embedded instance via Claude API's
+`mcp_servers`), the `/mcp` subpath provides a mountable Streamable-HTTP handler:
+
+```typescript
+import { mcpHandler } from "@archstone/agent/mcp";
+const handler = mcpHandler(archstone, { bearerToken: "..." });
+// Mount on your framework's HTTP router
+```
+
+See [`packages/agent`](packages/agent/) for full API docs and examples.
 
 ---
 
@@ -95,14 +137,16 @@ Archstone).
 archstone/
 ├── packages/
 │   ├── schema/
-│   │   └── schemas/  # JSON Schema — cdl.schema.json validates the language
-│   ├── compiler/     # compile → IR  (src/ir.ts = the moat: target-agnostic)
-│   ├── runtime/      # registry + MCP emitter (stdio)
-│   └── cli/          # `archstone apply` / `serve` — wires the pipeline
+│   │   └── schemas/     # JSON Schema — cdl.schema.json validates the language
+│   ├── compiler/        # compile → IR  (src/ir.ts = the moat: target-agnostic)
+│   ├── emitter-support/ # IR indexing + semantic-type → JSON-Schema lowering (RFC-0008)
+│   ├── agent/           # embedded SDK: fromIR(), tools(), execute() (RFC-0008)
+│   ├── runtime/         # registry + MCP emitter (stdio + HTTP)
+│   └── cli/             # `archstone apply` / `build` / `serve` / `verify` — wires pipeline
 ├── providers/
-│   └── rest/         # REST adapter (providers = adapters)
-├── examples/         # manifests + the Claude demo
-└── docs/             # rfc/ · adr/ · spec/ · glossary/ · ONBOARDING.md
+│   └── rest/            # REST adapter (providers = adapters)
+├── examples/            # manifests + the Claude demo
+└── docs/                # rfc/ · adr/ · spec/ · glossary/ · ONBOARDING.md
 ```
 
 The compiler never lets `apply` poke a target directly — it compiles to an **IR**, and

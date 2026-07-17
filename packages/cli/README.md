@@ -25,6 +25,9 @@ archstone serve path/to/manifest
 
 # Replay a binding's golden fixture against the live backend; detect provider drift
 archstone verify path/to/manifest
+
+# Compile a manifest to a standalone IR artifact (archstone.ir.json by default)
+archstone build path/to/manifest [--out path]
 ```
 
 A manifest directory contains `capabilities.yaml`, `*.capability.yaml`, `*.resource.yaml`,

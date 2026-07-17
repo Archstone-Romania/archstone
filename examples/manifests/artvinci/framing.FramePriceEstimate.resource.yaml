@@ -1,0 +1,14 @@
+# Resource Definition (a manifest, not a language primitive) — CDL 0.2
+# The unit framing.estimate-frame-price returns: one price estimate for one artwork size in one profile.
+
+resource:
+  name: framing.FramePriceEstimate
+  description: An estimated price to frame an artwork of a given size in a specific frame profile.
+  fields:
+    estimatedPrice:
+      type: quantity
+      required: false
+      description: Estimated total cost to frame the artwork. Absent when the profile has no price data configured.
+    currency:
+      type: string
+      description: ISO currency code for the estimate (e.g. RON).

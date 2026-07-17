@@ -1,15 +1,15 @@
 {
-  "name": "@archstone/schema",
+  "name": "@archstone/emitter-support",
   "version": "0.3.0",
   "private": false,
   "type": "module",
-  "description": "Schema Loader (#2): load + validate deployable CDL manifests from disk.",
+  "description": "Shared IR-only substrate for emitters (ADD-0008): Registry indexing, semantic-type -> JSON-Schema lowering, response-mapping executor. No MCP SDK, no fs.",
   "license": "Apache-2.0",
   "homepage": "https://archstone.dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/Archstone-Romania/archstone.git",
-    "directory": "packages/schema"
+    "directory": "packages/emitter-support"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,8 +20,7 @@
     }
   },
   "files": [
-    "dist",
-    "schemas"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -31,10 +30,10 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "ajv": "^8.17.1",
-    "yaml": "^2.6.1"
+    "@archstone/compiler": "workspace:*"
   },
   "devDependencies": {
+    "@archstone/schema": "workspace:*",
     "tsup": "^8.5.1"
   }
 }

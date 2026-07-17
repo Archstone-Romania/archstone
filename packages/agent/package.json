@@ -1,15 +1,15 @@
 {
-  "name": "@archstone/schema",
+  "name": "@archstone/agent",
   "version": "0.3.0",
   "private": false,
   "type": "module",
-  "description": "Schema Loader (#2): load + validate deployable CDL manifests from disk.",
+  "description": "Embedded agent SDK (RFC-0008/ADD-0008): tool definitions (Anthropic/OpenAI/Gemini/JSON-Schema) + fail-closed execute() over compiled IR. Root entry — zero MCP SDK reachability; /mcp subpath — mountable Streamable-HTTP handler.",
   "license": "Apache-2.0",
   "homepage": "https://archstone.dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/Archstone-Romania/archstone.git",
-    "directory": "packages/schema"
+    "directory": "packages/agent"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,11 +17,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
     }
   },
   "files": [
-    "dist",
-    "schemas"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -31,8 +34,10 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "ajv": "^8.17.1",
-    "yaml": "^2.6.1"
+    "@archstone/compiler": "workspace:*",
+    "@archstone/emitter-support": "workspace:*",
+    "@archstone/provider-rest": "workspace:*",
+    "@archstone/runtime": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.5.1"

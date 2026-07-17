@@ -14,6 +14,7 @@ const root = resolve(here, "../../.."); // repo root
 const tsx = resolve(root, "node_modules/.bin/tsx");
 const cli = resolve(root, "packages/cli/src/index.ts");
 const booking = resolve(root, "examples/manifests/booking");
+const tourism = resolve(root, "examples/manifests/tourism");
 
 describe("archstone serve — real MCP handshake over stdio", () => {
   it("a client discovers the emitted tools", async () => {
@@ -24,6 +25,31 @@ describe("archstone serve — real MCP handshake over stdio", () => {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toEqual(["tourism_search"]);
       expect((tools[0].inputSchema as { type: string }).type).toBe("object");
+    } finally {
+      await client.close();
+    }
+  }, 20000);
+});
+
+describe("#20 S-US3.1: MCP tool listing is unaffected by binding health status", () => {
+  it("lists a contract-bearing tool identically whether or not its backend/health is reachable — never runs verify or gates on status", async () => {
+    // tourism's tourism.search binding declares a contract:. Point it at an unreachable
+    // backend (no mock server started, no STAYS_API_URL) — serve's tool listing must not
+    // depend on live health at all, so this should list exactly like a healthy binding.
+    const transport = new StdioClientTransport({
+      command: tsx,
+      args: [cli, "serve", tourism],
+      cwd: root,
+      env: { ...(process.env as Record<string, string>), STAYS_API_URL: "http://127.0.0.1:1" },
+    });
+    const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+    await client.connect(transport);
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map((t) => t.name)).toEqual(["tourism_search"]);
+      expect((tools[0].inputSchema as { type: string }).type).toBe("object");
+      // No caution hint / health annotation of any kind on the listed tool (BR-6, D-5).
+      expect(Object.keys(tools[0]).sort()).toEqual(["description", "inputSchema", "name", "outputSchema"]);
     } finally {
       await client.close();
     }

@@ -1,6 +1,6 @@
 {
   "name": "@archstone/runtime",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "description": "Runtime (#5 Registry, #7 MCP emitter): list/resolve tools over IR, serve over stdio.",
@@ -17,6 +17,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./http": {
+      "types": "./dist/http.d.ts",
+      "default": "./dist/http.js"
     }
   },
   "files": [
@@ -31,6 +35,7 @@
   },
   "dependencies": {
     "@archstone/compiler": "workspace:*",
+    "@archstone/emitter-support": "workspace:*",
     "@archstone/provider-rest": "workspace:*",
     "@archstone/schema": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0"

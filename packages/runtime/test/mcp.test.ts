@@ -4,20 +4,19 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildRegistry } from "../src/registry";
-import { toolDefinitions, callTool, toolName, inputJsonSchema, objectJsonSchema, createMcpServer } from "../src/mcp";
-import type { IRField, IRResourceRegistry } from "@archstone/compiler";
+import { toolDefinitions, callTool, createMcpServer } from "../src/mcp";
 import type { FetchLike } from "@archstone/provider-rest";
+
+// The pure lowering unit tests (toolName, inputJsonSchema field-kind coverage, the
+// objectJsonSchema resource cycle-guard) moved to @archstone/emitter-support (ADD-0008 #27)
+// along with the code — packages/emitter-support/test/lowering.test.ts. This file keeps the
+// tests that exercise runtime-specific behavior (toolDefinitions/callTool/createMcpServer
+// routing through a real Registry/REST provider/MCP SDK).
 
 const here = dirname(fileURLToPath(import.meta.url));
 const booking = resolve(here, "../../../examples/manifests/booking");
 const tourism = resolve(here, "../../../examples/manifests/tourism");
 const registry = buildRegistry(booking).registry!;
-
-describe("toolName", () => {
-  it("sanitizes capability ids to MCP tool names", () => {
-    expect(toolName("tourism.search")).toBe("tourism_search");
-  });
-});
 
 describe("toolDefinitions — IR → MCP tools", () => {
   const defs = toolDefinitions(registry);
@@ -45,36 +44,6 @@ describe("toolDefinitions — IR → MCP tools", () => {
   });
 });
 
-describe("#16 NF-7: inputJsonSchema lowers IR field kinds (crafted IR)", () => {
-  it("an enum scalar lowers to { type: 'string', enum: [...] }", () => {
-    const fields: IRField[] = [
-      { name: "status", required: true, type: { kind: "scalar", semantic: "enum", values: ["open", "closed"] } },
-    ];
-    const schema = inputJsonSchema(fields) as {
-      properties: Record<string, { type: string; enum?: string[] }>;
-      required?: string[];
-    };
-    expect(schema.properties.status).toMatchObject({ type: "string", enum: ["open", "closed"] });
-    expect(schema.required).toContain("status");
-  });
-
-  it("a ref/resource field lowers to { type: 'object' }", () => {
-    const fields: IRField[] = [{ name: "hotel", required: false, type: { kind: "resource", name: "Hotel" } }];
-    const schema = inputJsonSchema(fields) as { properties: Record<string, { type: string }>; required?: string[] };
-    expect(schema.properties.hotel.type).toBe("object");
-    expect(schema.required ?? []).not.toContain("hotel"); // required: false
-  });
-
-  it("a collection field lowers to { type: 'array' }", () => {
-    const fields: IRField[] = [{ name: "rooms", required: true, type: { kind: "collection", of: "Room" } }];
-    const schema = inputJsonSchema(fields) as {
-      properties: Record<string, { type: string; items?: { type: string } }>;
-    };
-    expect(schema.properties.rooms.type).toBe("array");
-    expect(schema.properties.rooms.items?.type).toBe("object");
-  });
-});
-
 describe("#11: outputSchema — typed, described resource lowering", () => {
   const defs = toolDefinitions(buildRegistry(tourism).registry!);
   const search = defs.find((d) => d.name === "tourism_search")!;
@@ -93,24 +62,6 @@ describe("#11: outputSchema — typed, described resource lowering", () => {
     expect(Object.keys(item.properties)).toEqual(expect.arrayContaining(["name", "location", "pricePerNight", "rating"]));
     expect(item.properties.location.type).toBe("string"); // location semantic → string
     expect(item.properties.location.description).toMatch(/city|region|address/i); // described
-  });
-
-  it("cycle-guards a self-referential resource (no infinite expansion)", () => {
-    // Node → Node: the emitter must stop at a generic object on the second visit.
-    const resources: IRResourceRegistry = {
-      Node: [
-        { name: "id", required: true, type: { kind: "scalar", semantic: "identifier" } },
-        { name: "next", required: false, type: { kind: "resource", name: "Node" } },
-      ],
-    };
-    const schema = objectJsonSchema(
-      [{ name: "root", required: true, type: { kind: "resource", name: "Node" } }],
-      resources,
-    ) as { properties: Record<string, { properties: Record<string, { properties?: unknown; type: string }> }> };
-    const root = schema.properties.root;
-    expect(root.properties.id.type).toBe("string"); // first expansion is typed
-    expect(root.properties.next.type).toBe("object"); // recursion stops at a generic object
-    expect(root.properties.next.properties).toBeUndefined();
   });
 });
 

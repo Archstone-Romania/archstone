@@ -1,0 +1,39 @@
+# Implementation binding — how framing.list-frame-profiles reaches the backend. NOT CDL.
+binding:
+  capabilityId: framing.list-frame-profiles
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${ARTVINCI_API_URL}"
+      method: GET
+      path: /api/v1/catalog/frames
+
+  # Provider body → FrameProfile resource. The resource is the anchor; these JSONPaths are
+  # the only thing that moves if the backend renames a field. name/material required →
+  # contract VIOLATION if missing; everything else is nullable in the provider → DEGRADED.
+  response:
+    collection: "$.items[*]"
+    resource: framing.FrameProfile
+    map:
+      id: "$.id"
+      name: "$.name"
+      description: "$.description"
+      material: "$.material"
+      thicknessMm: "$.thicknessMm"
+      widthMm: "$.widthMm"
+      color: "$.color"
+      colorHex: "$.colorHex"
+      finish: "$.finish"
+      pricePerLinearMeterRon: "$.pricePerLinearMeterRon"
+      galleryUrl: "$.galleryUrl"
+      imageUrl: "$.imageUrl"
+
+  # What we last verified the live production API returns (ADD-18). `archstone verify`
+  # replays fixtures/framing.list-frame-profiles.golden.json's `request` live and compares
+  # the response shape. Fingerprint recorded 2026-07-17 against https://api.artvinci.ro.
+  contract:
+    source: recorded
+    fingerprint: "sha256:de5836610ad100ceee059eaba96ffea80854a2b745eace3cf7e1553665af4f8b"
+    verifiedAt: "2026-07-17T00:00:00Z"
+    probe:
+      fixture: fixtures/framing.list-frame-profiles.golden.json

@@ -1,0 +1,54 @@
+# Resource Definition (a manifest, not a language primitive) — CDL 0.2
+# The unit framing.list-frame-profiles returns: one frame profile (moulding) in ArtVinci's catalog.
+
+resource:
+  name: framing.FrameProfile
+  description: A frame profile (moulding) ArtVinci can frame an artwork with.
+  fields:
+    id:
+      type: identifier
+      description: Stable identifier for this frame profile.
+    name:
+      type: text
+      description: Display name of the frame profile.
+    description:
+      type: text
+      required: false
+      description: Longer description of the profile, when available.
+    material:
+      type: enum
+      values: [composite, wood, oak, walnut, pine, aluminium, plastic]
+      description: The profile's material.
+    thicknessMm:
+      type: quantity
+      required: false
+      description: Profile thickness, in millimeters, when specified.
+    widthMm:
+      type: quantity
+      required: false
+      description: Profile width, in millimeters, when specified.
+    color:
+      type: string
+      required: false
+      description: The profile's color, when specified.
+    colorHex:
+      type: string
+      required: false
+      description: Hex color code, when specified.
+    finish:
+      type: enum
+      values: [matte, glossy, satin, natural]
+      required: false
+      description: Surface finish, when specified.
+    pricePerLinearMeterRon:
+      type: quantity
+      required: false
+      description: Rate, in RON per linear meter of this profile, when priced.
+    galleryUrl:
+      type: string
+      required: false
+      description: URL to a gallery page for this profile, when available.
+    imageUrl:
+      type: string
+      required: false
+      description: URL to a product image for this profile, when available.

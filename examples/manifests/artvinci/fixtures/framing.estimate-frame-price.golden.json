@@ -1,0 +1,12 @@
+{
+  "capabilityId": "framing.estimate-frame-price",
+  "recordedAt": "2026-07-17T00:00:00Z",
+  "request": {
+    "frameProfileId": "AV8",
+    "widthCm": 40,
+    "heightCm": 60
+  },
+  "expects": {
+    "collectionNonEmpty": true
+  }
+}
