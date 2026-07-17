@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildRegistry } from "../src/registry";
-import { toolDefinitions, callTool, toolName, inputJsonSchema, objectJsonSchema } from "../src/mcp";
+import { toolDefinitions, callTool, toolName, inputJsonSchema, objectJsonSchema, createMcpServer } from "../src/mcp";
 import type { IRField, IRResourceRegistry } from "@archstone/compiler";
 import type { FetchLike } from "@archstone/provider-rest";
 
@@ -168,7 +170,40 @@ describe("callTool — response mapping (ADD-12, tourism binding has a response:
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toMatch(/contract violation/i);
     expect(r.content[0].text).toMatch(/pricePerNight/);
+    // #19 BR-4/US-2: the text message names the violating capability id too.
+    expect(r.content[0].text).toContain("tourism.search");
+    // #19 ADD-19 Rev 2 D-3′: structuredContent stays absent on VIOLATION — a client-side
+    // schema-validating regression guard (a non-empty structuredContent here would crash the
+    // reference SDK client, since it doesn't conform to the tool's outputSchema).
     expect(r.structuredContent).toBeUndefined();
+    // #19 ADD-19 Rev 2 D-6: the structured, machine-readable error object moves to `_meta`.
+    expect(r._meta?.["dev.archstone/contract_violation"]).toEqual({
+      error: "contract_violation",
+      capability: "tourism.search",
+      missing: ["pricePerNight"],
+    });
+  });
+
+  it("dedups the structured missing list across multiple violating collection items (BR-8/S-US1.6)", async () => {
+    // item 1 is missing pricePerNight; item 2 is missing location — both required, both
+    // fields must appear exactly once in structuredContent.missing, order-independent.
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({
+          stays: [
+            { name: "Hotel Azur", location: "Nice" },
+            { name: "Hotel Riviera", pricePerNight: 200 },
+          ],
+        }),
+        { status: 200 },
+      );
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(true);
+    expect(r.structuredContent).toBeUndefined();
+    const structured = r._meta?.["dev.archstone/contract_violation"] as { error: string; capability: string; missing: string[] };
+    expect(structured.error).toBe("contract_violation");
+    expect(structured.capability).toBe("tourism.search");
+    expect([...structured.missing].sort()).toEqual(["location", "pricePerNight"]);
   });
 
   it("degrades on a missing OPTIONAL field — result returned with a note", async () => {
@@ -178,5 +213,46 @@ describe("callTool — response mapping (ADD-12, tourism binding has a response:
     expect(r.isError).toBe(false);
     expect(r.structuredContent).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] });
     expect(r.content.some((c) => /degraded/i.test(c.text))).toBe(true);
+  });
+});
+
+describe("#19 ADD-19 Rev 2 R2.2/R2.7 step 4 — a real SDK Client survives a VIOLATION result", () => {
+  // This is the actual regression test for the bug that blocked Rev 1: the crash happened
+  // inside the CLIENT's callTool() (it schema-validates structuredContent against the
+  // advertised outputSchema whenever one is declared, unconditionally on isError), not the
+  // server's. A unit test calling the exported `callTool` function directly cannot see that —
+  // it has to go through a real Client instance talking to a real Server, in-process, over the
+  // SDK's own InMemoryTransport, exactly as the architect reproduced it in R2.2.
+  const tourismReg = buildRegistry(tourism).registry!;
+
+  it("does not throw on VIOLATION, and the structured error survives in result._meta", async () => {
+    // pricePerNight (required) is absent from the mock backend body → VIOLATION.
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }] }), { status: 200 });
+    const server = createMcpServer(tourismReg, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      // Call listTools() first so the client caches an outputSchema validator for
+      // tourism_search, the same way it does in production — this is what arms the
+      // validation path that crashed under Rev 1's structuredContent-based mechanism.
+      const { tools } = await client.listTools();
+      expect(tools.map((t) => t.name)).toContain("tourism_search");
+
+      const result = await client.callTool({ name: "tourism_search", arguments: { destination: "Nice" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(result._meta?.["dev.archstone/contract_violation"]).toEqual({
+        error: "contract_violation",
+        capability: "tourism.search",
+        missing: ["pricePerNight"],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });

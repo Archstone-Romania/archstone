@@ -12,6 +12,7 @@ This page is the quick reference.
 git clone https://github.com/Archstone-Romania/archstone
 cd archstone
 pnpm install
+pnpm lint             # eslint
 pnpm typecheck        # tsc, strict
 pnpm test             # vitest — includes the end-to-end MCP demo
 pnpm demo:booking     # the pipeline, end to end

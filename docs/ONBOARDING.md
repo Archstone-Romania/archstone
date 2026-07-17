@@ -22,26 +22,41 @@ Pick your path. They don't overlap much.
 
 ### What you need
 
-- The Archstone CLI available (from this repo: `pnpm apply` / `pnpm serve` — see
-  [Contributor onboarding](#contributor-onboarding) for a local checkout, or install the
-  published CLI once available).
+- The Archstone CLI available — `npm install -g @archstone/cli` (or `npx @archstone/cli`), or
+  see [Contributor onboarding](#contributor-onboarding) for a local checkout and `pnpm apply` /
+  `pnpm serve` instead.
 - An HTTP API behind your capability (a REST endpoint the binding points at). For a demo
   you can point at a mock; in production you point at a real backend.
 
+### Try it now (no writing required)
+
+Before writing a line of CDL, run the shipped example and watch the whole pipeline work
+end to end — it's the fastest way to see what Steps 1–6 below actually produce:
+
+```bash
+pnpm apply examples/manifests/booking     # compile a 4-capability example
+pnpm demo:tourism                                    # serve the tourism example over MCP
+pnpm demo:mock                                       # (separate shell) a mock backend on :8787
+pnpm verify examples/manifests/tourism               # replay the golden fixture, check for drift
+```
+
 ### The mental model
 
-```
-capabilities.yaml   →   *.capability.yaml   →   bindings/*.binding.yaml
-(what the company     (each capability:        (how one capability maps
- offers — the index)   business shape,          to a real HTTP endpoint,
-                        referencing named        and how its response maps
-                        *.resource.yaml types)    back onto those resources)
-
-        └────────────  archstone apply  ────────────┘
-                     validate → compile → IR
-                              │
-                     archstone serve                    archstone verify
-                     emit MCP tools (stdio) → AI agent   replay a fixture live → drift check
+```mermaid
+flowchart LR
+    subgraph write["You write"]
+        CAPS["capabilities.yaml<br/>the index — what the company offers"]
+        CAP["*.capability.yaml<br/>business shape, per capability"]
+        RES["*.resource.yaml<br/>named types the output references"]
+        BIND["bindings/*.binding.yaml<br/>maps one capability to a real endpoint,<br/>and its response back onto resources"]
+    end
+    CAPS --> CAP
+    CAP --> RES
+    CAP --> BIND
+    RES --> BIND
+    BIND --> APPLY["archstone apply<br/>validate → compile → IR"]
+    APPLY --> SERVE["archstone serve<br/>emit MCP tools (stdio) → AI agent"]
+    APPLY --> VERIFY["archstone verify<br/>replay a fixture live → drift check"]
 ```
 
 Business definition (`*.capability.yaml` + `*.resource.yaml`) is kept **separate** from
@@ -49,6 +64,9 @@ technical wiring (`bindings/`). That separation is the point: swap the backend, 
 and the generated tool do not change.
 
 ### Step 1 — Declare what you offer (`capabilities.yaml`)
+
+This is the root of the diagram above: the compiler loads this file first, and anything not
+listed here — a capability, a provider — doesn't exist as far as Archstone is concerned.
 
 The iconic file. Like `openapi.yaml` or `docker-compose.yaml`, but for capabilities.
 
@@ -69,6 +87,10 @@ providers:
 ```
 
 ### Step 2 — Define each capability (business only)
+
+This expands the `*.capability.yaml` node above, one file per entry you listed in Step 1.
+Nothing here is servable yet — it's where you describe the business shape the compiler will
+understand, independent of how (or whether) it ends up wired to a real backend.
 
 One file per capability. **No URLs, no auth headers, no HTTP** — just the business shape.
 
@@ -97,6 +119,11 @@ capability:
 ```
 
 ### Step 3 — Define the resources your capability returns (`*.resource.yaml`)
+
+Step 2 referenced `Accommodation` before it was defined anywhere — that's intentional.
+Resources live in their own files, the `*.resource.yaml` node above, separate from any one
+capability, precisely so multiple capabilities — even across domains — can share the same
+named type instead of redefining it inline each time.
 
 `collection: Accommodation` above is a **reference**, not a definition — it must resolve to
 a matching resource file, or the manifest fails to compile (`unknown-resource`). One file per
@@ -138,6 +165,9 @@ the agent sees `Accommodation` has a `name`/`location`/`pricePerNight`/`rating`,
 
 ### Step 4 — Bind it to a real endpoint (`bindings/`)
 
+This is the `bindings/*.binding.yaml` node — the only file in the whole flow allowed to know
+about HTTP. Everything you wrote in Steps 2–3 stays true no matter what you point this file at.
+
 The one place technical detail lives. Secrets and hostnames come from the environment
 (`${VAR}`), never hard-coded. A binding also maps the provider's response onto the resource
 it produces (`response:`) — the resource is the anchor; JSON paths are the only thing that
@@ -164,13 +194,33 @@ binding:
       rating: "$.rating"              # optional on the resource → may be absent without failing
 ```
 
-At invocation, the runtime maps the live response through `response:` and checks it against
+Here's what that provider actually returns — the shape `response:` above is written against:
+
+```json
+// POST /api/v1/hotels/search → 200 OK
+{
+  "results": [
+    { "name": "Hotel Azur",    "location": "Nice, France", "pricePerNight": 142, "rating": 4.6 },
+    { "name": "Dunes Resort",  "location": "Nice, France", "pricePerNight": 98 }
+  ]
+}
+```
+
+Read the two side by side: `collection: "$.results[*]"` walks into the array; each entry
+under `map:` is a JSONPath applied to *one element* of it — `name: "$.name"` pulls
+`"Hotel Azur"` straight off the first element, `location: "$.location"` pulls
+`"Nice, France"`, and so on. The second result has no `rating` at all — and since `rating`
+is `required: false` on `Accommodation` (Step 3), that's fine.
+
+That's the general rule the runtime applies to every mapped element, checked against
 `Accommodation`'s required fields:
 
 - every required field present → **OK** — mapped data returned as `structuredContent`;
 - an **optional** field missing → **DEGRADED** — returned, that field omitted, a warning surfaced;
-- a **required** field missing → **VIOLATION** — fail closed: a structured error naming the
-  missing field(s), **not** the raw provider body.
+- a **required** field missing → **VIOLATION** — fail closed: the tool returns `isError:true` with
+  a human-readable `content` message plus a structured error object in
+  `CallToolResult._meta["dev.archstone/contract_violation"]` containing `{error: "contract_violation", capability, missing}` — **not** the raw provider body. The agent can branch deterministically on the
+  stable error code instead of parsing prose.
 
 A capability with **no** binding still validates — it just isn't invocable yet (`apply`
 warns and reports it as not bound). A binding with **no** `response:` still validates too —
@@ -179,6 +229,10 @@ declared `outputSchema` isn't enforced for it. This lets you declare intent befo
 mapping exists, but map the response before you trust the shape you get back.
 
 ### Step 5 — Compile and inspect
+
+You don't need every capability bound to run this. A capability with no binding still
+validates (see the note above), so it's worth running `apply` as soon as Step 3 is done, and
+again after every change, rather than treating it as a single gate at the very end.
 
 ```bash
 archstone apply ./my-manifest-dir
@@ -191,6 +245,9 @@ binding) are safe to iterate on; **errors** must reach zero before you serve.
 
 ### Step 6 — Serve it to an AI agent
 
+This is where the IR that `apply` produced becomes something an agent can actually call —
+the last arrow in the diagram above.
+
 ```bash
 archstone serve ./my-manifest-dir
 ```
@@ -201,7 +258,15 @@ bindings use in the `env` block, and restart — the tool (e.g. `tourism_search`
 the agent can call it. A complete, copy-pasteable Claude Desktop walkthrough lives in
 [`examples/demo/README.md`](../examples/demo/README.md).
 
-### Step 7 — Keep the contract honest (`archstone verify`)
+---
+
+### After you ship: keeping the contract honest
+
+Once you're serving real tools to real agents, the backend behind a binding can change shape
+without warning — a renamed field, a new required parameter — and nothing above catches that
+after the fact. `archstone verify` is how you find out before an agent does. Unlike Steps 1–6,
+it isn't something you do once during setup: run it on whatever cadence fits (a cron job, a CI
+gate), for as long as the binding is live.
 
 A binding can also declare a `contract:` block — a fingerprint of the provider's response
 shape plus a pointer to a golden fixture (`fixtures/<capabilityId>.golden.json`, a recorded
@@ -227,15 +292,6 @@ drift gate. It's the only Archstone command that makes a live network call outsi
 tool invocation — on demand only, never triggered by `apply`/`serve`. Wiring it to a schedule
 (cron, a CI job) is your call, not Archstone's.
 
-### Try it now (no writing required)
-
-```bash
-pnpm apply examples/manifests/booking     # compile a 4-capability example
-pnpm demo:tourism                                    # serve the tourism example over MCP
-pnpm demo:mock                                       # (separate shell) a mock backend on :8787
-pnpm verify examples/manifests/tourism               # replay the golden fixture, check for drift
-```
-
 ---
 
 ## Contributor onboarding
@@ -257,6 +313,7 @@ pnpm verify examples/manifests/tourism               # replay the golden fixture
 git clone https://github.com/Archstone-Romania/archstone
 cd archstone
 pnpm install
+pnpm lint             # eslint
 pnpm typecheck        # tsc, strict
 pnpm test             # vitest — includes the end-to-end MCP demo integration test
 ```
@@ -268,22 +325,24 @@ pnpm demo:booking     # apply the booking manifest → validation + IR report
 pnpm demo:tourism     # serve the tourism manifest as MCP tools
 ```
 
-If `typecheck`, `test`, and the demos all succeed, your environment is good.
+If `lint`, `typecheck`, `test`, and the demos all succeed, your environment is good. These
+are the same four checks CI runs on every PR (see "Contributing a change" below) — green
+locally means a PR you open won't fail for reasons unrelated to your change.
 
 ### Repository layout
 
-```
-archstone/            # repository root
-├── packages/
-│   ├── schema/
-│   │   └── schemas/  # JSON Schema — cdl.schema.json validates the language
-│   ├── compiler/     # compile → IR  (src/ir.ts is the moat: target-agnostic)
-│   ├── runtime/      # registry + MCP emitter (stdio)
-│   └── cli/          # `archstone apply` / `serve` — wires the pipeline
-├── providers/
-│   └── rest/         # REST adapter (providers = adapters)
-├── examples/         # manifests + the Claude demo
-└── docs/             # ONBOARDING.md (this guide)
+```mermaid
+flowchart TD
+    ROOT["archstone/"]
+    ROOT --> PKG["packages/"]
+    PKG --> SCHEMA["schema/<br/>schemas/ — cdl.schema.json validates the language"]
+    PKG --> COMPILER["compiler/<br/>compile → IR (src/ir.ts is the moat: target-agnostic)"]
+    PKG --> RUNTIME["runtime/<br/>registry + MCP emitter (stdio)"]
+    PKG --> CLI["cli/<br/>archstone apply / serve — wires the pipeline"]
+    ROOT --> PROVIDERS["providers/"]
+    PROVIDERS --> REST["rest/<br/>REST adapter (providers = adapters)"]
+    ROOT --> EXAMPLES["examples/<br/>manifests + the Claude demo"]
+    ROOT --> DOCS["docs/<br/>ONBOARDING.md (this guide)"]
 ```
 
 The compiler never lets `apply` poke a target directly — it compiles to an **IR**, and

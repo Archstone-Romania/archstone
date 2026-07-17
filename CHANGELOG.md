@@ -19,8 +19,10 @@ All notable changes to Archstone are documented here. Format loosely follows
   the resource's required fields:
   - all required fields present → **OK**, mapped data returned as `structuredContent`;
   - an optional field missing → **DEGRADED**, returned with that field omitted and a warning;
-  - a required field missing → **VIOLATION**, fail-closed — a structured error naming the
-    missing field(s), never a raw pass-through of the provider's body.
+  - a required field missing → **VIOLATION**, fail-closed — `isError:true` with a human-readable
+    `content` message plus a structured error in `_meta["dev.archstone/contract_violation"]`
+    (`{error: "contract_violation", capability, missing}`) — never a raw pass-through of the
+    provider's body. Agents branch on the structured field, not parsed prose.
 - **`archstone verify`.** New CLI command. For every binding with a `contract:` block, it
   replays the recorded request in `fixtures/<capabilityId>.golden.json` against the **live**
   backend, runs the response through the same mapping a real tool call would use, fingerprints

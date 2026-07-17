@@ -141,7 +141,16 @@ export interface CallResult {
   content: { type: "text"; text: string }[];
   structuredContent?: Record<string, unknown>;
   isError: boolean;
+  _meta?: Record<string, unknown>;
 }
+
+/** #19 ADD-19 Rev 2 D-6: the namespaced `_meta` key a VIOLATION result's structured error
+ *  object is carried under. Never populated on `structuredContent` (D-3′) — the reference
+ *  MCP SDK client validates `structuredContent` against `outputSchema` whenever the tool
+ *  declares one, regardless of `isError`, so a non-conforming error object there crashes the
+ *  client. `_meta` is untouched by that validation and passes through the client's zod parse
+ *  unstripped (`ResultSchema`/`RequestMetaSchema` are `z.looseObject`). */
+export const CONTRACT_VIOLATION_META_KEY = "dev.archstone/contract_violation";
 
 /** Route an MCP tool call to the REST provider and format the result as MCP content. */
 export async function callTool(
@@ -165,8 +174,19 @@ export async function callTool(
     const mapped = applyResponseMapping(tool, result.data, registry.ir.resources);
     if (mapped.status === "violation") {
       // Fail closed (D-6): the declared output shape was not met — no raw pass-through.
-      const text = `contract violation: provider response is missing required field(s): ${(mapped.missing ?? []).join(", ")}. Declared output shape not met; raw body withheld.`;
-      return { content: [{ type: "text", text }], isError: true };
+      const missing = mapped.missing ?? [];
+      const text = `contract violation: capability '${tool.id}' — provider response is missing required field(s): ${missing.join(", ")}. Declared output shape not met; raw body withheld.`;
+      // #19 (ADD-19 Rev 2 D-3′/D-6): structured error object lives in `_meta`, never
+      // `structuredContent` — the reference SDK client validates `structuredContent` against
+      // the tool's `outputSchema` unconditionally (not gated on `isError`), so a VIOLATION
+      // object there (which never conforms to the success outputSchema) crashes the client
+      // (verified live against the SDK's own InMemoryTransport, R2.0/R2.2). `capability` is
+      // `tool.id`, the unsanitized CDL id — never the MCP-sanitized `name` lookup key (BR-7).
+      return {
+        content: [{ type: "text", text }],
+        _meta: { [CONTRACT_VIOLATION_META_KEY]: { error: "contract_violation", capability: tool.id, missing } },
+        isError: true,
+      };
     }
     const content: CallResult["content"] = [{ type: "text", text: JSON.stringify(mapped.data, null, 2) }];
     if (mapped.status === "degraded") {
