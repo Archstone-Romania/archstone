@@ -82,6 +82,51 @@ describe("#15 GET/HEAD query serialization (US-2)", () => {
   });
 });
 
+describe("#26 rest.query param-name mapping", () => {
+  it("no query map present: unchanged behavior — CDL field names used verbatim", async () => {
+    const { calls, fetchImpl } = capturingFetch();
+    const tool = restTool({ baseUrl: "${HOTELS}", method: "GET", path: "/frames/price" });
+    await invokeRest(tool, { widthCm: 40, heightCm: 60 }, { env: ENV, fetchImpl });
+    expect(calls[0].url).toBe("https://api.hotels.example/frames/price?widthCm=40&heightCm=60");
+  });
+
+  it("a field present in the map is sent under its wire name", async () => {
+    const { calls, fetchImpl } = capturingFetch();
+    const tool = restTool({
+      baseUrl: "${HOTELS}",
+      method: "GET",
+      path: "/frames/price",
+      query: { widthCm: "width_cm", heightCm: "height_cm" },
+    });
+    await invokeRest(tool, { widthCm: 40, heightCm: 60 }, { env: ENV, fetchImpl });
+    expect(calls[0].url).toBe("https://api.hotels.example/frames/price?width_cm=40&height_cm=60");
+  });
+
+  it("a field NOT in the map falls back to its CDL name unchanged, mixed with a mapped field", async () => {
+    const { calls, fetchImpl } = capturingFetch();
+    const tool = restTool({
+      baseUrl: "${HOTELS}",
+      method: "GET",
+      path: "/frames/price",
+      query: { widthCm: "width_cm" },
+    });
+    await invokeRest(tool, { widthCm: 40, heightCm: 60 }, { env: ENV, fetchImpl });
+    expect(calls[0].url).toBe("https://api.hotels.example/frames/price?width_cm=40&heightCm=60");
+  });
+
+  it("a mapped field consumed by a path placeholder is still excluded from the query", async () => {
+    const { calls, fetchImpl } = capturingFetch();
+    const tool = restTool({
+      baseUrl: "${HOTELS}",
+      method: "GET",
+      path: "/frames/{frameProfileId}/price",
+      query: { widthCm: "width_cm", heightCm: "height_cm" },
+    });
+    await invokeRest(tool, { frameProfileId: "AV8", widthCm: 40, heightCm: 60 }, { env: ENV, fetchImpl });
+    expect(calls[0].url).toBe("https://api.hotels.example/frames/AV8/price?width_cm=40&height_cm=60");
+  });
+});
+
 describe("#15 missing required path parameter (US-3)", () => {
   const encoded = (r: InvokeResult) => r; // readability helper
 

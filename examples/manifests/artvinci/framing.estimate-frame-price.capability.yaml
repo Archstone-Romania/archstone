@@ -5,7 +5,7 @@ capability:
 
   input:
     frameProfileId:
-      type: identifier
+      ref: framing.FrameProfile
       description: The id of a frame profile, as returned by framing.list-frame-profiles.
     widthCm:
       type: quantity

@@ -31,7 +31,11 @@ export const SEMANTIC_TYPES: ReadonlySet<SemanticType> = new Set<SemanticType>([
 /** A field's type, kept neutral — emitters lower this to their target format. */
 export type IRType =
   | { kind: "scalar"; semantic: SemanticType; values?: string[] } // values = closed set for `enum`
-  | { kind: "resource"; name: string } // a `ref:` field or a resource-typed field
+  | { kind: "resource"; name: string; identity?: true } // a `ref:` field or a resource-typed field —
+    // `identity: true` ⇒ came from `ref:` ("by identity", a bare id — never expand through the
+    // resource registry); absent ⇒ came from `type:`/resource-typed field ("by representation",
+    // today's full-object behavior). Any future consumer that branches on `kind === "resource"`
+    // MUST check `identity` before treating the field as expandable (ADD-25 R-2).
   | { kind: "collection"; of: string }; // a list of a resource
 
 export interface IRField {
@@ -47,6 +51,7 @@ export interface IRRestConnector {
   path: string;
   headers?: Record<string, string>;
   body?: string;
+  query?: Record<string, string>; // CDL input field name -> wire query-param name (issue #26)
 }
 
 /** Backend invocation data copied from the binding (not an emit-target concern). */

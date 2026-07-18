@@ -53,6 +53,17 @@ describe("compile — booking → IR", () => {
   it("leaves unbound capabilities without a connector", () => {
     expect(ir.tools.find((t) => t.id === "tourism.book")!.connector).toBeUndefined();
   });
+
+  it("marks a `ref:` field as identity, leaving a `type: Resource` field's identity absent (ADD-25)", () => {
+    const book = ir.tools.find((t) => t.id === "tourism.book")!;
+    // input.accommodation is `ref: Accommodation` — "by identity".
+    const accommodation = book.input.find((f) => f.name === "accommodation")!;
+    expect(accommodation.type).toEqual({ kind: "resource", name: "tourism.Accommodation", identity: true });
+    // output.booking is `type: Booking` — "by representation": no `identity` key at all.
+    const booking = book.output.find((f) => f.name === "booking")!;
+    expect(booking.type).toEqual({ kind: "resource", name: "tourism.Booking" });
+    expect(booking.type).not.toHaveProperty("identity");
+  });
 });
 
 describe("compile — connector narrowing by type discriminant (NF-4)", () => {
@@ -74,6 +85,23 @@ describe("compile — connector narrowing by type discriminant (NF-4)", () => {
   it("drops an unknown connector type (never reaches IR)", () => {
     const ir = compile(modelWith({ type: "carrier-pigeon" }));
     expect(ir.tools[0].connector).toBeUndefined();
+  });
+
+  it("carries a rest connector's query param-name map through to IR (#26)", () => {
+    const ir = compile(
+      modelWith({
+        type: "rest",
+        rest: { baseUrl: "https://x.test", method: "GET", path: "/go", query: { widthCm: "width_cm" } },
+      }),
+    );
+    expect(ir.tools[0].connector?.rest?.query).toEqual({ widthCm: "width_cm" });
+  });
+
+  it("leaves `query` undefined when the binding does not declare one (#26)", () => {
+    const ir = compile(
+      modelWith({ type: "rest", rest: { baseUrl: "https://x.test", method: "GET", path: "/go" } }),
+    );
+    expect(ir.tools[0].connector?.rest?.query).toBeUndefined();
   });
 });
 
@@ -104,9 +132,14 @@ describe("compile — resource registry (#11)", () => {
 
   it("canonicalizes nested resource refs and carries no JSON Schema in the IR", () => {
     const ir = compile(load(join(manifests, "booking")));
-    // Booking.accommodation: bare `Accommodation` → canonical tourism.Accommodation.
+    // Booking.accommodation: `ref: Accommodation` (bare → canonical tourism.Accommodation),
+    // "by identity" (ADD-25) — the resource is referenced, not inlined into the registry.
     const booking = ir.resources["tourism.Booking"];
-    expect(booking.find((f) => f.name === "accommodation")!.type).toEqual({ kind: "resource", name: "tourism.Accommodation" });
+    expect(booking.find((f) => f.name === "accommodation")!.type).toEqual({
+      kind: "resource",
+      name: "tourism.Accommodation",
+      identity: true,
+    });
     // No emit-target lowering leaked into the IR.
     expect(JSON.stringify(ir.resources)).not.toMatch(/properties|inputSchema|"type":\s*"object"/);
   });

@@ -38,6 +38,49 @@ describe("#16 NF-7: inputJsonSchema lowers IR field kinds (crafted IR)", () => {
   });
 });
 
+describe("#25 identity fields lower to a bare string, not the full resource", () => {
+  it("a `ref:`-originated (identity: true) field lowers to { type: 'string' }, not the object", () => {
+    const resources: IRResourceRegistry = {
+      FrameProfile: [
+        { name: "id", required: true, type: { kind: "scalar", semantic: "identifier" } },
+        { name: "material", required: true, type: { kind: "scalar", semantic: "string" } },
+      ],
+    };
+    const fields: IRField[] = [
+      {
+        name: "frameProfileId",
+        required: true,
+        description: "The frame profile to price.",
+        type: { kind: "resource", name: "FrameProfile", identity: true },
+      },
+    ];
+    const schema = inputJsonSchema(fields, resources) as {
+      properties: Record<string, { type: string; description?: string; properties?: unknown }>;
+    };
+    expect(schema.properties.frameProfileId).toEqual({ type: "string", description: "The frame profile to price." });
+    expect(schema.properties.frameProfileId.properties).toBeUndefined();
+  });
+
+  it("a nested `ref:`-originated field inside a resource's own field map also lowers to a bare string (R-3)", () => {
+    // Order.customerId: { ref: Customer } — the resource registry itself holds a resource
+    // whose field is identity-shaped, exercised via the same lowerFields/fieldJsonSchema path.
+    const resources: IRResourceRegistry = {
+      Customer: [{ name: "name", required: true, type: { kind: "scalar", semantic: "string" } }],
+      Order: [
+        { name: "reference", required: true, type: { kind: "scalar", semantic: "identifier" } },
+        { name: "customerId", required: true, type: { kind: "resource", name: "Customer", identity: true } },
+      ],
+    };
+    const schema = objectJsonSchema(
+      [{ name: "order", required: true, type: { kind: "resource", name: "Order" } }],
+      resources,
+    ) as { properties: Record<string, { properties: Record<string, { type: string; properties?: unknown }> }> };
+    const order = schema.properties.order;
+    expect(order.properties.customerId).toEqual({ type: "string" });
+    expect(order.properties.customerId.properties).toBeUndefined();
+  });
+});
+
 describe("objectJsonSchema — resource cycle guard", () => {
   it("cycle-guards a self-referential resource (no infinite expansion)", () => {
     // Node → Node: the emitter must stop at a generic object on the second visit.

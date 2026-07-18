@@ -4,10 +4,13 @@ Archstone is a **compiler** for the thing it calls *zero manual integration*: a 
 describes what it can do in **CDL** (Capability Definition Language), and Archstone compiles
 that description into tools AI agents can execute — no hand-written MCP server, no HTTP glue.
 
-There are two ways to arrive here, and this guide serves both:
+There are three ways to arrive here, and this guide serves all of them:
 
 - **[Provider onboarding](#provider-onboarding)** — you have a business/API and want AI
   agents to be able to use it. You write CDL; Archstone does the integration.
+- **[Embedding onboarding](#embedding-onboarding)** — you have (or are generating) a compiled
+  IR artifact and want to consume it directly in your own app/agent loop without running
+  Archstone's CLI. Zero MCP server process; you get typed tools and fail-closed execution.
 - **[Contributor onboarding](#contributor-onboarding)** — you want to build Archstone
   itself (the compiler, providers, runtime).
 
@@ -294,6 +297,187 @@ tool invocation — on demand only, never triggered by `apply`/`serve`. Wiring i
 
 ---
 
+## Embedding onboarding
+
+> **Goal:** take a compiled IR artifact and embed it directly in your own application or agent
+> loop, consuming typed tools and fail-closed execution without running Archstone's CLI.
+
+### Who this is for
+
+You already have (or are generating) a compiled IR artifact from an Archstone manifest, and you
+want to consume it directly in your own product — a web application, a backend service, an AI
+agent embedded in another product — without spinning up Archstone's own MCP server process.
+For example: an assistant embedded in a travel-booking SaaS wants to call the same tools the
+booking backend exposes; you compile the manifest once, ship the IR as a static JSON artifact,
+and load it directly into your agent loop.
+
+### Compile and capture the artifact
+
+Start with the same CDL you would use for [Provider onboarding](#provider-onboarding) — all
+Steps 1–4 are identical. The difference is in what you do with the result: instead of running
+`archstone serve`, compile once and write a portable IR artifact:
+
+```bash
+archstone build ./my-manifest-dir
+```
+
+This produces `archstone.ir.json` (or `--out <path>` to customize the output location). The
+artifact is standalone: it contains the full compiled IR (`version: "0"`), with contract
+fingerprints and golden fixtures **stripped** — you ship only the IR itself, making it safe to
+include in a built application or serve from a static CDN.
+
+You can commit this artifact to version control, ship it as part of a release, or regenerate
+it in your CI/CD pipeline. It's the glue between Archstone's compile pipeline and your own
+application.
+
+### Load it into `@archstone/agent`
+
+Install the embedded SDK:
+
+```bash
+npm install @archstone/agent
+```
+
+Then load the IR and construct an Archstone instance:
+
+```typescript
+import { fromIR } from "@archstone/agent";
+import fs from "node:fs";
+
+// Load the artifact (e.g., from file, fetch, or inline)
+const ir = JSON.parse(fs.readFileSync("archstone.ir.json", "utf-8"));
+const archstone = fromIR(ir);
+```
+
+If the artifact isn't a valid `version: "0"` IR, `fromIR()` throws an `InvalidArtifactError` —
+it fails closed rather than proceeding on a shape it doesn't recognize.
+
+### Generate typed tool definitions
+
+Once you have an Archstone instance, generate tool definitions in your preferred format:
+
+```typescript
+// Get tools in your target format (zero MCP SDK loaded here)
+const anthropicTools = archstone.tools("anthropic");  // Anthropic SDK format
+const openaiTools = archstone.tools("openai");        // OpenAI SDK format
+const geminiTools = archstone.tools("gemini");        // Google Gemini format
+const jsonSchemaTools = archstone.tools("json-schema"); // Plain JSON Schema
+```
+
+Each tool includes a `name`, a `description` (as the AI agent sees it), and an `inputSchema`
+(from the semantic types defined in your CDL). The agent can discover and reason about them —
+no hand-written tool definitions.
+
+### Invoke capabilities with fail-closed semantics
+
+Execute a capability just as you would in `archstone serve`, but directly in your code:
+
+```typescript
+const result = await archstone.execute("tourism.search", {
+  destination: "Paris",
+  checkInDate: "2026-08-01",
+  travelers: { adults: 2, children: 0 },
+});
+
+if (result.status === "ok") {
+  console.log("Success:", result.data);
+} else if (result.status === "degraded") {
+  console.log("Partial result:", result.data, "Missing optional fields:", result.degraded);
+} else if (result.status === "violation") {
+  console.log("Contract violation — required fields missing:", result.missing);
+} else if (result.status === "error") {
+  console.log("Transport/connector error:", result.error);
+}
+```
+
+The result mirrors the same **OK/DEGRADED/VIOLATION/ERROR** semantics from
+[Step 4's fail-closed mapping](#step-4--bind-it-to-a-real-endpoint-bindings):
+- **OK** — all required fields present, returned as `data`.
+- **DEGRADED** — optional fields missing, returned as `data` with `degraded` listing the missing names.
+- **VIOLATION** — a required field missing; `missing` lists it (structured, not prose), so agents
+  can branch deterministically.
+- **ERROR** — transport failure (missing env var, network error, non-2xx response); `error` contains
+  a human-readable message.
+
+`execute()` accepts an optional `env` object (Workers-style, never `process.env`) for
+injecting environment variables into `${VAR}` placeholders in your bindings — useful for
+passing secrets or configuration without baking them into the artifact.
+
+```typescript
+const result = await archstone.execute(
+  "tourism.search",
+  { destination: "Paris", checkInDate: "2026-08-01", travelers: { adults: 2 } },
+  { env: { BOOKING_API_URL: "https://api.booking.example.com" } }
+);
+```
+
+### Expose it as an MCP endpoint (optional)
+
+If you want to also surface the embedded instance as an MCP server — for example, to mount it
+in the Claude API's `mcp_servers` config or expose it to other clients over HTTP — use the
+`/mcp` subpath:
+
+```typescript
+import { mcpHandler } from "@archstone/agent/mcp";
+
+const handler = mcpHandler(archstone, {
+  bearerToken: process.env.ARCHSTONE_TOKEN, // required; empty throws at construction
+});
+```
+
+This returns a Web-standard `(request: Request) => Promise<Response>` handler — mountable in
+any Web-standard-Request runtime (Cloudflare Workers, Node via a fetch adapter, etc.):
+
+```typescript
+// E.g., in a Cloudflare Worker
+export default {
+  fetch(request: Request): Promise<Response> {
+    return handler(request);
+  },
+};
+
+// E.g., in a Node.js app with a framework like Hono
+import { Hono } from "hono";
+const app = new Hono();
+app.all("*", async (c) => handler(c.req.raw));
+```
+
+The handler is a thin wrapper — it reuses the same Registry from the embedded instance, applies
+the same bearer-token gate as `archstone serve --http`, and enforces the same "no CORS by
+default" posture as the CLI. Never a separate method on the Archstone instance itself — this
+separation ensures that consumers who only ever call `tools()`/`execute()` never pull in the
+MCP SDK into their bundle (RFC-0008, Architecture Challenge R-1).
+
+The bearer token is **required** and checked at handler construction, not on the first request
+(Rule #7 — core never ships open by default). If you're running in an environment without
+secrets (e.g., a public demo), you must explicitly provide one anyway, even if it's a dummy
+value.
+
+### Where Archstone's own CLI fits
+
+The CLI's `archstone serve --http` command does the same work: it compiles your manifest,
+builds a Registry, and wraps it in the same HTTP handler machinery. You use `--http` when you
+want Archstone itself to own the server. You use the embedded SDK (`fromIR()` + `mcpHandler()`)
+when you want to run the handler inside your own application — giving you full control over
+how it's deployed, scaled, and integrated with your existing stack.
+
+```bash
+# Archstone runs the HTTP server for you
+archstone serve --http ./my-manifest-dir --port 8787 --token "my-secret"
+
+# vs.
+
+# You run the HTTP server; Archstone is just a dependency
+// In your app.ts:
+const archstone = fromIR(compiledArtifact);
+const handler = mcpHandler(archstone, { bearerToken: "my-secret" });
+// Mount handler on your framework of choice
+```
+
+Both paths produce the same MCP protocol behavior — the difference is operational.
+
+---
+
 ## Contributor onboarding
 
 > **Goal:** get a green checkout, understand the layout, and know how work is done here
@@ -337,8 +521,10 @@ flowchart TD
     ROOT --> PKG["packages/"]
     PKG --> SCHEMA["schema/<br/>schemas/ — cdl.schema.json validates the language"]
     PKG --> COMPILER["compiler/<br/>compile → IR (src/ir.ts is the moat: target-agnostic)"]
-    PKG --> RUNTIME["runtime/<br/>registry + MCP emitter (stdio)"]
-    PKG --> CLI["cli/<br/>archstone apply / serve — wires the pipeline"]
+    PKG --> EMITTER["emitter-support/<br/>IR indexing, semantic-type → JSON-Schema, response mapping"]
+    PKG --> RUNTIME["runtime/<br/>registry + MCP emitter (stdio) + HTTP handler"]
+    PKG --> AGENT["agent/<br/>embedded SDK: fromIR, tools(format), execute, /mcp handler"]
+    PKG --> CLI["cli/<br/>archstone apply / build / serve / verify — wires the pipeline"]
     ROOT --> PROVIDERS["providers/"]
     PROVIDERS --> REST["rest/<br/>REST adapter (providers = adapters)"]
     ROOT --> EXAMPLES["examples/<br/>manifests + the Claude demo"]
@@ -367,8 +553,10 @@ build.
   the compiler that consumes them. Don't build a feature ahead of the schema that defines it.
 - **CDL is business-only.** Anything technical (URLs, auth, HTTP verbs) belongs in a
   `binding`, never in a `*.capability.yaml`.
-- **Respect the layer boundaries.** The MCP SDK lives only in the emitter/runtime; HTTP lives
-  only in `providers/`; the compiler and IR know neither.
+- **Respect the layer boundaries.** The IR is target-agnostic (no MCP, no HTTP, no JSON Schema).
+  The MCP SDK appears only in `runtime`'s emitter and `agent`'s `/mcp` subpath. Semantic-type
+  → JSON-Schema lowering and response mapping live in `emitter-support`, shared by all emitters.
+  HTTP appears only in `providers/`. The compiler never wires YAML directly to MCP or HTTP.
 - **TypeScript strict**, pnpm workspaces, Vitest.
 
 ### Where to look first
@@ -378,4 +566,6 @@ build.
 | The language, by example | [`examples/manifests/`](../examples/manifests/) |
 | The wire format (schemas) | [`packages/schema/schemas/`](../packages/schema/schemas/) |
 | The moat (IR) | [`packages/compiler/src/ir.ts`](../packages/compiler/src/ir.ts) |
+| Embedding the SDK | [`packages/agent/README.md`](../packages/agent/README.md) |
+| Response mapping & JSON-Schema lowering | [`packages/emitter-support/`](../packages/emitter-support/) |
 | The end-to-end demo | [`examples/demo/README.md`](../examples/demo/README.md) |

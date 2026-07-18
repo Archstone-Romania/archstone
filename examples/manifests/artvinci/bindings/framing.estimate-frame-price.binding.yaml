@@ -6,10 +6,12 @@ binding:
     rest:
       baseUrl: "${ARTVINCI_API_URL}"
       method: GET
-      # The backend expects width_cm/height_cm as query params, not path segments — folding
-      # {widthCm}/{heightCm} into the path's own query string (rather than leaving them for
-      # buildQuery) is what lets the wire param names differ from the CDL input field names.
-      path: /api/v1/catalog/frames/{frameProfileId}/price?width_cm={widthCm}&height_cm={heightCm}
+      path: /api/v1/catalog/frames/{frameProfileId}/price
+      # The backend expects width_cm/height_cm as query params (snake_case); the CDL input
+      # stays camelCase, so the wire names are remapped here (#26).
+      query:
+        widthCm: width_cm
+        heightCm: height_cm
 
   # Provider body → FramePriceEstimate resource, single object at the response root (no
   # `collection` — one estimate per call). estimatedPrice can be null when the profile has

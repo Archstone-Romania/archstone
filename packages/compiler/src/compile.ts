@@ -16,7 +16,7 @@ type Canonicalize = (ref: string) => string;
 
 function lowerType(raw: Record<string, unknown>, canon: Canonicalize): IRType {
   if (typeof raw.collection === "string") return { kind: "collection", of: canon(raw.collection) };
-  if (typeof raw.ref === "string") return { kind: "resource", name: canon(raw.ref) };
+  if (typeof raw.ref === "string") return { kind: "resource", name: canon(raw.ref), identity: true };
   if (typeof raw.type === "string") {
     if (SEMANTIC_TYPES.has(raw.type as SemanticType)) {
       const t: IRType = { kind: "scalar", semantic: raw.type as SemanticType };
@@ -65,6 +65,7 @@ function lowerConnector(raw: Record<string, unknown>): IRConnector | undefined {
     if (typeof r.baseUrl === "string") irRest.baseUrl = r.baseUrl;
     if (r.headers && typeof r.headers === "object") irRest.headers = r.headers as Record<string, string>;
     if (typeof r.body === "string") irRest.body = r.body;
+    if (r.query && typeof r.query === "object") irRest.query = r.query as Record<string, string>;
     connector.rest = irRest;
   }
   return connector;
@@ -75,7 +76,9 @@ function lowerConnector(raw: Record<string, unknown>): IRConnector | undefined {
  *  we drop the mapping rather than bind it wrong — a safe floor). */
 function outputFieldFor(resource: string, output: IRField[]): string | undefined {
   const match = output.find(
-    (f) => (f.type.kind === "collection" && f.type.of === resource) || (f.type.kind === "resource" && f.type.name === resource),
+    (f) =>
+      (f.type.kind === "collection" && f.type.of === resource) ||
+      (f.type.kind === "resource" && f.type.name === resource && !f.type.identity),
   );
   return match?.name;
 }

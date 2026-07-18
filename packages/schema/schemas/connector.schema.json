@@ -37,6 +37,11 @@
         "body": {
           "type": "string",
           "description": "Body template or mapping reference"
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "CDL input field name -> wire query-param name, for fields the backend expects under a different name (e.g. widthCm -> width_cm). Unmapped fields fall back to their CDL name unchanged."
         }
       }
     },

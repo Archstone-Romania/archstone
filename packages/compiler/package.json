@@ -1,6 +1,6 @@
 {
   "name": "@archstone/compiler",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": false,
   "type": "module",
   "description": "Compiler (#4): Semantic Model -> IR. The IR is the physical form of the moat.",

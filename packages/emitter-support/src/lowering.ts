@@ -72,7 +72,13 @@ function resourceJsonSchema(name: string, resources: IRResourceRegistry, visited
 function fieldJsonSchema(f: IRField, resources: IRResourceRegistry, visited: ReadonlySet<string>): JsonSchema {
   const base: JsonSchema = f.description ? { description: f.description } : {};
   if (f.type.kind === "collection") return { ...base, type: "array", items: resourceJsonSchema(f.type.of, resources, visited) };
-  if (f.type.kind === "resource") return { ...base, ...resourceJsonSchema(f.type.name, resources, visited) };
+  if (f.type.kind === "resource") {
+    // `ref:`-originated ("by identity") fields are a bare id — never expand through the
+    // resource registry (ADD-25 D-2). `type:`/resource-typed ("by representation") fields
+    // keep the existing full-object lowering.
+    if (f.type.identity) return { ...base, type: "string" };
+    return { ...base, ...resourceJsonSchema(f.type.name, resources, visited) };
+  }
   return { ...base, ...semanticJsonSchema(f.type.semantic, f.type.values) };
 }
 

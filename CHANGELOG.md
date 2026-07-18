@@ -5,6 +5,34 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.3.1]
+
+Patch release: fixes a real bug in the published `@archstone/provider-rest@0.3.0` where REST
+query parameters were sent using CDL field names instead of the wire-expected names (e.g.
+`widthCm` instead of `width_cm`), causing strict-schema consumers to reject requests. Also
+includes a related, additive IR change reviewed together with the fix.
+
+### Fixed
+
+- **REST connector query-param remapping (#26).** A binding's `connector` can now declare a
+  `rest.query` map — CDL field name → wire query-param name (e.g. `widthCm` -> `width_cm`) —
+  mirroring the decoupling `response.map` already gives resource fields vs. provider JSONPaths.
+  Fixes real requests built by the previously-published `@archstone/provider-rest@0.3.0`, which
+  sent query params verbatim under their CDL names; a consumer with a strict schema (e.g. Zod)
+  on the receiving end would 400 on those requests. `buildQuery` remains fully backward
+  compatible when no `query:` block is present — CDL field names are used verbatim, byte-
+  identical to the prior behavior. Replaces the artvinci binding's path-embedded-query
+  workaround with a proper `query:` map.
+- **`ref:` fields lower to bare identity, not full resource shape (#25).** A capability input
+  typed `ref: SomeResource` now lowers to a plain identifier in the IR (`identity: true` on the
+  `resource` IR type arm) instead of the resource's full field shape, so an MCP `inputSchema`
+  asks for an id (`{"type": "string"}`), not a nested object. Additive — no IR `version` bump.
+  Same treatment applies to a `ref:`-originated field nested inside another resource's own
+  field map.
+
+Reviewed together: `internal/docs/reviews/25-26-bugfix-review.md` (✅ Approved). ADD for #25:
+`internal/docs/architecture/25-ref-field-identity-add.md`.
+
 ## [0.3.0]
 
 RFC-0008 (embedded agent emitters), slices 1-3: the IR can now be consumed directly by an

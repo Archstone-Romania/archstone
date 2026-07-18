@@ -69,12 +69,14 @@ function interpolatePath(
 }
 
 // Build a query string from every input field NOT consumed by a path placeholder.
-// null/undefined fields are omitted; keys and values are URL-encoded.
-function buildQuery(input: Record<string, unknown>, consumed: Set<string>): string {
+// null/undefined fields are omitted; keys and values are URL-encoded. `queryMap` (from
+// the connector's `rest.query`, #26) renames a CDL input field to its wire query-param
+// name; a field absent from the map is appended under its CDL name unchanged.
+function buildQuery(input: Record<string, unknown>, consumed: Set<string>, queryMap?: Record<string, string>): string {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(input)) {
     if (consumed.has(k) || v === undefined || v === null) continue;
-    params.append(k, serializeValue(v));
+    params.append(queryMap?.[k] ?? k, serializeValue(v));
   }
   return params.toString();
 }
@@ -146,7 +148,7 @@ export async function invokeRest(
 
   let url = joinUrl(baseUrl, interpolatedPath);
   if (!hasBody) {
-    const qs = buildQuery(input, consumed);
+    const qs = buildQuery(input, consumed, rest.query);
     if (qs) url += `?${qs}`;
   }
 
