@@ -58,11 +58,24 @@ function runApply(dir: string): void {
   for (const d of errors) console.log(`    ✗ ${d.message}`);
   for (const d of warnings) console.log(`    ⚠ ${d.message}`);
 
-  const ok = res.ok && errors.length === 0;
+  const shapesAndSemanticsOk = res.ok && errors.length === 0;
 
   // Compile to IR (#4) + index into the Registry (#5) — only when valid enough to emit.
-  if (ok) {
-    const registry = new Registry(compile(res));
+  // ADD-30: a tool-name collision (two capability ids sanitizing to the same advertised
+  // name) is checked here, before the final `ok`, alongside the semantic errors above —
+  // 'apply' must refuse the same manifest 'build'/'serve' would refuse (D-2).
+  const registry = shapesAndSemanticsOk ? new Registry(compile(res)) : undefined;
+  const collisions = registry?.toolNameCollisions ?? [];
+  if (collisions.length > 0) {
+    console.log(`\n  ✗ ${collisions.length} tool-name collision(s):`);
+    for (const c of collisions) {
+      console.log(`    - tool name '${c.name}' is ambiguous — capabilities ${c.ids.join(", ")} all sanitize to it`);
+    }
+  }
+
+  const ok = shapesAndSemanticsOk && collisions.length === 0;
+
+  if (ok && registry) {
     const invocable = registry.listCapabilities().filter((t) => t.connector).length;
     console.log(`  registry   IR v${registry.ir.version} — ${registry.size} capabilities, ${invocable} invocable (bound)`);
     console.log(`\n  → run 'archstone serve ${dir}' to expose ${invocable} tool(s) to an AI agent over MCP`);
@@ -86,6 +99,21 @@ function runBuild(dir: string, outPath: string | undefined): void {
   }
 
   const ir = compile(res);
+
+  // ADD-30 R-2: `runBuild` didn't construct a Registry at all, so it could ship a broken
+  // artifact whose ambiguous tool name only surfaces later, inside a third party's
+  // `fromIR()` call. Refuse to write on a collision — fail at `build` time instead
+  // (the same "ambiguous is a compile-time error, never a guess" pattern this repo already
+  // applies to resource-name resolution, compiler/src/resolve.ts).
+  const registry = new Registry(ir);
+  if (registry.toolNameCollisions.length > 0) {
+    console.error(`archstone build ${dir}: refusing to write artifact — tool-name collision(s):`);
+    for (const c of registry.toolNameCollisions) {
+      console.error(`  - tool name '${c.name}' is ambiguous — capabilities ${c.ids.join(", ")} all sanitize to it`);
+    }
+    process.exit(1);
+  }
+
   // D-8: the artifact ships with no code alongside it — the fingerprint + golden-fixture
   // path have no meaning without the fixture file / `archstone verify`, so strip `contract`
   // from every tool before writing.

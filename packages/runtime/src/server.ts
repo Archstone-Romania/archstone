@@ -12,8 +12,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { IRTool } from "@archstone/compiler";
-import { Registry, inputJsonSchema, objectJsonSchema, toolName, applyResponseMapping } from "@archstone/emitter-support";
+import { Registry, inputJsonSchema, objectJsonSchema, applyResponseMapping } from "@archstone/emitter-support";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 
 type JsonSchema = Record<string, unknown>;
@@ -25,26 +24,15 @@ export interface McpToolDef {
   outputSchema?: JsonSchema;
 }
 
-/**
- * Index of emitted tools by their sanitized MCP name. Only invocable (bound)
- * capabilities are emitted, so an unbound capability's name is absent here — the
- * single source of truth shared by `toolDefinitions` (what's listed) and
- * `callTool` (what's resolvable), keeping the two consistent.
- */
-function emittedTools(registry: Registry): Map<string, IRTool> {
-  const byName = new Map<string, IRTool>();
-  for (const t of registry.listCapabilities()) {
-    if (t.connector) byName.set(toolName(t.id), t);
-  }
-  return byName;
-}
-
-/** The MCP tool list: only invocable (bound) capabilities become tools. Input and output
- *  fields lower against the IR resource registry, so a `collection: Stay` output emits a
- *  typed, described `outputSchema` (not a bare `{type:object}`). */
+/** The MCP tool list: only invocable (bound) capabilities become tools — Registry's
+ *  `invocableTools()` (ADD-30 D-3) is the single source of truth shared by this function
+ *  (what's listed) and `callTool` (what's resolvable, via `getCapability`), keeping the two
+ *  consistent. Input and output fields lower against the IR resource registry, so a
+ *  `collection: Stay` output emits a typed, described `outputSchema` (not a bare
+ *  `{type:object}`). */
 export function toolDefinitions(registry: Registry): McpToolDef[] {
   const resources = registry.ir.resources;
-  return [...emittedTools(registry)].map(([name, t]) => {
+  return registry.invocableTools().map(({ name, tool: t }) => {
     const def: McpToolDef = {
       name,
       description: t.description,
@@ -77,7 +65,7 @@ export async function callTool(
   args: Record<string, unknown>,
   opts?: InvokeOptions,
 ): Promise<CallResult> {
-  const tool = emittedTools(registry).get(name);
+  const tool = registry.getCapability(name);
   if (!tool) {
     return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };
   }

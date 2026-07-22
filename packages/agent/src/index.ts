@@ -58,6 +58,13 @@ export function fromIR(json: unknown): Archstone {
   }
 
   const registry = new Registry(json as IR);
+  // ADD-30 D-2: refuse before `tools()`/`execute()` are ever reachable — a tool-name
+  // collision would otherwise let `execute()` silently resolve a shared advertised name to
+  // whichever colliding capability the registry happened to index first (BR-6).
+  if (registry.toolNameCollisions.length > 0) {
+    const detail = registry.toolNameCollisions.map((c) => `'${c.name}' (${c.ids.join(", ")})`).join("; ");
+    throw new InvalidArtifactError(`ambiguous tool name(s): ${detail}`);
+  }
 
   return {
     registry,

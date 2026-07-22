@@ -1,6 +1,6 @@
 {
   "name": "@archstone/schema",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": false,
   "type": "module",
   "description": "Schema Loader (#2): load + validate deployable CDL manifests from disk.",

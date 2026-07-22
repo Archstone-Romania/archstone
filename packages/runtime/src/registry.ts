@@ -23,16 +23,33 @@ export interface BuildResult {
 
 /**
  * File-backed pipeline: load (#2) → semantic-validate (#3) → compile (#4) → Registry (#5).
- * `registry` is present only when shapes are valid and there are no semantic errors.
+ * `registry` is present only when shapes are valid, there are no semantic errors, AND no
+ * tool-name collision (ADD-30 D-2) — folded into this function's existing `diagnostics`/
+ * `ok` contract (new `tool-name-collision` diagnostic code) rather than a new mechanism, so
+ * `serveStdio`/`runServeHttp` (which already refuse to proceed on `!built.ok`) inherit the
+ * gate for free.
  */
 export function buildRegistry(dir: string): BuildResult {
   const model: LoadResult = load(dir);
   const diagnostics = validateSemantics(model);
   const hasErrors = diagnostics.some((d) => d.severity === "error");
-  const ok = model.ok && !hasErrors;
+  let ok = model.ok && !hasErrors;
+
+  const registry = ok ? new Registry(compile(model)) : undefined;
+  if (registry) {
+    for (const c of registry.toolNameCollisions) {
+      ok = false;
+      diagnostics.push({
+        severity: "error",
+        code: "tool-name-collision",
+        message: `tool name '${c.name}' is ambiguous — capabilities ${c.ids.join(", ")} all sanitize to it`,
+      });
+    }
+  }
+
   return {
     ok,
-    registry: ok ? new Registry(compile(model)) : undefined,
+    registry: ok ? registry : undefined,
     issues: model.issues,
     diagnostics,
   };

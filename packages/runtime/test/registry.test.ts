@@ -17,6 +17,12 @@ describe("buildRegistry (file-backed pipeline)", () => {
     const r = buildRegistry(join(manifests, "booking"));
     expect(r.ok).toBe(true);
     expect(r.registry?.size).toBe(4);
+    // ADD-30 (#30): no tool-name collision on a real manifest — the new gate is a no-op
+    // here (cdl.schema.json's dotted `capability.id` pattern cannot itself produce a
+    // toolName() collision; see registry.ts's header comment / emitter-support's
+    // registry.test.ts for the synthetic-IR cases that exercise the gate directly).
+    expect(r.registry?.toolNameCollisions).toEqual([]);
+    expect(r.diagnostics.some((d) => d.code === "tool-name-collision")).toBe(false);
   });
 
   it("returns no registry when there is a semantic error", () => {

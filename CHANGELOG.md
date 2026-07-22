@@ -5,6 +5,31 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.3.2]
+
+Patch release: fixes a real round-trip bug in the embedded agent SDK where a tool name
+returned by `tools()`/`buildToolDefs()` could not be resolved by `execute()`.
+
+### Fixed
+
+- **`tools()`/`execute()` sanitized-name round-trip (#30).** `tools()` and `buildToolDefs()`
+  emit sanitized capability ids (dots → underscores, e.g. `tourism.search` →
+  `tourism_search`), but `executeCapability()` only resolved the raw dotted id, so handing a
+  model the tool name it was given and calling `execute()` back with it failed with
+  `unknown capability`. `Registry` now carries a `byName` index (sanitized name → capability)
+  alongside the existing `byId` index; `getCapability()` tries `byId` first, then `byName`, so
+  either id form resolves. Sanitized-name collisions are surfaced as
+  `Registry.toolNameCollisions` and checked at every callable-Registry construction site
+  (`@archstone/agent`'s `fromIR`, `@archstone/runtime`'s `buildRegistry`, and the CLI's
+  `runApply`/`runBuild`) — a collision refuses to build a callable registry rather than
+  silently misrouting a call. `archstone build` now also gates on registry construction,
+  closing a gap where it could previously emit an IR artifact with no registry-level
+  validation at all.
+
+Reviewed: BA → principal-architect → developer → code-reviewer pipeline, approved (non-blocking
+findings only). ADD: `internal/docs/architecture/30-agent-tool-name-roundtrip-add.md`. AC:
+`internal/docs/product/requirements/30-agent-tool-name-roundtrip-ac.md`.
+
 ## [0.3.1]
 
 Patch release: fixes a real bug in the published `@archstone/provider-rest@0.3.0` where REST

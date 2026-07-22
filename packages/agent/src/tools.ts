@@ -1,13 +1,15 @@
 // @archstone/agent — tool-definition envelopes per target format (ADD-0008 #28)
 //
 // Thin wrappers over @archstone/emitter-support's neutral JSON-Schema lowering
-// (inputJsonSchema / toolName) — every format shares that ONE lowering; only the
-// envelope shape differs (CLAUDE.md: "lowering lives only in @archstone/emitter-support,
-// never re-implemented"). Gemini additionally needs a dialect-subset sanitizer, since its
-// function-calling Schema object is NOT full JSON Schema — see sanitizeGeminiSchema below.
+// (inputJsonSchema) — every format shares that ONE lowering; only the envelope shape
+// differs (CLAUDE.md: "lowering lives only in @archstone/emitter-support, never
+// re-implemented"). The advertised `name` itself (sanitized via `toolName()`) now comes
+// straight from Registry.invocableTools() (ADD-30 D-3) — this file no longer re-derives
+// the invocable filter or re-runs the sanitizer. Gemini additionally needs a dialect-subset
+// sanitizer, since its function-calling Schema object is NOT full JSON Schema — see
+// sanitizeGeminiSchema below.
 
-import type { IRTool } from "@archstone/compiler";
-import { Registry, inputJsonSchema, toolName } from "@archstone/emitter-support";
+import { Registry, inputJsonSchema } from "@archstone/emitter-support";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -41,15 +43,6 @@ export interface JsonSchemaToolDef {
 }
 
 export type ToolDef = AnthropicToolDef | OpenAIToolDef | GeminiToolDef | JsonSchemaToolDef;
-
-/**
- * Only invocable (bound) capabilities become tools — mirrors @archstone/runtime's
- * `emittedTools` filter (`server.ts`): an unbound capability has no connector for
- * execute() to call, so it has nothing to offer an agent either.
- */
-function emittedTools(registry: Registry): IRTool[] {
-  return registry.listCapabilities().filter((t) => t.connector);
-}
 
 /**
  * Gemini's function-calling Schema object is a documented SUBSET of OpenAPI 3.0 schema —
@@ -109,26 +102,28 @@ export function sanitizeGeminiSchema(schema: JsonSchema): JsonSchema {
   return out;
 }
 
-/** Lower every invocable capability to `format`'s tool-definition envelope. */
+/** Lower every invocable capability to `format`'s tool-definition envelope. Reads the
+ *  (name, tool) pairs Registry already derived (ADD-30 D-3) instead of re-deriving the
+ *  invocable filter or re-running `toolName()` here. */
 export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[] {
   const resources = registry.ir.resources;
-  const tools = emittedTools(registry);
+  const tools = registry.invocableTools();
 
   switch (format) {
     case "anthropic":
       return tools.map(
-        (t): AnthropicToolDef => ({
-          name: toolName(t.id),
+        ({ name, tool: t }): AnthropicToolDef => ({
+          name,
           description: t.description,
           input_schema: inputJsonSchema(t.input, resources),
         }),
       );
     case "openai":
       return tools.map(
-        (t): OpenAIToolDef => ({
+        ({ name, tool: t }): OpenAIToolDef => ({
           type: "function",
           function: {
-            name: toolName(t.id),
+            name,
             description: t.description,
             parameters: inputJsonSchema(t.input, resources),
           },
@@ -136,16 +131,16 @@ export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[]
       );
     case "gemini":
       return tools.map(
-        (t): GeminiToolDef => ({
-          name: toolName(t.id),
+        ({ name, tool: t }): GeminiToolDef => ({
+          name,
           description: t.description,
           parameters: sanitizeGeminiSchema(inputJsonSchema(t.input, resources)),
         }),
       );
     case "json-schema":
       return tools.map(
-        (t): JsonSchemaToolDef => ({
-          name: toolName(t.id),
+        ({ name, tool: t }): JsonSchemaToolDef => ({
+          name,
           description: t.description,
           schema: inputJsonSchema(t.input, resources),
         }),
