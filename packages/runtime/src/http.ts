@@ -9,7 +9,7 @@
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Registry } from "@archstone/emitter-support";
-import type { InvokeOptions } from "@archstone/provider-rest";
+import type { CallerContext, InvokeOptions } from "@archstone/provider-rest";
 import { createMcpServer } from "./server";
 
 export { createMcpServer } from "./server";
@@ -20,8 +20,25 @@ export interface CreateHttpHandlerOptions {
    *  empty throws at construction time, not on the first request (Rule #7 — core never ships
    *  open by default; R-5). */
   bearerToken: string;
-  /** Forwarded to createMcpServer for REST-provider calls (env/fetchImpl). */
+  /** Forwarded to createMcpServer for REST-provider calls (env/fetchImpl). A `caller` set here
+   *  is a static, process-wide default — see `resolveCaller` below for the per-request case. */
   invoke?: InvokeOptions;
+  /**
+   * ADD-32: extracts the caller credential for ONE inbound request. Called inside the
+   * per-request handler closure (a fresh MCP server is already built per request here, so
+   * this varies per call, unlike `invoke.caller` above which is fixed at construction time).
+   * Archstone does not validate the token itself — this is a seam for a host that has
+   * *already* authenticated its end user and is handing over the resulting token; Archstone
+   * does not host an OIDC broker.
+   *
+   * Orthogonal to `bearerToken` (R-2) — do not conflate the two:
+   *   - `bearerToken` gates WHO may reach this MCP endpoint at all (endpoint access).
+   *   - `resolveCaller` resolves WHOSE backend data a given, already-authorized call acts on.
+   * They compose (both may be set); neither substitutes for the other. A request can be a
+   * validly-authorized MCP client (passed `bearerToken`) yet still supply no/invalid caller
+   * credential, which then fails closed inside `invokeRest` for any `authenticated` capability.
+   */
+  resolveCaller?: (request: Request) => CallerContext | undefined;
 }
 
 /**
@@ -44,7 +61,10 @@ export function createHttpHandler(
       return new Response(null, { status: 401 });
     }
 
-    const server = createMcpServer(registry, opts.invoke);
+    // Per-request InvokeOptions: opts.invoke's env/fetchImpl carry over unchanged; `caller` is
+    // resolved fresh for THIS request via resolveCaller (ADD-32) — never cached across requests.
+    const invoke: InvokeOptions = { ...opts.invoke, caller: opts.resolveCaller?.(request) };
+    const server = createMcpServer(registry, invoke);
     // Stateless: no sessionIdGenerator, no per-caller session/state at all. JSON responses
     // (not SSE) — a freshly-built server per request has nothing to stream anyway.
     const transport = new WebStandardStreamableHTTPServerTransport({

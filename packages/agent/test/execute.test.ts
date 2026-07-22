@@ -118,6 +118,68 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
   });
 });
 
+// ADD-32: execute() forwards `caller` to invokeRest as a pure pass-through — no policy
+// logic lives here. tourism.search itself carries no `authenticated` policy (#32 removed
+// it as a mislabeled demo policy — see tourism.search.capability.yaml), so this uses a
+// synthetic authenticated tool built from the same registry's connector shape instead of
+// depending on manifest content that may change independently of this test's intent.
+describe("execute() — caller credential propagation (ADD-32)", () => {
+  it("reaches the backend with the caller's token attached via a ${caller.…} binding placeholder", async () => {
+    let capturedAuth: string | undefined;
+    const fetchImpl: FetchLike = async (_url, init) => {
+      capturedAuth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      return new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    };
+    // Simulate an authenticated binding by mutating the loaded IR's tool connector headers
+    // in place — this only exercises invokeRest's ${caller.…} resolution, not policy gating
+    // (covered by the dedicated policies test below).
+    const artifact = loadArtifact() as { tools: { id: string; connector?: { rest?: { headers?: Record<string, string> } } }[] };
+    const tool = artifact.tools.find((t) => t.id === "tourism.search")!;
+    tool.connector!.rest!.headers = { Authorization: "Bearer ${caller.accessToken}" };
+    const withHeader = fromIR(artifact);
+
+    const r = await withHeader.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl, caller: { accessToken: "user-token-abc" } },
+    );
+    expect(r.status).toBe("ok");
+    expect(capturedAuth).toBe("Bearer user-token-abc");
+  });
+
+  it("an authenticated capability with no caller supplied fails closed with status: 'error'", async () => {
+    const artifact = loadArtifact() as { tools: { id: string; policies: string[] }[] };
+    const tool = artifact.tools.find((t) => t.id === "tourism.search")!;
+    tool.policies = ["authenticated"];
+    const archstone = fromIR(artifact);
+
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called — the gate must short-circuit first");
+    };
+    const r = await archstone.execute("tourism.search", { destination: "Nice" }, { fetchImpl });
+    expect(r.status).toBe("error");
+    expect(r.error).toMatch(/requires policies:\[authenticated\]/);
+  });
+
+  it("omitting caller behaves exactly as before for a non-authenticated capability", async () => {
+    const archstone = fromIR(loadArtifact());
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const r = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
+    );
+    expect(r.status).toBe("ok");
+  });
+});
+
 // ADD-30 (#30): tools(format) advertises "tourism_search" (toolName("tourism.search")) —
 // execute() must resolve that exact advertised string back to "tourism.search", identically
 // across every ToolFormat (BR-1/BR-7), since all four share the one toolName() lowering.

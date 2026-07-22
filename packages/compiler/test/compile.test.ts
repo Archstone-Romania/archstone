@@ -34,7 +34,10 @@ describe("compile — booking → IR", () => {
     expect(search).toBeDefined();
     expect(search!.effect).toBe("read");
     expect(search!.provider).toBe("booking-api");
-    expect(search!.policies).toEqual(["authenticated", "rate-limited"]);
+    // `authenticated` removed from this demo capability as part of #32/ADD-32 (see
+    // tourism/booking's tourism.search.capability.yaml comments) — this is a public
+    // search, not a "whose data" capability, so only `rate-limited` remains.
+    expect(search!.policies).toEqual(["rate-limited"]);
 
     const destination = search!.input.find((f) => f.name === "destination");
     expect(destination!.type).toEqual({ kind: "scalar", semantic: "location" });

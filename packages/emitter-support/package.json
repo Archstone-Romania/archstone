@@ -1,6 +1,6 @@
 {
   "name": "@archstone/emitter-support",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "description": "Shared IR-only substrate for emitters (ADD-0008): Registry indexing, semantic-type -> JSON-Schema lowering, response-mapping executor. No MCP SDK, no fs.",

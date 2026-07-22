@@ -1,0 +1,17 @@
+# NOT CDL — implementation (how), separate from the capability (what).
+#
+# banking.list-accounts declares policies: [authenticated, tenant-scoped] (the "arată-mi
+# conturile" scenario, #32/ADD-32) — this binding attaches the caller's own bearer token via
+# ${caller.accessToken}, not a service-account ${VAR}. With no caller supplied on invoke,
+# invokeRest fails closed before any request reaches ${CORE_BANKING_URL} (ADD-32 D-3).
+
+binding:
+  capabilityId: banking.list-accounts
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${CORE_BANKING_URL}"
+      method: GET
+      path: /v2/accounts
+      headers:
+        Authorization: "Bearer ${caller.accessToken}"

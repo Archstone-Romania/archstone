@@ -85,6 +85,37 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
     }
   }
 
+  // 3b. ADD-32 step 8 — advisory: an `authenticated` capability whose REST binding never
+  // references a caller placeholder will always fail closed at invoke time (providers/rest's
+  // fail-closed gate, D-3). Purely a string-pattern check over the raw binding shape already
+  // loaded (`model.bindings`) — no HTTP/auth-scheme interpretation, and NOT a hard schema
+  // requirement (warning, not error — R-4: this stays advisory until proven useful in anger).
+  for (const b of bindings) {
+    const cid = b.binding.capabilityId;
+    const cap = byId.get(cid);
+    if (!cap || !(cap.capability.policies ?? []).includes("authenticated")) continue;
+    const connector = b.binding.connector as { type?: unknown; rest?: Record<string, unknown> } | undefined;
+    if (connector?.type !== "rest" || !connector.rest) continue;
+    const rest = connector.rest;
+    const stringValues: string[] = [];
+    if (typeof rest.body === "string") stringValues.push(rest.body);
+    for (const map of [rest.headers, rest.query]) {
+      if (map && typeof map === "object") {
+        for (const v of Object.values(map as Record<string, unknown>)) {
+          if (typeof v === "string") stringValues.push(v);
+        }
+      }
+    }
+    const hasCallerPlaceholder = stringValues.some((v) => v.includes("${caller."));
+    if (!hasCallerPlaceholder) {
+      diags.push({
+        severity: "warning",
+        code: "authenticated-capability-no-caller-placeholder",
+        message: `capability '${cid}' declares policies:[authenticated] but its binding never references a caller credential (\${caller.…}) — invocation will always fail closed unless one is added`,
+      });
+    }
+  }
+
   // 4. Resource resolution (P-7) — every `ref`/`collection`/resource-typed name in a
   // capability's input/output AND in a resource's fields (transitively, since every
   // resource's fields are checked here) must resolve to a loaded resource.

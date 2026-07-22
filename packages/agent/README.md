@@ -28,11 +28,13 @@ const anthropicTools = archstone.tools("anthropic");
 const openaiTools = archstone.tools("openai");
 const geminiTools = archstone.tools("gemini");
 
-// Invoke a capability
+// Invoke a capability — accepts both raw dotted id or sanitized tool name
 const result = await archstone.execute("tourism.search", {
   location: "Paris",
   checkInDate: "2026-08-01",
 });
+// Same call with sanitized tool name (as returned by tools()):
+// const result = await archstone.execute("tourism_search", {...});
 
 if (result.status === "ok") {
   console.log("Success:", result.data);

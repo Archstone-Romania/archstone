@@ -84,6 +84,28 @@ archstone verify examples/manifests/tourism
 archstone verify examples/manifests/tourism --json
 ```
 
+---
+
+## Where your CDL lives
+
+**Your business's CDL manifest** (`capabilities.yaml`, `*.capability.yaml`, `*.resource.yaml`,
+and `bindings/*.binding.yaml`) is authored and version-controlled in **your own application
+repository** — never inside this Archstone repository or any other Archstone-owned repository.
+
+**`@archstone/cli` is a stateless compiler.** It runs locally on your machine or in your own CI
+pipeline with zero checkout of any Archstone repository required — public or private. Install
+`@archstone/cli` from npm; point it at your manifest directory; it compiles to IR and reports
+the result. That's the entire integration: no cross-repo credentials, no monorepo dependency,
+no fetch-at-runtime.
+
+> **Distinguishing "From source" above:** the instructions above for exploring Archstone's
+> source code are for **contributors building Archstone itself**. The real integration path
+> for your business is to **install `@archstone/cli` from npm into your own repository** and
+> wire `archstone apply`/`archstone build`/`archstone serve`/`archstone verify` into your own build system.
+> See the [onboarding guide](docs/ONBOARDING.md) for the full walkthrough.
+
+---
+
 New here? Start with the **[onboarding guide](docs/ONBOARDING.md)** — one path for
 **providers** (expose your business to agents) and one for **contributors** (build
 Archstone).
@@ -104,7 +126,9 @@ const archstone = fromIR(compiledIR);
 const myTools = archstone.tools("anthropic"); // or "openai" / "gemini" / "json-schema"
 
 // Invoke capabilities directly — no MCP server process needed
+// Accepts both raw dotted id and sanitized tool name (as returned by tools())
 const result = await archstone.execute("tourism.search", { location: "Paris" });
+// or: await archstone.execute("tourism_search", { location: "Paris" });
 ```
 
 For those who want HTTP-based MCP (e.g., to expose an embedded instance via Claude API's

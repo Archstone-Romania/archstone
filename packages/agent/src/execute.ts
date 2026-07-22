@@ -11,7 +11,7 @@
 // violation sketch.
 
 import { Registry, applyResponseMapping } from "@archstone/emitter-support";
-import { invokeRest, type FetchLike } from "@archstone/provider-rest";
+import { invokeRest, type FetchLike, type CallerContext } from "@archstone/provider-rest";
 
 export interface ExecuteOptions {
   /** Injected, Workers-style — execute() never falls back to `process.env` (ADD-0008
@@ -19,6 +19,11 @@ export interface ExecuteOptions {
    *  placeholder resolves as missing, which surfaces as `status: "error"`, not a crash. */
   env?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
+  /** ADD-32: the end user this execute() call acts on behalf of — pure pass-through to
+   *  invokeRest (no policy logic here). Omitting it behaves exactly as before unless the
+   *  capability declares `policies: [authenticated]`, in which case invokeRest fails closed
+   *  with `status: "error"` (no new ExecuteResult variant needed). */
+  caller?: CallerContext;
 }
 
 export interface ExecuteResult {
@@ -46,7 +51,7 @@ export async function executeCapability(
   // every `${VAR}` placeholder resolves as missing, which invokeRest already reports as
   // a normal `ok:false` (mapped below to `status: "error"`).
   const env = opts?.env ?? {};
-  const result = await invokeRest(tool, input, { env, fetchImpl: opts?.fetchImpl });
+  const result = await invokeRest(tool, input, { env, fetchImpl: opts?.fetchImpl, caller: opts?.caller });
   if (!result.ok) {
     return { status: "error", error: result.error ?? "invocation failed" };
   }

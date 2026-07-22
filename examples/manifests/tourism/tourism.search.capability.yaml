@@ -19,7 +19,10 @@ capability:
     stays:
       collection: Stay
 
-  policies:
-    - authenticated
-
+  # No `authenticated` policy: this demo's search is a public, service-account-style
+  # lookup (no per-user "act on my data" concern) — see ADD-32 §"Open questions"/final
+  # report for why this was corrected as part of #32 (it was previously an
+  # unenforced/decorative label; ADD-32's fail-closed gate would otherwise make this
+  # demo permanently uninvocable via `archstone serve`/`archstone verify`, which have
+  # no caller-injection surface).
   provider: booking-engine

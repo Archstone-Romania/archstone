@@ -2,8 +2,9 @@
 //
 // The first adapter under providers/. Maps a capability's input → an HTTP request
 // (from its IR connector) and the HTTP response → a result. REST only. baseUrl,
-// headers and auth resolve from env via ${VAR} placeholders. HTTP lives HERE and
-// nowhere else — the compiler/IR/emitter never touch it.
+// headers and auth resolve from env via ${VAR} placeholders, and (ADD-32) from a
+// per-invocation caller credential via ${caller.NAME} placeholders. HTTP lives HERE
+// and nowhere else — the compiler/IR/emitter never touch it.
 
 import type { IRTool } from "@archstone/compiler";
 
@@ -16,12 +17,39 @@ export interface InvokeResult {
 
 export type FetchLike = typeof globalThis.fetch;
 
+/**
+ * A fact about ONE invocation — never about the compiled artifact (ADD-32 D-1). The IR is
+ * reused across many invocations by many different end users; a caller credential lives only
+ * in invoke-context types (here, and threaded through `agent`'s `ExecuteOptions` / `runtime`'s
+ * `serveStdio`/`createHttpHandler`), never in `IRTool`/`IR`.
+ */
+export interface CallerContext {
+  /** The end user's bearer token, supplied by a host that has already authenticated them
+   *  (Archstone does not host an OIDC broker). Undefined means "no caller supplied" — the
+   *  fail-closed gate below distinguishes that from an explicit `""`, which is treated as
+   *  present (ADD-32 §3/R-6, mirrors this file's existing env-var precedent). */
+  accessToken?: string;
+  /** Reserved for `tenant-scoped` policy enforcement — NOT enforced by ADD-32 (D-4/R-5). The
+   *  shape carries this now so a future increment doesn't need a second breaking change to
+   *  `CallerContext`; nothing reads this field yet. */
+  tenantId?: string;
+}
+
 export interface InvokeOptions {
   env?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
+  /** ADD-32: the end user this specific invocation acts on behalf of. Absent = no caller
+   *  (byte-for-byte today's behavior unless `tool.policies` includes `authenticated`, in which
+   *  case the call fails closed — see `invokeRest`). */
+  caller?: CallerContext;
 }
 
 const ENV_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+// ${caller.NAME} — a second placeholder namespace, resolved against opts.caller instead of
+// env, parallel to ENV_RE/resolveEnv (ADD-32 D-2). Kept as a distinct regex/resolver (not a
+// unified one) so a missing caller key is reported as "missing caller credential(s)", never
+// conflated with "missing env var(s)" in the same error message.
+const CALLER_RE = /\$\{caller\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 // {field} placeholders in path and body templates. Restricted to identifier names
 // so a JSON body template's own braces (e.g. {"city":"{city}"}) are not mistaken
@@ -33,6 +61,23 @@ const PLACEHOLDER_RE = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 function resolveEnv(s: string, env: Record<string, string | undefined>, missing: Set<string>): string {
   return s.replace(ENV_RE, (_m, name: string) => {
     const v = env[name];
+    if (v === undefined) {
+      missing.add(name);
+      return "";
+    }
+    return v;
+  });
+}
+
+// ${caller.NAME} — resolved against opts.caller, parallel to resolveEnv. A missing key is
+// "missing" only when the caller (or the whole caller object) is absent; an explicit ""
+// (e.g. accessToken: "") is a valid, present value (ADD-32 §3/R-6 — same rule as resolveEnv).
+// The cast below is only safe because every CallerContext field is `string | undefined` —
+// an unmatched name still resolves to `undefined` at runtime. If CallerContext ever gains a
+// non-string field, this needs a real `name in caller` narrow, not just a cast.
+function resolveCaller(s: string, caller: CallerContext | undefined, missing: Set<string>): string {
+  return s.replace(CALLER_RE, (_m, name: string) => {
+    const v = caller?.[name as keyof CallerContext];
     if (v === undefined) {
       missing.add(name);
       return "";
@@ -116,22 +161,44 @@ export async function invokeRest(
   if (!connector || connector.type !== "rest" || !connector.rest) {
     return { ok: false, status: 0, error: `capability '${tool.id}' has no REST connector` };
   }
+
+  // ADD-32 D-3: fail-closed BEFORE any env resolution, URL building, or network call — a
+  // missing caller credential on an `authenticated` capability is more actionable than (and
+  // must not be masked by) a downstream missing-env/missing-baseUrl error. `accessToken` is
+  // "present" once it's anything other than undefined — an explicit "" counts (§3/R-6).
+  if (tool.policies.includes("authenticated") && opts.caller?.accessToken === undefined) {
+    return {
+      ok: false,
+      status: 0,
+      error: `capability '${tool.id}' requires policies:[authenticated] — no caller credential (accessToken) provided on invoke`,
+    };
+  }
+
   const rest = connector.rest;
 
   const method = rest.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
 
   const missingEnv = new Set<string>();
-  const baseUrl = resolveEnv(rest.baseUrl ?? "", env, missingEnv);
+  const missingCaller = new Set<string>();
+  const baseUrl = resolveCaller(resolveEnv(rest.baseUrl ?? "", env, missingEnv), opts.caller, missingCaller);
   const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(rest.headers ?? {})) headers[k] = resolveEnv(v, env, missingEnv);
-  // NF-1: resolve the body template's env only when a body will actually be sent.
-  // GET/HEAD never send their (unused) body template, so an unset ${VAR} inside it
-  // must not block the call as missing-env (BR-2 / EC-8: body is ignored on GET/HEAD).
-  const bodyTemplate = hasBody && rest.body !== undefined ? resolveEnv(rest.body, env, missingEnv) : undefined;
+  for (const [k, v] of Object.entries(rest.headers ?? {})) {
+    headers[k] = resolveCaller(resolveEnv(v, env, missingEnv), opts.caller, missingCaller);
+  }
+  // NF-1: resolve the body template's env/caller only when a body will actually be sent.
+  // GET/HEAD never send their (unused) body template, so an unset ${VAR}/${caller.NAME}
+  // inside it must not block the call (BR-2 / EC-8: body is ignored on GET/HEAD).
+  const bodyTemplate =
+    hasBody && rest.body !== undefined
+      ? resolveCaller(resolveEnv(rest.body, env, missingEnv), opts.caller, missingCaller)
+      : undefined;
 
   if (missingEnv.size > 0) {
     return { ok: false, status: 0, error: `missing env var(s): ${[...missingEnv].join(", ")}` };
+  }
+  if (missingCaller.size > 0) {
+    return { ok: false, status: 0, error: `missing caller credential(s): ${[...missingCaller].join(", ")}` };
   }
   if (!baseUrl) {
     return { ok: false, status: 0, error: `capability '${tool.id}': no baseUrl (set it in the binding or via env)` };

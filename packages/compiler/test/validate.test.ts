@@ -127,6 +127,87 @@ describe("validateSemantics — cross-file failures", () => {
   });
 });
 
+describe("validateSemantics — ADD-32 authenticated-capability-no-caller-placeholder (advisory)", () => {
+  function fixture(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-sem-caller-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(dir, rel);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
+    return dir;
+  }
+
+  const CODE = "authenticated-capability-no-caller-placeholder";
+
+  it("warns when an authenticated capability's REST binding never references ${caller.…}", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - shop.checkout\nproviders:\n  - store\n",
+      "shop.checkout.capability.yaml":
+        "capability:\n  id: shop.checkout\n  description: pay\n  effect: write\n  provider: store\n  policies:\n    - authenticated\n",
+      "bindings/shop.checkout.binding.yaml":
+        "binding:\n  capabilityId: shop.checkout\n  connector:\n    type: rest\n    rest:\n      baseUrl: ${API}\n      method: POST\n      path: /checkout\n      headers:\n        X-Api-Key: ${API_KEY}\n",
+    });
+    const d = validateSemantics(load(dir));
+    expect(errors(d)).toHaveLength(0);
+    const w = warnings(d).find((x) => x.code === CODE);
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("shop.checkout");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stays silent once a ${caller.…} placeholder is added to the binding", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - shop.checkout\nproviders:\n  - store\n",
+      "shop.checkout.capability.yaml":
+        "capability:\n  id: shop.checkout\n  description: pay\n  effect: write\n  provider: store\n  policies:\n    - authenticated\n",
+      "bindings/shop.checkout.binding.yaml":
+        "binding:\n  capabilityId: shop.checkout\n  connector:\n    type: rest\n    rest:\n      baseUrl: ${API}\n      method: POST\n      path: /checkout\n      headers:\n        Authorization: Bearer ${caller.accessToken}\n",
+    });
+    const d = validateSemantics(load(dir));
+    expect(codes(warnings(d))).not.toContain(CODE);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not fire for a non-authenticated capability's binding (no false positive)", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - shop.search\nproviders:\n  - store\n",
+      "shop.search.capability.yaml": "capability:\n  id: shop.search\n  description: find\n  effect: read\n  provider: store\n",
+      "bindings/shop.search.binding.yaml":
+        "binding:\n  capabilityId: shop.search\n  connector:\n    type: rest\n    rest:\n      baseUrl: ${API}\n      method: GET\n      path: /search\n",
+    });
+    const d = validateSemantics(load(dir));
+    expect(codes(warnings(d))).not.toContain(CODE);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is severity: warning, not error — never blocks compilation", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - shop.checkout\nproviders:\n  - store\n",
+      "shop.checkout.capability.yaml":
+        "capability:\n  id: shop.checkout\n  description: pay\n  effect: write\n  provider: store\n  policies:\n    - authenticated\n",
+      "bindings/shop.checkout.binding.yaml":
+        "binding:\n  capabilityId: shop.checkout\n  connector:\n    type: rest\n    rest:\n      baseUrl: ${API}\n      method: POST\n      path: /checkout\n",
+    });
+    const d = validateSemantics(load(dir));
+    const w = d.find((x) => x.code === CODE);
+    expect(w?.severity).toBe("warning");
+    expect(errors(d)).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("real fixture: bank's initiate-transfer binding is authenticated with no ${caller.…} — the known gap this warning flags", () => {
+    const d = validateSemantics(load(join(manifests, "bank")));
+    const w = warnings(d).find((x) => x.code === CODE);
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("banking.initiate-transfer");
+    // banking.list-accounts (#32's own fixture) DOES wire ${caller.accessToken} — must not warn.
+    expect(warnings(d).filter((x) => x.code === CODE).map((x) => x.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("banking.list-accounts")]),
+    );
+  });
+});
+
 describe("validateSemantics — response mapping (ADD-12)", () => {
   // A shop.search manifest whose output is `items: collection Widget`, with a Widget
   // resource; each case swaps only the binding's `response:` block to isolate one diagnostic.

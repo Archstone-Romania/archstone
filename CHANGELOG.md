@@ -5,6 +5,32 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.0]
+
+Minor release: a capability can now be invoked on behalf of an end user, not just a shared
+service account, and `policies:[authenticated]` goes from an authored label to something the
+runtime actually enforces.
+
+### Added
+
+- **Caller-credential propagation & `policies:[authenticated]` enforcement (#32).** A new
+  per-invocation `CallerContext` (`accessToken`, reserved `tenantId`) threads through
+  `@archstone/provider-rest`'s `invokeRest`, `@archstone/agent`'s `execute()`
+  (`ExecuteOptions.caller`), and `@archstone/runtime`'s stdio (`serveStdio`'s new `invoke`
+  parameter) and per-request HTTP (`createHttpHandler`'s new `resolveCaller` hook) paths. A
+  binding attaches the credential with a new `${caller.NAME}` placeholder alongside the
+  existing `${VAR}`/env resolution (e.g. `Authorization: Bearer ${caller.accessToken}`) — no
+  IR or schema change. `invokeRest` now fails closed, before any network call, when a
+  capability declares `policies:[authenticated]` and no caller credential is supplied on
+  invoke; capabilities and bindings that don't use `authenticated`/`${caller.…}` are byte-for-
+  byte unaffected. The compiler emits a new advisory warning
+  (`authenticated-capability-no-caller-placeholder`) when an `authenticated` capability's
+  binding never references `${caller.…}`. `tenant-scoped` remains explicitly unenforced this
+  increment. The `bank` example manifest gains a binding for `banking.list-accounts` as the
+  end-to-end fixture.
+
+ADD: `internal/docs/architecture/32-caller-credential-propagation-add.md`.
+
 ## [0.3.2]
 
 Patch release: fixes a real round-trip bug in the embedded agent SDK where a tool name

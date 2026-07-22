@@ -7,14 +7,24 @@
 // back-compat so nothing downstream breaks.
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { InvokeOptions } from "@archstone/provider-rest";
 import { buildRegistry } from "./registry";
 import { toolDefinitions, createMcpServer } from "./server";
 
 export { toolName, inputJsonSchema, objectJsonSchema } from "@archstone/emitter-support";
 export * from "./server";
 
-/** Build the registry from a manifest dir and serve it over stdio (blocks). */
-export async function serveStdio(dir: string): Promise<void> {
+/**
+ * Build the registry from a manifest dir and serve it over stdio (blocks).
+ *
+ * `invoke` (ADD-32) is forwarded verbatim to `createMcpServer` — this closes a real gap: prior
+ * to #32, `serveStdio` passed NO `InvokeOptions` at all, so nothing (not `env`, not `caller`)
+ * could ever be injected here. A stdio server is one child process per conversation (Claude
+ * Desktop's model) — single-process, single-user by construction — so a static per-process
+ * `invoke.caller` is architecturally sound here, unlike the HTTP case (`createHttpHandler`'s
+ * `resolveCaller`, which must vary per inbound request).
+ */
+export async function serveStdio(dir: string, invoke?: InvokeOptions): Promise<void> {
   const built = buildRegistry(dir);
   if (!built.ok || !built.registry) {
     // stdout is the MCP channel — all human output goes to stderr.
@@ -25,6 +35,6 @@ export async function serveStdio(dir: string): Promise<void> {
   }
   const tools = toolDefinitions(built.registry);
   console.error(`archstone: serving ${tools.length} tool(s) over stdio: ${tools.map((t) => t.name).join(", ") || "(none)"}`);
-  const server = createMcpServer(built.registry);
+  const server = createMcpServer(built.registry, invoke);
   await server.connect(new StdioServerTransport());
 }

@@ -66,6 +66,25 @@ Business definition (`*.capability.yaml` + `*.resource.yaml`) is kept **separate
 technical wiring (`bindings/`). That separation is the point: swap the backend, and the CDL
 and the generated tool do not change.
 
+### Repository ownership & the stateless compiler
+
+**Your manifest lives in your repository.** The CDL files you create in Steps 1–4 below
+(`capabilities.yaml`, `*.capability.yaml`, `*.resource.yaml`, `bindings/*.binding.yaml`) are
+authored and version-controlled in **your own application repository**, not in this Archstone
+repository or any Archstone-owned fork. There is no dependency on Archstone's source tree.
+
+**`@archstone/cli` is stateless.** When you run `archstone apply`, `archstone build`,
+`archstone serve`, or `archstone verify`, the compiler needs no checkout of any Archstone
+repository (public or private) — not at build time, not in CI, not at runtime. You install
+`@archstone/cli` from npm into your own repository's dependencies; point it at your own
+manifest directory on disk; it compiles and exits. That's the entire integration.
+
+This matters because it means:
+- Your manifest is versioned alongside your own code, not fetched live from Archstone.
+- Your CI pipeline does not need credentials or access to any Archstone repository to build.
+- The compiled artifact (if you use `archstone build`) is committed as part of your own
+  deployment pipeline, owned by your team.
+
 ### Step 1 — Declare what you offer (`capabilities.yaml`)
 
 This is the root of the diagram above: the compiler loads this file first, and anything not
@@ -261,6 +280,57 @@ bindings use in the `env` block, and restart — the tool (e.g. `tourism_search`
 the agent can call it. A complete, copy-pasteable Claude Desktop walkthrough lives in
 [`examples/demo/README.md`](../examples/demo/README.md).
 
+### Acting on behalf of the end user (`policies: [authenticated]`)
+
+Everything in Steps 1–6 above — and the tourism/booking examples — describes **sandbox /
+service-account** capabilities: the binding's `${VAR}` placeholders resolve against your own
+backend's static secrets (an API key, a service-account token), and any caller can invoke the
+tool with the same result. That's unaffected by what follows, and remains fully valid for most
+demos and internal-tool capabilities.
+
+A capability that acts on **one specific end user's own data** — "show *my* accounts", not
+"search hotels" — is a different case, and Archstone will not let it silently fall back to a
+service account. Wire it up like this:
+
+1. **Declare it** — add `authenticated` to the capability's `policies:` (Step 2). Optionally
+   add `tenant-scoped` too, though note that policy is reserved and **not yet enforced** by
+   Archstone itself.
+2. **Bind it** — reference the caller's own credential in the binding (Step 4) with a second
+   placeholder namespace, `${caller.accessToken}`, resolved independently of `${VAR}`/env:
+   ```yaml
+   binding:
+     capabilityId: banking.list-accounts
+     connector:
+       type: rest
+       rest:
+         baseUrl: "${CORE_BANKING_URL}"
+         method: GET
+         path: /v2/accounts
+         headers:
+           Authorization: "Bearer ${caller.accessToken}"
+   ```
+   `archstone apply` warns (`authenticated-capability-no-caller-placeholder`) if an
+   `authenticated` capability's binding never references `${caller.…}` — advisory only, but a
+   sign the capability will always fail closed once served.
+3. **Supply the token at invoke time.** **Archstone does not host an OIDC broker or validate
+   tokens itself** — it is the host's job to authenticate the end user first, then hand
+   Archstone the resulting token through whichever entrypoint it's serving from:
+   - `archstone serve` (stdio) — pass a static `invoke: { caller }` to `serveStdio()`. A stdio
+     server is one child process per conversation (Claude Desktop's model), so a fixed
+     per-process caller is architecturally correct here — there's exactly one end user for the
+     life of that process.
+   - `createHttpHandler`/`archstone serve --http` — pass `resolveCaller: (request) =>
+     ({ accessToken })`, a hook called fresh for **every** inbound request, so two concurrent
+     requests from two different end users each get their own token. This is orthogonal to
+     `bearerToken`: `bearerToken` gates who may reach the MCP endpoint *at all*;
+     `resolveCaller` decides whose backend data a given, already-authorized call acts on. Set
+     both — one doesn't substitute for the other.
+   - `@archstone/agent`'s `execute()` — pass `{ caller: { accessToken } }` directly on each call.
+
+With no caller supplied (any of the three ways above) on an `authenticated` capability, the
+call fails closed **before any request reaches your backend**, with an error naming the
+capability — never a silent service-account fallback.
+
 ---
 
 ### After you ship: keeping the contract honest
@@ -330,6 +400,23 @@ You can commit this artifact to version control, ship it as part of a release, o
 it in your CI/CD pipeline. It's the glue between Archstone's compile pipeline and your own
 application.
 
+### Commit the artifact in your own repository
+
+The compiled `archstone.ir.json` artifact belongs **alongside your own application code, in
+your own repository**. Treat it the same way you would any other build artifact: commit it
+to version control so your deployed application has a stable, versioned contract that doesn't
+change unexpectedly at runtime.
+
+This means:
+- **You own the artifact's version history.** When you rebuild your manifest (e.g., because
+  you added a capability), you regenerate and commit the new `archstone.ir.json` in the same
+  commit as your application code.
+- **No live fetch at runtime.** The artifact is static — your app loads it from disk (or from
+  your build output) at startup, never over the network. There is no "latest" version your app
+  auto-upgrades to; you control exactly which version ships.
+- **Zero Archstone checkout.** Just as the CLI needs no Archstone repository, neither does
+  your deployed app. The artifact is a compiled output, not a source dependency.
+
 ### Load it into `@archstone/agent`
 
 Install the embedded SDK:
@@ -373,11 +460,13 @@ no hand-written tool definitions.
 Execute a capability just as you would in `archstone serve`, but directly in your code:
 
 ```typescript
+// execute() accepts both raw dotted id and sanitized tool name (as returned by tools())
 const result = await archstone.execute("tourism.search", {
   destination: "Paris",
   checkInDate: "2026-08-01",
   travelers: { adults: 2, children: 0 },
 });
+// Same call with sanitized tool name: await archstone.execute("tourism_search", {...});
 
 if (result.status === "ok") {
   console.log("Success:", result.data);
@@ -405,9 +494,21 @@ passing secrets or configuration without baking them into the artifact.
 
 ```typescript
 const result = await archstone.execute(
-  "tourism.search",
+  "tourism.search",  // or "tourism_search" (sanitized name as returned by tools())
   { destination: "Paris", checkInDate: "2026-08-01", travelers: { adults: 2 } },
   { env: { BOOKING_API_URL: "https://api.booking.example.com" } }
+);
+```
+
+For a capability that declares `policies: [authenticated]` — see
+["Acting on behalf of the end user"](#acting-on-behalf-of-the-end-user-policies-authenticated)
+above — pass the end user's own token per call instead:
+
+```typescript
+const result = await archstone.execute(
+  "banking.list-accounts",
+  {},
+  { caller: { accessToken: endUserAccessToken } } // from YOUR app's own auth session
 );
 ```
 

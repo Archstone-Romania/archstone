@@ -21,8 +21,10 @@ capability:
     accommodations:
       collection: Accommodation
 
+  # `authenticated` intentionally removed (#32/ADD-32): this is a public, service-account
+  # -style search demo, not a "whose data" capability — see tourism/tourism.search for
+  # the fuller rationale.
   policies:
-    - authenticated
     - rate-limited
 
   provider: booking-api

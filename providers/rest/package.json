@@ -1,6 +1,6 @@
 {
   "name": "@archstone/provider-rest",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "description": "REST provider (#6): map capability input -> HTTP request, HTTP response -> result.",
