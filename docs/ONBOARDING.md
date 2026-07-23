@@ -522,6 +522,51 @@ const result = await archstone.execute(
 );
 ```
 
+### Observing cost & usage data from backend invocations
+
+If a bound capability's own backend charges per token — for example, a `summarize-review`
+capability whose connector calls a paid LLM completions API — you can observe that cost/usage
+data without Archstone parsing or normalizing the provider's response shape.
+
+**For orchestrating-model calls:** The model call that decided *which* tool to invoke (the
+agent loop step) lives entirely outside Archstone — Archstone's `execute()` only fulfills a
+tool call the model already decided to make. Usage and cost data from that decision call
+(`input_tokens`/`output_tokens` on Anthropic, `usage` on OpenAI, `usageMetadata` on Gemini)
+come from your model provider's own API response, not through Archstone. See the internal
+design rationale (ADD-31 spike findings) for the full architectural reasoning — Archstone has no
+seam there by construction.
+
+**For bound-backend calls:** Register an `onResponse` hook on `execute()`'s options. It fires
+exactly once per completed HTTP round-trip (both success and error status) with the raw,
+unmapped response body — strictly before response-mapping or VIOLATION logic runs — so you can
+extract whatever cost/usage fields your own backend returns, using knowledge only you have:
+
+```typescript
+const result = await archstone.execute(
+  "summarize-review",
+  { text: "Great hotel, friendly staff..." },
+  {
+    env: { SUMMARIZER_API_URL: "https://api.anthropic.com" },
+    onResponse: async (info) => {
+      // info: { capabilityId: string; status: number; data: unknown; durationMs: number }
+      // data is the raw, unmapped response body
+      if (info.data && typeof info.data === "object" && "usage" in info.data) {
+        const usage = (info.data as Record<string, unknown>).usage;
+        console.log(`[${info.capabilityId}] tokens:`, usage, `duration: ${info.durationMs}ms`);
+      }
+    },
+  }
+);
+```
+
+The hook never fires on early fail-closed returns (missing env var, missing path parameter, missing
+caller credential on an `authenticated` capability, disallowed host on a `${caller.…}`-influenced
+`baseUrl`, or network exceptions). Any thrown exception or rejected promise from the hook is
+caught and logged to stderr — never propagated into the invocation's own result, so a
+misbehaving hook can never delay or fail a tool call. **Archstone does not parse or normalize**
+provider-specific usage shapes — binding authors extract what they need using their own
+knowledge of their backend.
+
 ### Expose it as an MCP endpoint (optional)
 
 If you want to also surface the embedded instance as an MCP server — for example, to mount it

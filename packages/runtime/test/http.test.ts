@@ -118,6 +118,51 @@ describe("createHttpHandler — allowedHosts pass-through (security hardening)",
   });
 });
 
+// Issue #39 / ADD-31: onResponse is one more key inside the same `invoke` bag createHttpHandler
+// already spreads verbatim into its per-request invoke object (BR-11/S-US3.2).
+describe("createHttpHandler — onResponse pass-through (#39)", () => {
+  it("S-US3.2: fires exactly once per bearer-authorized tool call, with the same capabilityId/status/data/durationMs shape", async () => {
+    const calls: { capabilityId: string; status: number; data: unknown; durationMs: number }[] = [];
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ accounts: [] }), { status: 200 });
+    const handler = createHttpHandler(bankRegistry, {
+      bearerToken: "endpoint-secret",
+      invoke: { env: { CORE_BANKING_URL: "https://core.example" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
+      resolveCaller: () => ({ accessToken: "end-user-jwt" }),
+    });
+
+    const res = await handler(
+      mcpRequest(callToolRequest("banking_list-accounts"), { authorization: "Bearer endpoint-secret" }),
+    );
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].capabilityId).toBe("banking.list-accounts");
+    expect(calls[0].status).toBe(200);
+    expect(calls[0].data).toEqual({ accounts: [] });
+    expect(calls[0].durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a throwing onResponse never affects the HTTP MCP CallResult (S-US4.4 at the HTTP surface)", async () => {
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ accounts: [] }), { status: 200 });
+    const handler = createHttpHandler(bankRegistry, {
+      bearerToken: "endpoint-secret",
+      invoke: {
+        env: { CORE_BANKING_URL: "https://core.example" },
+        fetchImpl,
+        onResponse: () => {
+          throw new Error("boom");
+        },
+      },
+      resolveCaller: () => ({ accessToken: "end-user-jwt" }),
+    });
+    const res = await handler(
+      mcpRequest(callToolRequest("banking_list-accounts"), { authorization: "Bearer endpoint-secret" }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result?: { isError?: boolean } };
+    expect(body.result?.isError).toBeFalsy();
+  });
+});
+
 describe("createHttpHandler — bearer-token gate", () => {
   it("throws at construction when bearerToken is missing/empty", () => {
     expect(() => createHttpHandler(registry, { bearerToken: "" })).toThrow();

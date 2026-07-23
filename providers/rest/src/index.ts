@@ -58,6 +58,75 @@ export interface InvokeOptions {
    * `${caller.…}` fails closed unless the resolved host explicitly matches an entry here.
    */
   allowedHosts?: string[];
+  /**
+   * Issue #39 / ADD-31: a fire-and-forget observation hook for the RAW, unmapped backend
+   * response of a completed HTTP round-trip (any status, 2xx or non-2xx). It exists so a
+   * developer whose bound capability's own backend happens to bill per call/token (most
+   * concretely, a capability whose connector calls a paid LLM completions API) can inspect
+   * whatever usage/cost/audit fields that backend's response happens to contain — data a
+   * `response:` mapping would otherwise silently discard before either caller (`callTool`,
+   * `executeCapability`) ever sees it.
+   *
+   * Fires exactly once, synchronously, immediately after the response body is parsed —
+   * BEFORE any response-mapping/OK-DEGRADED-VIOLATION classification runs in the caller
+   * (BR-1/BR-3), including on a contract VIOLATION, where the caller's own D-6 rule withholds
+   * this same raw body from the MCP client (BR-5 — a deliberate divergence: this hook runs
+   * inside the binding author's own trusted process, not on the MCP boundary).
+   *
+   * It MUST NOT fire when `invokeRest` returns before any HTTP round-trip completes — no REST
+   * connector, an `authenticated`-policy gate failure, missing env/caller placeholder(s), a
+   * caller-influenced-baseUrl allowlist rejection, a missing required path parameter, or a
+   * `doFetch` exception/timeout (BR-4) — none of those ever produced a response to observe.
+   *
+   * `capabilityId` is `tool.id` — the unsanitized CDL id, never any MCP-sanitized advertised
+   * tool name (BR-8). `data` is the exact same value that ends up in `InvokeResult.data`:
+   * parsed JSON, the raw text if unparseable, or `undefined` for an empty body.
+   *
+   * BR-16 / ADD-31 Architectural Challenge: Archstone will NEVER parse or normalize a
+   * provider-specific usage/token/cost shape out of this body. Three real LLM APIs already
+   * disagree on the field name for the same concept — OpenAI `usage.prompt_tokens`, Anthropic
+   * `usage.input_tokens`, Gemini `usageMetadata.promptTokenCount` — and baking any one of them
+   * into this hook would tie this repo's release cycle to a third party's API changes on its
+   * own timeline. The hook exists specifically so Archstone never has to pick one: the binding
+   * author already knows their own backend's shape (they wrote the connector for it) and can
+   * extract whatever fields matter themselves from the raw body.
+   *
+   * Fire-and-forget by design (OQ-1): `invokeRest` never awaits it, and a returned Promise's
+   * rejection is swallowed — a slow or hanging hook can never add latency to, or affect the
+   * result of, the business call it merely observes (BR-6/BR-7). A throwing or rejecting hook
+   * is logged as a single line to stderr (this codebase's existing "stdout is the MCP channel,
+   * human output goes to stderr" convention — see `serveStdio`) and never rethrown into
+   * `InvokeResult`/`ExecuteResult`/the MCP `CallResult`.
+   *
+   * Deliberately NOT exposed as a CLI flag on any command, ever (BR-13/OQ-3) — a callback
+   * function cannot be expressed as a CLI argument. This is a programmatic-API-only surface,
+   * reachable only by code that imports `@archstone/provider-rest`/`@archstone/agent`/
+   * `@archstone/runtime` directly and constructs its own options object — a deliberate,
+   * structural boundary, not an oversight.
+   */
+  // Return type is `void | Promise<void>` (not just `void`) so a caller may supply an async
+  // callback (OQ-1) — invokeRest never awaits either variant; see fireOnResponse below.
+  onResponse?: (info: { capabilityId: string; status: number; data: unknown; durationMs: number }) => void | Promise<void>;
+}
+
+// Issue #39 (OQ-1/OQ-2/BR-6): fire onResponse synchronously but never await it. A thrown
+// exception or a rejected returned Promise is caught/swallowed here — logged once to stderr,
+// never rethrown — so a misbehaving hook can never delay or break the invocation it observes.
+function fireOnResponse(
+  onResponse: InvokeOptions["onResponse"],
+  info: { capabilityId: string; status: number; data: unknown; durationMs: number },
+): void {
+  if (!onResponse) return;
+  try {
+    const maybePromise = onResponse(info);
+    if (maybePromise && typeof maybePromise.catch === "function") {
+      maybePromise.catch((err: unknown) => {
+        console.error(`archstone: onResponse hook rejected for capability '${info.capabilityId}':`, err);
+      });
+    }
+  } catch (err) {
+    console.error(`archstone: onResponse hook threw for capability '${info.capabilityId}':`, err);
+  }
 }
 
 // Lowercased defensively on both sides — hostnames are case-insensitive (RFC 4343), and a
@@ -300,12 +369,22 @@ export async function invokeRest(
     : undefined;
 
   try {
+    // BR-9: durationMs strictly bounds doFetch + the response-body read only — nothing
+    // before it (env/caller resolution, path interpolation, the allowlist check above).
+    const start = Date.now();
     const response = await doFetch(url, { method, headers, body });
     const text = await response.text();
+    const durationMs = Date.now() - start;
+    const data = text ? safeJson(text) : undefined;
+    // BR-1/BR-3/BR-5: fires exactly once here — covering BOTH the ok and non-ok branches —
+    // strictly before this function returns (and therefore before any response-mapping/
+    // classification logic runs in the caller). Never reached from the catch branch below:
+    // no response body exists there to observe (BR-4).
+    fireOnResponse(opts.onResponse, { capabilityId: tool.id, status: response.status, data, durationMs });
     return {
       ok: response.ok,
       status: response.status,
-      data: text ? safeJson(text) : undefined,
+      data,
       error: response.ok ? undefined : `backend returned ${response.status}`,
     };
   } catch (err) {

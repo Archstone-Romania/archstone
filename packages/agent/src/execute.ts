@@ -11,7 +11,7 @@
 // violation sketch.
 
 import { Registry, applyResponseMapping } from "@archstone/emitter-support";
-import { invokeRest, type FetchLike, type CallerContext } from "@archstone/provider-rest";
+import { invokeRest, type FetchLike, type CallerContext, type InvokeOptions } from "@archstone/provider-rest";
 
 export interface ExecuteOptions {
   /** Injected, Workers-style — execute() never falls back to `process.env` (ADD-0008
@@ -29,6 +29,10 @@ export interface ExecuteOptions {
    *  `providers/rest`'s `InvokeOptions.allowedHosts`); irrelevant unless a binding's baseUrl
    *  contains `${caller.NAME}`. */
   allowedHosts?: string[];
+  /** Issue #39: pure pass-through to invokeRest — no policy/logic added here, exactly like
+   *  `caller`/`allowedHosts` above. Type-only imported from `@archstone/provider-rest`; see
+   *  `InvokeOptions.onResponse`'s doc-comment there for the full firing/fail-safe contract. */
+  onResponse?: InvokeOptions["onResponse"];
 }
 
 export interface ExecuteResult {
@@ -61,6 +65,7 @@ export async function executeCapability(
     fetchImpl: opts?.fetchImpl,
     caller: opts?.caller,
     allowedHosts: opts?.allowedHosts,
+    onResponse: opts?.onResponse,
   });
   if (!result.ok) {
     return { status: "error", error: result.error ?? "invocation failed" };

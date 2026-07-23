@@ -1,0 +1,26 @@
+capability:
+  id: widget.estimate-price
+  description: Estimate the price of a widget of given dimensions.
+  effect: read
+
+  input:
+    widgetId:
+      type: identifier
+      description: The id of a widget profile.
+    widthCm:
+      type: quantity
+      description: Widget width, in centimeters.
+    heightCm:
+      type: quantity
+      description: Widget height, in centimeters.
+
+  output:
+    estimatedPrice:
+      type: quantity
+      required: false
+      description: Estimated price. Absent when no price data is configured.
+    currency:
+      type: string
+      description: ISO currency code for the estimate.
+
+  provider: widgets-api

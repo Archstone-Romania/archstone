@@ -210,6 +210,112 @@ describe("#19 ADD-19 Rev 2 R2.2/R2.7 step 4 — a real SDK Client survives a VIO
   });
 });
 
+// Issue #39 / ADD-31: callTool routes InvokeOptions.onResponse straight into invokeRest — no
+// new plumbing here, but the firing/fail-safe/D-6-divergence guarantees need proving at the
+// MCP-tool-call boundary specifically, since that's the surface an AI agent actually reaches.
+describe("callTool — onResponse hook (#39)", () => {
+  const tourismReg = buildRegistry(tourism).registry!;
+
+  it("S-US1.3: onResponse receives the raw body, including fields the response mapping would discard", async () => {
+    const calls: { data: unknown }[] = [];
+    // `usage` is not part of tourism.search's `response:` mapping (name/location/pricePerNight/
+    // rating only) — a real LLM-backed connector's usage sidecar, simulated here.
+    const rawBody = {
+      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      usage: { promptTokens: 42, completionTokens: 7 },
+    };
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify(rawBody), { status: 200 });
+    const r = await callTool(
+      tourismReg,
+      "tourism_search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
+    );
+    expect(r.isError).toBe(false);
+    // The mapped structuredContent drops `id` and `usage` — confirming the mapping DID discard.
+    expect(r.structuredContent).toEqual({
+      stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+    });
+    // But onResponse still saw the full raw body, usage sidecar included.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].data).toEqual(rawBody);
+  });
+
+  it("S-US5.1/S-US5.2: fires once with the full raw body on a contract VIOLATION, even though structuredContent withholds it (D-6)", async () => {
+    const calls: { status: number; data: unknown }[] = [];
+    // pricePerNight (required) absent -> VIOLATION.
+    const rawBody = { stays: [{ name: "Hotel Azur", location: "Nice" }] };
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify(rawBody), { status: 200 });
+    const r = await callTool(
+      tourismReg,
+      "tourism_search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
+    );
+    expect(r.isError).toBe(true);
+    expect(r.structuredContent).toBeUndefined(); // D-6: withheld from the MCP client
+    expect(calls).toHaveLength(1);
+    expect(calls[0].data).toEqual(rawBody); // but the hook (trusted process) still sees it
+  });
+
+  it("S-US5.2: fires exactly once, identically, across OK, DEGRADED, and VIOLATION classifications", async () => {
+    const bodies = {
+      ok: { stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] },
+      degraded: { stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }, // rating absent
+      violation: { stays: [{ name: "Hotel Azur", location: "Nice" }] }, // pricePerNight absent
+    } as const;
+
+    for (const [label, rawBody] of Object.entries(bodies)) {
+      const calls: { status: number; data: unknown }[] = [];
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(rawBody), { status: 200 });
+      await callTool(
+        tourismReg,
+        "tourism_search",
+        { destination: "Nice" },
+        { env: { STAYS_API_URL: "https://x.test" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
+      );
+      expect(calls, `classification: ${label}`).toHaveLength(1);
+      expect(calls[0].data).toEqual(rawBody);
+    }
+  });
+
+  it("S-US4.4: a throwing onResponse never affects the MCP CallResult (via a real client/server round-trip)", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const withThrowingHook = createMcpServer(tourismReg, {
+      env: { STAYS_API_URL: "https://x.test" },
+      fetchImpl,
+      onResponse: () => {
+        throw new Error("boom");
+      },
+    });
+    const withoutHook = createMcpServer(tourismReg, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+
+    async function callViaClient(server: ReturnType<typeof createMcpServer>) {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        await client.listTools();
+        return await client.callTool({ name: "tourism_search", arguments: { destination: "Nice" } });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+
+    const resultWithHook = await callViaClient(withThrowingHook);
+    const resultWithoutHook = await callViaClient(withoutHook);
+    expect(resultWithHook.isError).toBeFalsy();
+    expect(resultWithHook.structuredContent).toEqual(resultWithoutHook.structuredContent);
+    expect(resultWithHook.content).toEqual(resultWithoutHook.content);
+    expect(resultWithHook._meta).toEqual(resultWithoutHook._meta);
+  });
+});
+
 describe("serveStdio — forwards `invoke` to createMcpServer (ADD-32 step 5)", () => {
   // serveStdio itself connects a real StdioServerTransport (reads process.stdin) and blocks
   // on server.connect() — not something a unit test should exercise directly (no in-process
@@ -274,6 +380,73 @@ describe("serveStdio — forwards `invoke` to createMcpServer (ADD-32 step 5)", 
       vi.doUnmock("@modelcontextprotocol/sdk/server/stdio.js");
       vi.doUnmock("../src/server");
       vi.resetModules();
+    }
+  });
+
+  // Issue #39 / ADD-31: onResponse is one more key inside the same `invoke` bag the two tests
+  // above already prove is forwarded verbatim — this confirms it, per BR-11/S-US3.1, with zero
+  // additional code in mcp.ts.
+  it("S-US3.1: passes InvokeOptions.onResponse through to createMcpServer as part of the same verbatim forward", async () => {
+    vi.resetModules();
+    let captured: InvokeOptions | undefined;
+    vi.doMock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
+      StdioServerTransport: class {},
+    }));
+    vi.doMock("../src/server", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../src/server")>();
+      return {
+        ...actual,
+        createMcpServer: (reg: unknown, invoke?: InvokeOptions) => {
+          captured = invoke;
+          return { connect: async () => {} } as unknown as ReturnType<typeof actual.createMcpServer>;
+        },
+      };
+    });
+    try {
+      const { serveStdio } = await import("../src/mcp");
+      const onResponse = () => {};
+      await serveStdio(bank, { env: { CORE_BANKING_URL: "https://core.example" }, onResponse });
+      expect(captured?.onResponse).toBe(onResponse);
+    } finally {
+      vi.doUnmock("@modelcontextprotocol/sdk/server/stdio.js");
+      vi.doUnmock("../src/server");
+      vi.resetModules();
+    }
+  });
+});
+
+// S-US3.1 (full integration variant): a real MCP client, over the SDK's own InMemoryTransport,
+// calling a bound tool served by createMcpServer(registry, { onResponse }) — proves the hook
+// actually fires on a real tool call reached through the stdio-serving path's own building
+// block (createMcpServer), not just that the reference is threaded through.
+describe("createMcpServer — onResponse fires on a real MCP tool call (#39, S-US3.1 integration)", () => {
+  it("fires exactly once per tools/call, with the invoked capability's raw response", async () => {
+    const tourismReg = buildRegistry(tourism).registry!;
+    const calls: { capabilityId: string; status: number; data: unknown }[] = [];
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const server = createMcpServer(tourismReg, {
+      env: { STAYS_API_URL: "https://x.test" },
+      fetchImpl,
+      onResponse: (info) => { calls.push(info); },
+    });
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      await client.listTools();
+      const result = await client.callTool({ name: "tourism_search", arguments: { destination: "Nice" } });
+      expect(result.isError).toBeFalsy();
+      expect(calls).toHaveLength(1);
+      expect(calls[0].capabilityId).toBe("tourism.search");
+      expect(calls[0].status).toBe(200);
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 });

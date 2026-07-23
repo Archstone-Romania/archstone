@@ -227,6 +227,73 @@ describe("execute() — caller credential propagation (ADD-32)", () => {
   });
 });
 
+// Issue #39 / ADD-31: ExecuteOptions.onResponse is a pure pass-through to invokeRest — no
+// policy/logic lives in execute() itself.
+describe("execute() — onResponse pass-through (#39)", () => {
+  it("S-US2.1: onResponse reaches invokeRest verbatim, with the same capabilityId/status/data/durationMs shape", async () => {
+    const calls: { capabilityId: string; status: number; data: unknown; durationMs: number }[] = [];
+    const archstone = fromIR(loadArtifact());
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const r = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
+    );
+    expect(r.status).toBe("ok");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].capabilityId).toBe("tourism.search");
+    expect(calls[0].status).toBe(200);
+    expect(calls[0].data).toEqual({
+      stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+    });
+    expect(calls[0].durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("S-US2.2: ExecuteResult is identical whether onResponse is supplied (no-op) or omitted", async () => {
+    const archstone = fromIR(loadArtifact());
+    const responseBody = JSON.stringify({
+      stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+    });
+    const withHook = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl: async () => new Response(responseBody, { status: 200 }), onResponse: () => {} },
+    );
+    const withoutHook = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl: async () => new Response(responseBody, { status: 200 }) },
+    );
+    expect(withHook).toEqual(withoutHook);
+  });
+
+  it("S-US4.3: a throwing onResponse does not affect ExecuteResult, and execute()'s own Promise does not reject", async () => {
+    const archstone = fromIR(loadArtifact());
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const r = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      {
+        env: { STAYS_API_URL: "https://x.test" },
+        fetchImpl,
+        onResponse: () => {
+          throw new Error("boom");
+        },
+      },
+    );
+    expect(r.status).toBe("ok");
+    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] });
+  });
+});
+
 // ADD-30 (#30): tools(format) advertises "tourism_search" (toolName("tourism.search")) —
 // execute() must resolve that exact advertised string back to "tourism.search", identically
 // across every ToolFormat (BR-1/BR-7), since all four share the one toolName() lowering.

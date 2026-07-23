@@ -122,6 +122,49 @@ describe("verifyTool (ADD-18)", () => {
     }));
 });
 
+// Issue #39 / ADD-31 (BR-15/S-US6.1): verifyTool/runVerify already forward a generic
+// InvokeOptions bag into invokeRest with ZERO code change to verify.ts — this confirms it by
+// a passing test rather than merely assuming it from the pass-through shape.
+describe("verifyTool/runVerify — onResponse pass-through, zero code change to verify.ts (#39)", () => {
+  it("S-US6.1: verifyTool forwards onResponse, firing once with the fixture's capabilityId/status/data/durationMs", () =>
+    withFixture(async (dir) => {
+      const calls: { capabilityId: string; status: number; data: unknown; durationMs: number }[] = [];
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+      const r = await verifyTool(tool(goldenFingerprint), dir, resources, { fetchImpl, onResponse: (info) => { calls.push(info); } });
+      expect(r.status).toBe("green");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].capabilityId).toBe("tourism.search");
+      expect(calls[0].status).toBe(200);
+      expect(calls[0].data).toEqual(goldenBody);
+      expect(calls[0].durationMs).toBeGreaterThanOrEqual(0);
+    }));
+
+  it("S-US6.1: runVerify forwards onResponse to every contract-bearing tool it verifies", () =>
+    withFixture(async (dir) => {
+      const calls: { capabilityId: string }[] = [];
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+      const reports = await runVerify([tool(goldenFingerprint)], dir, resources, {
+        fetchImpl,
+        onResponse: (info) => { calls.push(info); },
+      });
+      expect(reports).toHaveLength(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].capabilityId).toBe("tourism.search");
+    }));
+
+  it("a throwing onResponse never affects the ToolVerification result", () =>
+    withFixture(async (dir) => {
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+      const r = await verifyTool(tool(goldenFingerprint), dir, resources, {
+        fetchImpl,
+        onResponse: () => {
+          throw new Error("boom");
+        },
+      });
+      expect(r.status).toBe("green");
+    }));
+});
+
 describe("runVerify — filters to contract-bearing tools", () => {
   it("only verifies tools that declare a contract", () =>
     withFixture(async (dir) => {

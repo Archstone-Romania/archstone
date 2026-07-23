@@ -1,0 +1,19 @@
+# Synthetic, fictional-company fixture — NOT a real business's manifest.
+#
+# Exists solely to give providers/rest/test/query-remap.e2e.test.ts a real
+# load()+compile() path to compile against (#26 regression: rest.query remapping
+# camelCase CDL input names to snake_case wire query params). Replaces the
+# previously-vendored real ArtVinci manifest (#35 migration) with an inline,
+# generic fixture that proves the same shape without disclosing any real
+# business's contract.
+
+company:
+  id: acme-widgets
+  name: Acme Widgets
+  description: A fictional widget catalog and pricing demo, used only to exercise rest.query remapping.
+
+capabilities:
+  - widget.estimate-price
+
+providers:
+  - widgets-api

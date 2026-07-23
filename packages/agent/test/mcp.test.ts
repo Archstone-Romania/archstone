@@ -95,6 +95,39 @@ describe("mcpHandler() — real Streamable-HTTP round trip (ADD-0008 #29)", () =
     expect(res.status).toBe(401);
   });
 
+  // Issue #39 / ADD-31 (BR-15/OQ-4/S-US6.2): mcpHandler is a thin, unchanged wrapper over
+  // createHttpHandler — this dedicated test confirms onResponse already works at THIS public
+  // export with zero additional code, rather than only inferring it from createHttpHandler's
+  // own coverage (a consumer may reach mcpHandler without ever importing createHttpHandler).
+  it("S-US6.2: mcpHandler forwards invoke.onResponse into a real tools/call round-trip, firing exactly once", async () => {
+    const calls: { capabilityId: string; status: number; data: unknown }[] = [];
+    const archstone = fromIR(loadArtifact());
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const handler = mcpHandler(archstone, {
+      bearerToken: "secret",
+      invoke: { env: { STAYS_API_URL: "https://x.test" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
+    });
+    const auth = { authorization: "Bearer secret" };
+
+    await handler(mcpRequest(INITIALIZE, auth));
+    const call = await handler(
+      mcpRequest(
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "tourism_search", arguments: { destination: "Nice" } } },
+        auth,
+      ),
+    );
+    expect(call.status).toBe(200);
+    const callBody = (await call.json()) as { result?: { isError?: boolean } };
+    expect(callBody.result?.isError).toBeFalsy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].capabilityId).toBe("tourism.search");
+    expect(calls[0].status).toBe(200);
+  });
+
   it("throws at construction when bearerToken is missing/empty (Rule #7 / R-5) — mcpHandler does not relax createHttpHandler's gate", () => {
     const archstone = fromIR(loadArtifact());
     expect(() => mcpHandler(archstone, { bearerToken: "" })).toThrow();

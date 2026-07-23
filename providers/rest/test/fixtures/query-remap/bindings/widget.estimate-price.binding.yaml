@@ -1,0 +1,14 @@
+# Implementation binding — how widget.estimate-price reaches the (fictional) backend.
+binding:
+  capabilityId: widget.estimate-price
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${WIDGETS_API_URL}"
+      method: GET
+      path: /api/v1/catalog/widgets/{widgetId}/price
+      # The backend expects width_cm/height_cm as query params (snake_case); the CDL input
+      # stays camelCase, so the wire names are remapped here (#26).
+      query:
+        widthCm: width_cm
+        heightCm: height_cm

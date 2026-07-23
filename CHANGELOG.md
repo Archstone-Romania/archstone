@@ -3,6 +3,52 @@
 All notable changes to Archstone are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+## [0.5.0]
+
+Minor release: an observability hook for bound-capability LLM spend, plus documentation of the
+orchestrating-model spend boundary it deliberately doesn't cover.
+
+### Added
+
+- **Raw-invocation observation hook (#39, follow-up to #31 spike).** `InvokeOptions` gains an
+  optional `onResponse` callback, fired exactly once per completed HTTP round-trip (2xx or non-2xx
+  backend response) with the raw, unmapped response body — before response-mapping or VIOLATION
+  logic runs. Use case: observe cost/audit data when a bound capability's own connector calls a
+  paid-LLM backend (e.g., a summarization tool whose endpoint is Anthropic's Messages API). Hook
+  never fires on early fail-closed returns (no connector, missing env/caller, policy gate,
+  disallowed host, missing path param) or network exceptions; any hook exception is caught and
+  logged to stderr, never propagated into the invocation's own result. Archstone does **not**
+  parse or normalize a provider's usage shape — binding authors extract what they need from the
+  raw response using their knowledge of their own backend. Zero IR, CDL, or schema change; passed
+  through by `@archstone/agent`'s `execute()` and all `@archstone/runtime` emitters
+  (stdio/HTTP/verify) via existing generic `InvokeOptions` plumbing.
+
+### Documentation
+
+- **Orchestrating-model spend boundary (#40, follow-up to #31 spike).** `ONBOARDING.md`'s
+  Embedding onboarding section gains "Observing cost & usage data from backend invocations,"
+  stating plainly that orchestrating-model spend tracking is out of Archstone's reach by
+  construction — that call lives entirely in the consumer's own model SDK, which already returns
+  usage data natively (`usage` on Anthropic/OpenAI, `usageMetadata` on Gemini) — and pointing to
+  the `onResponse` hook above (#39) as the answer for the other case, a bound capability whose own
+  backend bills per token.
+
+### Changed
+
+- **Manifest ownership migration (#35).** ArtVinci's real, production-verified capability manifest
+  has been retired from `archstone/examples/manifests/artvinci/` — its sole source of truth now
+  lives in `artvinci-website`'s own repository, per Issue #34's ratified manifest-ownership
+  pattern (a business's CDL lives in that business's own repository, not in Archstone's
+  example tree). This is a relocation of ownership, not a partnership change — ArtVinci's
+  capabilities and bindings remain live and functional in their new home. The #26 regression
+  test for `rest.query` snake_case remapping has been migrated to a synthetic `query-remap`
+  fixture under `providers/rest/test/fixtures/`, preserving regression coverage without
+  depending on ArtVinci's real contract. `scripts/release-gate.mjs`'s `VERIFY_PENDING_NO_CI_BACKEND`
+  carve-out is now empty (was `{"artvinci"}`); the gate runs `bank`, `booking`, and `tourism`
+  manifests only. No package code changed, no IR change.
+
 ## [0.4.1]
 
 Patch release: proactive hardening, no behavior change for any existing binding.
