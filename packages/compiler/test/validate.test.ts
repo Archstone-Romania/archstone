@@ -208,6 +208,76 @@ describe("validateSemantics — ADD-32 authenticated-capability-no-caller-placeh
   });
 });
 
+// Security-hardening follow-up to ADD-32: parallel advisory for a binding whose baseUrl (not
+// headers/query/body) references a caller placeholder — such a binding always fails closed at
+// invoke time unless InvokeOptions.allowedHosts is configured (providers/rest's allowlist
+// guard), which the compiler cannot see or enforce itself. Warning, never blocks apply/build.
+describe("validateSemantics — caller-influenced-baseurl-no-allowlist (advisory, security hardening)", () => {
+  function fixture(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-sem-baseurl-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(dir, rel);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
+    return dir;
+  }
+
+  const CODE = "caller-influenced-baseurl-no-allowlist";
+
+  it("warns when a binding's REST baseUrl references ${caller.…}", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - tenant.accounts\nproviders:\n  - core\n",
+      "tenant.accounts.capability.yaml":
+        "capability:\n  id: tenant.accounts\n  description: list\n  effect: read\n  provider: core\n",
+      "bindings/tenant.accounts.binding.yaml":
+        "binding:\n  capabilityId: tenant.accounts\n  connector:\n    type: rest\n    rest:\n      baseUrl: https://${caller.tenantId}.core.example.com\n      method: GET\n      path: /accounts\n",
+    });
+    const d = validateSemantics(load(dir));
+    expect(errors(d)).toHaveLength(0);
+    const w = warnings(d).find((x) => x.code === CODE);
+    expect(w).toBeDefined();
+    expect(w!.message).toContain("tenant.accounts");
+    expect(w!.message).toContain("allowedHosts");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stays silent for a binding whose baseUrl is ${VAR}-only, even if headers reference ${caller.…}", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - shop.checkout\nproviders:\n  - store\n",
+      "shop.checkout.capability.yaml":
+        "capability:\n  id: shop.checkout\n  description: pay\n  effect: write\n  provider: store\n  policies:\n    - authenticated\n",
+      "bindings/shop.checkout.binding.yaml":
+        "binding:\n  capabilityId: shop.checkout\n  connector:\n    type: rest\n    rest:\n      baseUrl: ${API}\n      method: POST\n      path: /checkout\n      headers:\n        Authorization: Bearer ${caller.accessToken}\n",
+    });
+    const d = validateSemantics(load(dir));
+    expect(codes(warnings(d))).not.toContain(CODE);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is severity: warning, not error — never blocks compilation", () => {
+    const dir = fixture({
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - tenant.accounts\nproviders:\n  - core\n",
+      "tenant.accounts.capability.yaml":
+        "capability:\n  id: tenant.accounts\n  description: list\n  effect: read\n  provider: core\n",
+      "bindings/tenant.accounts.binding.yaml":
+        "binding:\n  capabilityId: tenant.accounts\n  connector:\n    type: rest\n    rest:\n      baseUrl: https://${caller.tenantId}.core.example.com\n      method: GET\n      path: /accounts\n",
+    });
+    const d = validateSemantics(load(dir));
+    const w = d.find((x) => x.code === CODE);
+    expect(w?.severity).toBe("warning");
+    expect(errors(d)).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("real fixtures (booking/tourism/bank): no binding today uses ${caller.…} in baseUrl — no false positives", () => {
+    for (const m of ["booking", "tourism", "bank"]) {
+      const d = validateSemantics(load(join(manifests, m)));
+      expect(codes(warnings(d))).not.toContain(CODE);
+    }
+  });
+});
+
 describe("validateSemantics — response mapping (ADD-12)", () => {
   // A shop.search manifest whose output is `items: collection Widget`, with a Widget
   // resource; each case swaps only the binding's `response:` block to isolate one diagnostic.

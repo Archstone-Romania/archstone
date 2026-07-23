@@ -164,6 +164,53 @@ describe("execute() — caller credential propagation (ADD-32)", () => {
     expect(r.error).toMatch(/requires policies:\[authenticated\]/);
   });
 
+  it("allowedHosts reaches invokeRest — proceeds when the caller-influenced baseUrl host matches the allowlist", async () => {
+    let captured: { url: string } | undefined;
+    const fetchImpl: FetchLike = async (url) => {
+      captured = { url: String(url) };
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    // Synthetic per-tenant-routed connector — no shipped binding does this today (see
+    // providers/rest security-hardening comment); mutate the loaded IR the same way the
+    // caller-propagation test above does, to isolate execute()'s pass-through of allowedHosts.
+    const artifact = loadArtifact() as {
+      tools: { id: string; response?: unknown; connector?: { rest?: Record<string, unknown> } }[];
+    };
+    const tool = artifact.tools.find((t) => t.id === "tourism.search")!;
+    delete tool.response; // raw pass-through — isolate the allowlist gate, not response mapping
+    tool.connector!.rest = { baseUrl: "https://${caller.tenantId}", method: "GET", path: "/stays" };
+    const archstone = fromIR(artifact);
+
+    const r = await archstone.execute(
+      "tourism.search",
+      {},
+      { fetchImpl, caller: { tenantId: "tenant-a.core.example.com" }, allowedHosts: ["*.core.example.com"] },
+    );
+    expect(r.status).toBe("ok");
+    expect(captured?.url).toBe("https://tenant-a.core.example.com/stays");
+  });
+
+  it("allowedHosts reaches invokeRest — fails closed when the caller-influenced baseUrl host is not allowlisted", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called — the allowlist gate must short-circuit first");
+    };
+    const artifact = loadArtifact() as {
+      tools: { id: string; response?: unknown; connector?: { rest?: Record<string, unknown> } }[];
+    };
+    const tool = artifact.tools.find((t) => t.id === "tourism.search")!;
+    delete tool.response;
+    tool.connector!.rest = { baseUrl: "https://${caller.tenantId}", method: "GET", path: "/stays" };
+    const archstone = fromIR(artifact);
+
+    const r = await archstone.execute(
+      "tourism.search",
+      {},
+      { fetchImpl, caller: { tenantId: "evilcore.example.com" }, allowedHosts: ["*.core.example.com"] },
+    );
+    expect(r.status).toBe("error");
+    expect(r.error).toMatch(/not in the caller-influenced-baseUrl allowlist/);
+  });
+
   it("omitting caller behaves exactly as before for a non-authenticated capability", async () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>

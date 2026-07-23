@@ -312,6 +312,16 @@ service account. Wire it up like this:
    `archstone apply` warns (`authenticated-capability-no-caller-placeholder`) if an
    `authenticated` capability's binding never references `${caller.…}` — advisory only, but a
    sign the capability will always fail closed once served.
+
+   `${caller.…}` can also appear in `baseUrl` — e.g. `baseUrl:
+   "https://${caller.tenantId}.core.example.com"` for per-tenant host routing. Because a value
+   here controls *where the whole request goes* (not just its content, like headers/body), any
+   binding that does this **must** also set `allowedHosts` (an exact hostname or a `"*."`
+   subdomain wildcard, e.g. `["*.core.example.com"]`) wherever it invokes — on `serveStdio`'s
+   `invoke`, `createHttpHandler`'s `invoke`, or `execute()`'s options. With no `allowedHosts`
+   configured, such a call fails closed by default; `archstone apply` warns
+   (`caller-influenced-baseurl-no-allowlist`) as a reminder. Bindings that only use
+   `${caller.…}` in headers/query/body are unaffected — this only applies to `baseUrl`.
 3. **Supply the token at invoke time.** **Archstone does not host an OIDC broker or validate
    tokens itself** — it is the host's job to authenticate the end user first, then hand
    Archstone the resulting token through whichever entrypoint it's serving from:

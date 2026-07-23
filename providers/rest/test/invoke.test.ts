@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { IRTool } from "@archstone/compiler";
-import { invokeRest, type FetchLike, type CallerContext } from "../src/index";
+import { invokeRest, hostMatchesPattern, type FetchLike, type CallerContext } from "../src/index";
 
 // Isolated unit test — build the IR tools directly, no load/compile dependency.
 const search: IRTool = {
@@ -192,5 +192,169 @@ describe("invokeRest — ADD-32 caller credential propagation", () => {
     expect(r.ok).toBe(true);
     expect(captured?.url).toBe("https://api.example.com/api/v1/hotels/search");
     expect(r.data).toEqual({ hotels: [{ id: "h1" }] });
+  });
+});
+
+// Security hardening (follow-up to ADD-32): baseUrl is the one placeholder destination where a
+// caller-controlled value can redirect the ENTIRE outbound request, not just its content — so a
+// binding whose baseUrl contains ${caller.NAME} must have its resolved host checked against a
+// deployer-configured InvokeOptions.allowedHosts, failing closed by default. No shipped binding
+// uses ${caller.…} in baseUrl today (hence the tool fixture below is synthetic, not a real
+// manifest) — this is proactive hardening of the mechanism, not a fix for a live exploit.
+describe("invokeRest — caller-influenced baseUrl allowlist (security hardening)", () => {
+  // Per-tenant routing: the whole host is caller-controlled via ${caller.tenantId}.
+  const tenantRouted: IRTool = {
+    ...search,
+    id: "tenant.accounts",
+    connector: {
+      type: "rest",
+      rest: { baseUrl: "https://${caller.tenantId}", method: "GET", path: "/accounts" },
+    },
+  };
+
+  it("regression: a ${VAR}-only baseUrl with no allowedHosts configured behaves exactly as before", async () => {
+    let captured: { url: string } | undefined;
+    const fetchImpl: FetchLike = async (url) => {
+      captured = { url: String(url) };
+      return new Response(JSON.stringify({ hotels: [{ id: "h1" }] }), { status: 200 });
+    };
+    const r = await invokeRest(
+      search,
+      { destination: "Nice" },
+      { env: { BOOKING_API_URL: "https://api.example.com" }, fetchImpl }, // no allowedHosts at all
+    );
+    expect(r.ok).toBe(true);
+    expect(captured?.url).toBe("https://api.example.com/api/v1/hotels/search");
+  });
+
+  it("proceeds when the resolved host is an exact match in allowedHosts", async () => {
+    let captured: { url: string } | undefined;
+    const fetchImpl: FetchLike = async (url) => {
+      captured = { url: String(url) };
+      return new Response("{}", { status: 200 });
+    };
+    const r = await invokeRest(
+      tenantRouted,
+      {},
+      {
+        env: {},
+        fetchImpl,
+        caller: { tenantId: "tenant-a.core.example.com" },
+        allowedHosts: ["tenant-a.core.example.com"],
+      },
+    );
+    expect(r.ok).toBe(true);
+    expect(captured?.url).toBe("https://tenant-a.core.example.com/accounts");
+  });
+
+  it("proceeds when the resolved host matches a *.suffix wildcard entry", async () => {
+    let captured: { url: string } | undefined;
+    const fetchImpl: FetchLike = async (url) => {
+      captured = { url: String(url) };
+      return new Response("{}", { status: 200 });
+    };
+    const r = await invokeRest(
+      tenantRouted,
+      {},
+      {
+        env: {},
+        fetchImpl,
+        caller: { tenantId: "tenant-a.core.example.com" },
+        allowedHosts: ["*.core.example.com"],
+      },
+    );
+    expect(r.ok).toBe(true);
+    expect(captured?.url).toBe("https://tenant-a.core.example.com/accounts");
+  });
+
+  it("a *.suffix wildcard must NOT match a host missing the dot separator (no false-positive prefix match)", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called — 'evilcore.example.com' is not a subdomain of core.example.com");
+    };
+    const r = await invokeRest(
+      tenantRouted,
+      {},
+      {
+        env: {},
+        fetchImpl,
+        caller: { tenantId: "evilcore.example.com" },
+        allowedHosts: ["*.core.example.com"],
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(0);
+    expect(r.error).toMatch(/not in the caller-influenced-baseUrl allowlist/);
+    expect(r.error).toContain("evilcore.example.com");
+  });
+
+  it("fails closed, with no network attempt, when the resolved host is not in the allowlist at all", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called — the allowlist gate must short-circuit before any request");
+    };
+    const r = await invokeRest(
+      tenantRouted,
+      {},
+      {
+        env: {},
+        fetchImpl,
+        caller: { tenantId: "tenant-b.core.example.com" },
+        allowedHosts: ["tenant-a.core.example.com"],
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(0);
+    expect(r.error).toMatch(/not in the caller-influenced-baseUrl allowlist/);
+  });
+
+  it("fails closed by default when allowedHosts is entirely omitted — not a silent bypass", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called — an undefined allowlist must not be treated as allow-all");
+    };
+    const r = await invokeRest(
+      tenantRouted,
+      {},
+      { env: {}, fetchImpl, caller: { tenantId: "tenant-a.core.example.com" } }, // no allowedHosts
+    );
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(0);
+    expect(r.error).toMatch(/not in the caller-influenced-baseUrl allowlist/);
+  });
+
+  it("fails closed with a distinct error when the resolved baseUrl is not a valid URL", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called");
+    };
+    // caller.tenantId resolves to "" (empty, but present per ADD-32 §3/R-6) — baseUrl becomes
+    // the bare string "https://", which `new URL()` rejects (no host).
+    const r = await invokeRest(
+      tenantRouted,
+      {},
+      { env: {}, fetchImpl, caller: { tenantId: "" }, allowedHosts: ["anything.example.com"] },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(0);
+    expect(r.error).toMatch(/baseUrl is not a valid URL after caller-placeholder substitution/);
+    expect(r.error).not.toMatch(/allowlist/);
+  });
+});
+
+describe("hostMatchesPattern", () => {
+  it("exact match", () => {
+    expect(hostMatchesPattern("api.example.com", "api.example.com")).toBe(true);
+    expect(hostMatchesPattern("api.example.com", "other.example.com")).toBe(false);
+  });
+
+  it("wildcard matches any subdomain but not the bare suffix itself unless listed separately", () => {
+    expect(hostMatchesPattern("tenant-a.example.com", "*.example.com")).toBe(true);
+    expect(hostMatchesPattern("example.com", "*.example.com")).toBe(false);
+  });
+
+  it("wildcard does not false-positive-match a host that merely ends with the suffix text (no dot boundary)", () => {
+    expect(hostMatchesPattern("evilexample.com", "*.example.com")).toBe(false);
+  });
+
+  it("case-insensitive on both host and pattern", () => {
+    expect(hostMatchesPattern("API.Example.COM", "api.example.com")).toBe(true);
+    expect(hostMatchesPattern("Tenant-A.Example.com", "*.EXAMPLE.com")).toBe(true);
   });
 });

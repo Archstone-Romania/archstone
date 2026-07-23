@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { FetchLike } from "@archstone/provider-rest";
+import type { FetchLike, InvokeOptions } from "@archstone/provider-rest";
 import { buildRegistry } from "../src/registry";
 import { createHttpHandler } from "../src/http";
 
@@ -77,6 +77,44 @@ describe("createHttpHandler — resolveCaller (ADD-32) — per-request caller, o
     const body = (await res.json()) as { result?: { isError?: boolean; content?: { text: string }[] } };
     expect(body.result?.isError).toBe(true);
     expect(body.result?.content?.[0]?.text).toMatch(/requires policies:\[authenticated\]/);
+  });
+});
+
+// Security-hardening follow-up to ADD-32: `allowedHosts` is a new field on the same
+// `InvokeOptions` bag `createHttpHandler` already spreads verbatim into its per-request
+// `invoke` object (`{ ...opts.invoke, caller: opts.resolveCaller?.(request) }`, `http.ts`) — so
+// this proves that spread carries `allowedHosts` through too, with zero code change in http.ts.
+describe("createHttpHandler — allowedHosts pass-through (security hardening)", () => {
+  it("allowedHosts set at construction time reaches createMcpServer on every request", async () => {
+    vi.resetModules();
+    const captured: (InvokeOptions | undefined)[] = [];
+    vi.doMock("../src/server", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../src/server")>();
+      return {
+        ...actual,
+        createMcpServer: (reg: unknown, invoke?: InvokeOptions) => {
+          captured.push(invoke);
+          return actual.createMcpServer(reg as never, invoke);
+        },
+      };
+    });
+    try {
+      const { createHttpHandler: mockedCreateHttpHandler } = await import("../src/http");
+      const allowedHosts = ["tenant-a.core.example.com"];
+      const handler = mockedCreateHttpHandler(bankRegistry, {
+        bearerToken: "endpoint-secret",
+        invoke: { env: { CORE_BANKING_URL: "https://core.example" }, allowedHosts },
+      });
+      const res = await handler(
+        mcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, { authorization: "Bearer endpoint-secret" }),
+      );
+      expect(res.status).toBe(200);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.allowedHosts).toEqual(allowedHosts);
+    } finally {
+      vi.doUnmock("../src/server");
+      vi.resetModules();
+    }
   });
 });
 

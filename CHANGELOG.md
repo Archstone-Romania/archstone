@@ -3,7 +3,24 @@
 All notable changes to Archstone are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.4.1]
+
+Patch release: proactive hardening, no behavior change for any existing binding.
+
+### Security
+
+- **Allowlist for caller-influenced `baseUrl` (follow-up to #32).** `InvokeOptions` gains
+  `allowedHosts?: string[]` — a deployer-level (static, not per-invocation) host allowlist,
+  each entry an exact hostname or a `"*."`-prefixed subdomain wildcard. `invokeRest` now fails
+  closed whenever a binding's `rest.baseUrl` template contains a `${caller.…}` placeholder
+  (e.g. per-tenant routing via `${caller.tenantId}`) unless the resolved host matches an entry
+  in `allowedHosts`; undefined/empty is the secure default. No shipped binding uses `${caller.…}`
+  in `baseUrl` today, so this closes a hardening gap proactively rather than fixing a live
+  incident — a caller-controlled value in `baseUrl` could otherwise redirect the entire outbound
+  request (and any attached credentials) to an arbitrary host, unlike a caller-controlled value
+  in headers/body, which can only affect request content. `${VAR}`/env-only bindings are
+  unaffected. The compiler emits a matching advisory warning
+  (`caller-influenced-baseurl-no-allowlist`) when a binding's `baseUrl` uses `${caller.…}`.
 
 ## [0.4.0]
 

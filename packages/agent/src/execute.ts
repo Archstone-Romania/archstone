@@ -24,6 +24,11 @@ export interface ExecuteOptions {
    *  capability declares `policies: [authenticated]`, in which case invokeRest fails closed
    *  with `status: "error"` (no new ExecuteResult variant needed). */
   caller?: CallerContext;
+  /** Security-hardening follow-up to ADD-32 — pure pass-through to invokeRest (no policy logic
+   *  here). A deployer-level allowlist for the caller-influenced-baseUrl guard (see
+   *  `providers/rest`'s `InvokeOptions.allowedHosts`); irrelevant unless a binding's baseUrl
+   *  contains `${caller.NAME}`. */
+  allowedHosts?: string[];
 }
 
 export interface ExecuteResult {
@@ -51,7 +56,12 @@ export async function executeCapability(
   // every `${VAR}` placeholder resolves as missing, which invokeRest already reports as
   // a normal `ok:false` (mapped below to `status: "error"`).
   const env = opts?.env ?? {};
-  const result = await invokeRest(tool, input, { env, fetchImpl: opts?.fetchImpl, caller: opts?.caller });
+  const result = await invokeRest(tool, input, {
+    env,
+    fetchImpl: opts?.fetchImpl,
+    caller: opts?.caller,
+    allowedHosts: opts?.allowedHosts,
+  });
   if (!result.ok) {
     return { status: "error", error: result.error ?? "invocation failed" };
   }

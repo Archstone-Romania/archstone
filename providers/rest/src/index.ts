@@ -42,6 +42,43 @@ export interface InvokeOptions {
    *  (byte-for-byte today's behavior unless `tool.policies` includes `authenticated`, in which
    *  case the call fails closed — see `invokeRest`). */
   caller?: CallerContext;
+  /**
+   * Security-hardening follow-up to ADD-32: a **deployer-level policy**, static for the whole
+   * process/deployment — set once at construction time, like `bearerToken` elsewhere in this
+   * codebase (`runtime/src/http.ts`'s `CreateHttpHandlerOptions.bearerToken`), NOT per-request/
+   * per-invocation like `caller` above. Only relevant when a binding's `rest.baseUrl` contains a
+   * `${caller.NAME}` placeholder (per-tenant routing) — see the guard in `invokeRest` for why
+   * that specific case, unlike headers/query/body, needs an allowlist at all.
+   *
+   * Each entry is either an exact hostname (`"api.example.com"`) or a `"*."`-prefixed wildcard
+   * matching any subdomain (`"*.core.example.com"` matches `tenant-a.core.example.com` but NOT
+   * `core.example.com` itself — list that separately if it must also be allowed).
+   *
+   * Undefined/empty is the secure default: a baseUrl whose *original template* referenced
+   * `${caller.…}` fails closed unless the resolved host explicitly matches an entry here.
+   */
+  allowedHosts?: string[];
+}
+
+// Lowercased defensively on both sides — hostnames are case-insensitive (RFC 4343), and a
+// caller-supplied tenantId used inside ${caller.NAME} could otherwise bypass an allowlist
+// entry authored in a different case.
+//
+// Exported deliberately, not incidentally: a deployer wiring up `allowedHosts` may want to
+// validate/lint their own list against expected hostnames before passing it to `InvokeOptions`,
+// so this is kept as stable public surface rather than folded into an unexported helper.
+export function hostMatchesPattern(host: string, pattern: string): boolean {
+  const h = host.toLowerCase();
+  const p = pattern.toLowerCase();
+  if (h === p) return true;
+  if (p.startsWith("*.")) {
+    // `p.slice(1)` keeps the leading "." from "*." (so "*.example.com".slice(1) === ".example.com").
+    // That leading dot is load-bearing: without it, "evilexample.com".endsWith("example.com")
+    // would be a false-positive prefix match. With it, only a real subdomain boundary matches —
+    // "tenant-a.example.com".endsWith(".example.com") is true, "evilexample.com" is false.
+    return h.endsWith(p.slice(1));
+  }
+  return false;
 }
 
 const ENV_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
@@ -202,6 +239,39 @@ export async function invokeRest(
   }
   if (!baseUrl) {
     return { ok: false, status: 0, error: `capability '${tool.id}': no baseUrl (set it in the binding or via env)` };
+  }
+
+  // Security hardening (follow-up to ADD-32, no shipped binding uses this yet — proactive, not
+  // a fix for a live incident). `resolveCaller` substitutes caller-supplied values uniformly
+  // across baseUrl/headers/query/body — the SAME mechanism as ${VAR}/env. That uniformity is
+  // fine for headers/query/body: a caller-controlled value there can only change the CONTENT of
+  // an outbound request, never where it goes. `baseUrl` is different — a caller-controlled value
+  // there can redirect the ENTIRE request, including any attached credentials/headers, to an
+  // arbitrary host of the caller's choosing. So: only when the ORIGINAL, pre-substitution
+  // template (not the resolved `baseUrl`) contains `${caller.` do we require the resolved host to
+  // match a deployer-configured allowlist — every other binding (the overwhelming majority) is
+  // completely unaffected by this check.
+  if ((rest.baseUrl ?? "").includes("${caller.")) {
+    let resolvedHost: string;
+    try {
+      resolvedHost = new URL(baseUrl).hostname; // .hostname, not .host — excludes any port
+    } catch {
+      return {
+        ok: false,
+        status: 0,
+        error: `capability '${tool.id}': baseUrl is not a valid URL after caller-placeholder substitution`,
+      };
+    }
+    const allowedHosts = opts.allowedHosts ?? [];
+    const allowed = allowedHosts.some((pattern) => hostMatchesPattern(resolvedHost, pattern));
+    if (!allowed) {
+      // Fails closed by default — an absent/empty allowedHosts is NOT "allow everything".
+      return {
+        ok: false,
+        status: 0,
+        error: `capability '${tool.id}': baseUrl resolves to host '${resolvedHost}', which is not in the caller-influenced-baseUrl allowlist — a binding whose baseUrl contains \${caller.*} requires InvokeOptions.allowedHosts to be configured, or every call fails closed`,
+      };
+    }
   }
 
   const { path: interpolatedPath, consumed, missing: missingParams } = interpolatePath(rest.path, input);

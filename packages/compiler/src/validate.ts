@@ -116,6 +116,25 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
     }
   }
 
+  // 3c. Security-hardening follow-up to ADD-32 step 8, same pattern: a binding whose REST
+  // baseUrl references a caller placeholder will always fail closed at invoke time (providers/
+  // rest's allowlist guard) unless the invoker configures InvokeOptions.allowedHosts — that
+  // configuration is invoke-context, not something the compiler can see or enforce. Purely
+  // advisory (warning, never blocks apply/build) and a string-pattern check over the raw binding
+  // shape, no HTTP interpretation here either.
+  for (const b of bindings) {
+    const connector = b.binding.connector as { type?: unknown; rest?: Record<string, unknown> } | undefined;
+    if (connector?.type !== "rest" || !connector.rest) continue;
+    const baseUrl = connector.rest.baseUrl;
+    if (typeof baseUrl === "string" && baseUrl.includes("${caller.")) {
+      diags.push({
+        severity: "warning",
+        code: "caller-influenced-baseurl-no-allowlist",
+        message: `binding ${b.file} (capability '${b.binding.capabilityId}')'s baseUrl references a caller credential (\${caller.…}) — invocation will always fail closed unless the invoker configures InvokeOptions.allowedHosts`,
+      });
+    }
+  }
+
   // 4. Resource resolution (P-7) — every `ref`/`collection`/resource-typed name in a
   // capability's input/output AND in a resource's fields (transitively, since every
   // resource's fields are checked here) must resolve to a loaded resource.

@@ -244,6 +244,38 @@ describe("serveStdio — forwards `invoke` to createMcpServer (ADD-32 step 5)", 
       vi.resetModules();
     }
   });
+
+  // Security-hardening follow-up to ADD-32: `allowedHosts` is a NEW field on the same
+  // `InvokeOptions` bag the test above already proves is forwarded verbatim, unchanged — so
+  // this test only needs to confirm the same pass-through covers the new field too, with zero
+  // code change in mcp.ts (serveStdio forwards `invoke` as a whole, never destructures it).
+  it("passes InvokeOptions.allowedHosts through to createMcpServer as part of the same verbatim forward", async () => {
+    vi.resetModules();
+    let captured: InvokeOptions | undefined;
+    vi.doMock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
+      StdioServerTransport: class {},
+    }));
+    vi.doMock("../src/server", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../src/server")>();
+      return {
+        ...actual,
+        createMcpServer: (reg: unknown, invoke?: InvokeOptions) => {
+          captured = invoke;
+          return { connect: async () => {} } as unknown as ReturnType<typeof actual.createMcpServer>;
+        },
+      };
+    });
+    try {
+      const { serveStdio } = await import("../src/mcp");
+      const allowedHosts = ["tenant-a.core.example.com"];
+      await serveStdio(bank, { env: { CORE_BANKING_URL: "https://core.example" }, allowedHosts });
+      expect(captured?.allowedHosts).toEqual(allowedHosts);
+    } finally {
+      vi.doUnmock("@modelcontextprotocol/sdk/server/stdio.js");
+      vi.doUnmock("../src/server");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("ADD-32 step 9 — a tool call reaches a real backend with the CALLER token attached, not ${API_KEY}", () => {
