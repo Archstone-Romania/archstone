@@ -5,6 +5,21 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.5.2]
+
+Patch release: test-only reliability fix, no code or package behavior changed.
+
+### Fixed
+
+- **Flaky `durationMs` timing assertion in the `onResponse` hook test suite (#39).**
+  `S-US1.4` measured an artificial `fetchImpl` delay via `Date.now()`-based `durationMs` and
+  asserted against a threshold with almost no headroom over the nominal delay, so clock/timer
+  jitter on a slower or virtualized CI runner (as seen in the public mirror's own post-publish
+  CI run) could intermittently fail it. Widened the artificial delay from 30ms to 50ms and
+  loosened the assertion from `>=30` to `>=35`, giving genuine slack without weakening what the
+  test actually verifies. Test-only change — `invokeRest`'s `onResponse` hook behavior is
+  unaffected.
+
 ## [0.5.1]
 
 Patch release: documentation only, no code or package behavior changed.

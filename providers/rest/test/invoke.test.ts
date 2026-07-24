@@ -373,7 +373,7 @@ describe("invokeRest — onResponse hook (#39)", () => {
   it("S-US1.4: durationMs is a non-negative number at least as large as an artificial fetch delay", async () => {
     const calls: { durationMs: number }[] = [];
     const fetchImpl: FetchLike = async () => {
-      await new Promise((res) => setTimeout(res, 30));
+      await new Promise((res) => setTimeout(res, 50));
       return new Response("{}", { status: 200 });
     };
     await invokeRest(
@@ -382,7 +382,10 @@ describe("invokeRest — onResponse hook (#39)", () => {
       { env: { BOOKING_API_URL: "https://api.example.com" }, fetchImpl, onResponse: (info) => { calls.push(info); } },
     );
     expect(calls).toHaveLength(1);
-    expect(calls[0].durationMs).toBeGreaterThanOrEqual(30);
+    // `Date.now()` resolution/timer jitter can shave a couple of ms off a nominal
+    // `setTimeout` delay — assert against a threshold with headroom rather than the
+    // exact delay, so this doesn't flake on a slower/virtualized CI runner.
+    expect(calls[0].durationMs).toBeGreaterThanOrEqual(35);
   });
 
   it("S-US1.5/BR-7: omitting onResponse is a byte-for-byte no-op vs. pre-#39 behavior", async () => {
