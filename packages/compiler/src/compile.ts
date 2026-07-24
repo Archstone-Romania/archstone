@@ -5,7 +5,7 @@
 // pass (validateSemantics); it builds what it can regardless.
 
 import type { LoadResult, CapabilityDoc } from "@archstone/schema";
-import { SEMANTIC_TYPES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRFieldMapping, type IRContract, type SemanticType } from "./ir";
+import { SEMANTIC_TYPES, LIFECYCLE_STATES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRFieldMapping, type IRContract, type Lifecycle, type SemanticType } from "./ir";
 import { domainOf, resolveResourceName, resourceIndex } from "./resolve";
 
 const CONNECTOR_TYPES = new Set<IRConnector["type"]>(["rest", "graphql", "grpc", "sql", "soap"]);
@@ -120,6 +120,12 @@ function lowerContract(raw: Record<string, unknown>): IRContract | undefined {
   return { fingerprint: raw.fingerprint, probeFixture: probe.fixture };
 }
 
+/** Read a capability's authored `lifecycle`, defaulting to "stable" when absent or not a
+ *  recognized state (same defensive-default style as `raw.required`, ADD-24 D-4). */
+function lowerLifecycle(raw: unknown): Lifecycle {
+  return typeof raw === "string" && LIFECYCLE_STATES.has(raw as Lifecycle) ? (raw as Lifecycle) : "stable";
+}
+
 export function compile(model: LoadResult): IR {
   const connectorByCap = new Map<string, IRConnector>();
   const responseByCap = new Map<string, Record<string, unknown>>();
@@ -154,6 +160,7 @@ export function compile(model: LoadResult): IR {
       effect: c.effect,
       provider: c.provider ?? "",
       policies: c.policies ?? [],
+      lifecycle: lowerLifecycle(c.lifecycle),
       input: lowerFields(c.input, canon),
       output: lowerFields(c.output, canon),
     };

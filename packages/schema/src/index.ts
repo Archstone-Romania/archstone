@@ -75,6 +75,9 @@ export interface CapabilityDoc {
     output?: Record<string, unknown>;
     policies?: string[];
     provider?: string;
+    lifecycle?: string; // "experimental"|"beta"|"stable"|"deprecated"|"retired"; shape-validated
+    // by cdl.schema.json (RFC-0001 v0.4 §5.5/D-11); the compiler applies the "stable" default
+    // and narrows to the closed set (ADD-24 D-4/D-5).
     [k: string]: unknown;
   };
 }

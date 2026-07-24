@@ -29,6 +29,7 @@ function tool(overrides: Partial<IRTool> & Pick<IRTool, "id">): IRTool {
     effect: "read",
     provider: "acme",
     policies: [],
+    lifecycle: "stable",
     input: [],
     output: [],
     connector: { type: "rest", rest: { method: "GET", path: "/x" } },
@@ -114,5 +115,38 @@ describe("Registry.getCapability — sanitized-name index (ADD-30 D-1)", () => {
     expect(registry.toolNameCollisions).toEqual([]);
     expect(registry.getCapability("tourism.search")?.id).toBe("tourism.search");
     expect(registry.getCapability("tourism.book")?.id).toBe("tourism.book");
+  });
+});
+
+// ADD-24 (#24): Registry.getExposure — the single place listing (toolDefinitions) and
+// invocation (callTool) both read a tool's combined lifecycle + optional health exposure.
+describe("Registry.getExposure (ADD-24)", () => {
+  it("defaults to a stable tool's exposure (listed, invocable, no hint) when no health map is given", () => {
+    const registry = new Registry(ir([tool({ id: "tourism.search", lifecycle: "stable" })]));
+    expect(registry.getExposure("tourism.search")).toEqual({ listed: true, invocable: true });
+  });
+
+  it("a retired tool is unlisted and not invocable, with or without health data", () => {
+    const registry = new Registry(
+      ir([tool({ id: "tourism.search", lifecycle: "retired" })]),
+      new Map([["tourism.search", "green"]]),
+    );
+    const exposure = registry.getExposure("tourism.search");
+    expect(exposure.listed).toBe(false);
+    expect(exposure.invocable).toBe(false);
+  });
+
+  it("health composes per-tool: only the tool named in the map is affected", () => {
+    const registry = new Registry(
+      ir([tool({ id: "tourism.search", lifecycle: "stable" }), tool({ id: "tourism.book", lifecycle: "stable" })]),
+      new Map([["tourism.search", "red"]]),
+    );
+    expect(registry.getExposure("tourism.search").hint?.level).toBe("deprecation");
+    expect(registry.getExposure("tourism.book").hint).toBeUndefined();
+  });
+
+  it("an unbound tool still gets an exposure — lifecycle is a fact of the capability, independent of binding", () => {
+    const registry = new Registry(ir([tool({ id: "tourism.book", lifecycle: "beta", connector: undefined })]));
+    expect(registry.getExposure("tourism.book").hint?.level).toBe("caution");
   });
 });

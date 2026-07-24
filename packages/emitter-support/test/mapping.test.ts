@@ -19,6 +19,7 @@ function tool(response: IRTool["response"]): IRTool {
     effect: "read",
     provider: "",
     policies: [],
+    lifecycle: "stable",
     input: [],
     output: [{ name: "items", required: true, type: { kind: "collection", of: "shop.Widget" } }],
     response,

@@ -29,18 +29,29 @@ export interface McpToolDef {
  *  (what's listed) and `callTool` (what's resolvable, via `getCapability`), keeping the two
  *  consistent. Input and output fields lower against the IR resource registry, so a
  *  `collection: Stay` output emits a typed, described `outputSchema` (not a bare
- *  `{type:object}`). */
+ *  `{type:object}`).
+ *
+ *  ADD-24: a bound tool whose combined exposure (`registry.getExposure`, lifecycle + optional
+ *  health) is `listed:false` (lifecycle `experimental`/`retired`) is dropped from the returned
+ *  list entirely — unlisted, per D-10, though `experimental` remains callable by id (see
+ *  `callTool`). A tool carrying a `hint` (beta/deprecated, or a yellow/red health reading) has
+ *  its text appended to `description` — the only MCP-specific rendering of the neutral
+ *  exposure the emitter-support layer computed. */
 export function toolDefinitions(registry: Registry): McpToolDef[] {
   const resources = registry.ir.resources;
-  return registry.invocableTools().map(({ name, tool: t }) => {
-    const def: McpToolDef = {
-      name,
-      description: t.description,
-      inputSchema: inputJsonSchema(t.input, resources),
-    };
-    if (t.output.length > 0) def.outputSchema = objectJsonSchema(t.output, resources);
-    return def;
-  });
+  return registry
+    .invocableTools()
+    .filter(({ tool: t }) => registry.getExposure(t.id).listed)
+    .map(({ name, tool: t }) => {
+      const hint = registry.getExposure(t.id).hint;
+      const def: McpToolDef = {
+        name,
+        description: hint ? `${t.description} (${hint.text})` : t.description,
+        inputSchema: inputJsonSchema(t.input, resources),
+      };
+      if (t.output.length > 0) def.outputSchema = objectJsonSchema(t.output, resources);
+      return def;
+    });
 }
 
 export interface CallResult {
@@ -58,6 +69,14 @@ export interface CallResult {
  *  unstripped (`ResultSchema`/`RequestMetaSchema` are `z.looseObject`). */
 export const CONTRACT_VIOLATION_META_KEY = "dev.archstone/contract_violation";
 
+/** ADD-24 D-11: the namespaced `_meta` key a `retired` (or otherwise `invocable:false`)
+ *  tool's rejection is carried under — reuses `CONTRACT_VIOLATION_META_KEY`'s precedent
+ *  (ADD-19 Rev 2 D-3′/D-6) verbatim: never `structuredContent`, so the reference SDK client's
+ *  unconditional `structuredContent`-against-`outputSchema` validation never sees it. A
+ *  distinct key (not `CONTRACT_VIOLATION_META_KEY`) so a client distinguishes "this call was
+ *  blocked before any connector work" from "the provider's response violated the contract". */
+export const LIFECYCLE_BLOCKED_META_KEY = "dev.archstone/lifecycle_blocked";
+
 /** Route an MCP tool call to the REST provider and format the result as MCP content. */
 export async function callTool(
   registry: Registry,
@@ -69,6 +88,19 @@ export async function callTool(
   if (!tool) {
     return { content: [{ type: "text", text: `unknown tool: ${name}` }], isError: true };
   }
+
+  // ADD-24 D-10/D-11: only `lifecycle: retired` sets `invocable:false` (health never does,
+  // D-9) — checked immediately after resolution, before any connector/response work, same
+  // call-site discipline the `contract_violation` check already uses downstream.
+  const exposure = registry.getExposure(tool.id);
+  if (!exposure.invocable) {
+    return {
+      content: [{ type: "text", text: `capability '${tool.id}' is retired and can no longer be invoked.` }],
+      _meta: { [LIFECYCLE_BLOCKED_META_KEY]: { error: "lifecycle_blocked", capability: tool.id, lifecycle: tool.lifecycle } },
+      isError: true,
+    };
+  }
+
   const result = await invokeRest(tool, args, opts);
   if (!result.ok) {
     return { content: [{ type: "text", text: result.error ?? "invocation failed" }], isError: true };

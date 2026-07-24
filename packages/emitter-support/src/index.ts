@@ -7,3 +7,4 @@
 export * from "./registry";
 export * from "./lowering";
 export * from "./mapping";
+export * from "./exposure";

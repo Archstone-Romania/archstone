@@ -17,6 +17,19 @@ function modelWith(connector: Record<string, unknown>): LoadResult {
   };
 }
 
+/** Minimal LoadResult carrying one capability, no binding — for lifecycle-lowering tests. */
+function modelWithCapability(capability: Record<string, unknown>): LoadResult {
+  return {
+    ok: true,
+    dir: ".",
+    capabilities: { company: { id: "acme", name: "Acme" }, capabilities: ["svc.do"], providers: [] },
+    capabilityDocs: [{ file: "x.capability.yaml", capability: { id: "svc.do", description: "d", effect: "read", ...capability } }],
+    bindings: [],
+    resourceDocs: [],
+    issues: [],
+  };
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const manifests = resolve(here, "../../../examples/manifests");
 
@@ -105,6 +118,31 @@ describe("compile — connector narrowing by type discriminant (NF-4)", () => {
       modelWith({ type: "rest", rest: { baseUrl: "https://x.test", method: "GET", path: "/go" } }),
     );
     expect(ir.tools[0].connector?.rest?.query).toBeUndefined();
+  });
+});
+
+describe("compile — lifecycle (ADD-24 D-4)", () => {
+  it("defaults to 'stable' when the capability declares no lifecycle", () => {
+    const ir = compile(modelWithCapability({}));
+    expect(ir.tools[0].lifecycle).toBe("stable");
+  });
+
+  it("carries an authored lifecycle state through unchanged", () => {
+    const ir = compile(modelWithCapability({ lifecycle: "beta" }));
+    expect(ir.tools[0].lifecycle).toBe("beta");
+  });
+
+  it("defaults to 'stable' for an unrecognized lifecycle string (safe floor, mirrors `required`'s defensive default)", () => {
+    const ir = compile(modelWithCapability({ lifecycle: "not-a-real-state" }));
+    expect(ir.tools[0].lifecycle).toBe("stable");
+  });
+
+  it("the bank manifest's real deprecated/beta showcases lower faithfully", () => {
+    const ir = compile(load(join(manifests, "bank")));
+    expect(ir.tools.find((t) => t.id === "banking.generate-statement")?.lifecycle).toBe("deprecated");
+    expect(ir.tools.find((t) => t.id === "banking.initiate-transfer")?.lifecycle).toBe("beta");
+    // no authored `lifecycle:` on this one -> defaults.
+    expect(ir.tools.find((t) => t.id === "banking.list-accounts")?.lifecycle).toBe("stable");
   });
 });
 

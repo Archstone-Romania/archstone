@@ -5,6 +5,29 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.0]
+
+Minor release: capability lifecycle states and binding health now drive what `archstone serve`'s
+MCP tool listing shows and allows — additive and backward-compatible.
+
+### Added
+
+- **Lifecycle-aware MCP tool listing (#24, ADD-24).** A capability may now declare a `lifecycle`
+  of `experimental`, `beta`, `stable`, `deprecated`, or `retired`; an absent `lifecycle` field
+  defaults to `stable`, so every pre-existing manifest keeps behaving exactly as before. `archstone
+  serve`'s `tools/list` now honors it: `retired` capabilities are hidden from the listing and
+  blocked from `callTool` outright; `experimental` capabilities are hidden from the listing but
+  remain invocable by id; `beta` and `deprecated` capabilities stay listed and invocable, with a
+  hint appended to their description (e.g. "beta — interface may still change" /
+  "deprecated — avoid new usage"). A binding's health status, as last recorded by `archstone
+  verify`, composes into the same listing as an additional description hint when degraded — it
+  never gates invocation on its own, and a missing or malformed health snapshot fails open
+  (lifecycle-only exposure), so `archstone verify` never becomes a hard dependency for `serve`.
+  Touches `packages/compiler` (new `IRTool.lifecycle` field), `packages/schema` (typed model),
+  `packages/emitter-support` (new pure exposure-lowering function, composed into the Registry), and
+  `packages/runtime` (health-snapshot file read, `server.ts` listing/invocation wiring). Zero
+  breaking change to the IR, CDL grammar, or existing tool behavior.
+
 ## [0.5.2]
 
 Patch release: test-only reliability fix, no code or package behavior changed.

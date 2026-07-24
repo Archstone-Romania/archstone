@@ -28,6 +28,19 @@ export const SEMANTIC_TYPES: ReadonlySet<SemanticType> = new Set<SemanticType>([
   "string", "text", "time-slot", "quantity", "enum", "date", "datetime",
 ]);
 
+/** A capability's authored business-stability fact (RFC-0001 v0.4 §5.5 / D-11, ADD-24 D-1).
+ *  Pure, compile-time, always present (default "stable" — compiler-applied, ADD-24 D-4).
+ *  NEVER conflated with binding health: health is runtime/network-dependent (archstone
+ *  verify) and is deliberately NOT an IR field — see ADD-24's Challenge section. Adding a
+ *  `health` field here would make `compile(): IR` non-deterministic and network-dependent,
+ *  breaking this file's purity contract (see compile.ts's own header comment). */
+export type Lifecycle = "experimental" | "beta" | "stable" | "deprecated" | "retired";
+
+/** The closed set of lifecycle states (mirrors cdl.schema.json's enum). */
+export const LIFECYCLE_STATES: ReadonlySet<Lifecycle> = new Set<Lifecycle>([
+  "experimental", "beta", "stable", "deprecated", "retired",
+]);
+
 /** A field's type, kept neutral — emitters lower this to their target format. */
 export type IRType =
   | { kind: "scalar"; semantic: SemanticType; values?: string[] } // values = closed set for `enum`
@@ -100,6 +113,7 @@ export interface IRTool {
   effect: "read" | "write" | "irreversible";
   provider: string;
   policies: string[];
+  lifecycle: Lifecycle; // always present, default "stable" (ADD-24 D-4) — never MCP-specific
   input: IRField[];
   output: IRField[];
   connector?: IRConnector; // present iff the capability has a binding (else: not invocable)

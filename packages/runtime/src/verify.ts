@@ -11,8 +11,12 @@ import { resolve } from "node:path";
 import { fingerprintShape, type IRTool, type IRResourceRegistry } from "@archstone/compiler";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 import { applyResponseMapping } from "./mapping";
-
-export type HealthStatus = "green" | "yellow" | "red";
+// ADD-24: HealthStatus's canonical home moved to @archstone/emitter-support (registry.ts's
+// exposure composition needs it, and runtime depends on emitter-support, never the reverse) —
+// re-exported here, unchanged, so nothing downstream (e.g. the CLI's `HealthStatus` import
+// from "@archstone/runtime") breaks.
+import type { HealthStatus } from "@archstone/emitter-support";
+export type { HealthStatus } from "@archstone/emitter-support";
 
 export interface ToolVerification {
   capabilityId: string;

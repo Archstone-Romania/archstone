@@ -26,6 +26,7 @@ function tool(contractFingerprint: string, fixtureName = "fixture.json"): IRTool
     effect: "read",
     provider: "",
     policies: [],
+    lifecycle: "stable",
     input: [],
     output: [{ name: "stays", required: true, type: { kind: "collection", of: "Stay" } }],
     connector: { type: "rest", rest: { baseUrl: "https://x.test", method: "POST", path: "/search" } },

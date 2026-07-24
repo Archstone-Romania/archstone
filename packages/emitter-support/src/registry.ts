@@ -27,9 +27,16 @@
 // treats that case as ambiguous, even though it costs the shadowed capability its own
 // otherwise-valid raw-id lookup. This one case is the reason `byId` is cross-checked
 // while building `byName` below, not just `byName` against itself.
+//
+// ADD-24 (#24): a third computed value, `exposureById` — every tool's lifecycle (+ optional
+// health) lowered to a neutral `{listed, invocable, hint}` exposure via @archstone/emitter-
+// support's own `exposure.ts` (never re-derived elsewhere, ADD-24 D-6). Orthogonal to
+// boundness: `invocableTools()`/`byName` above are unaffected by lifecycle/health, exactly as
+// before this ADD.
 
 import type { IR, IRTool } from "@archstone/compiler";
 import { toolName } from "./lowering";
+import { lifecycleExposure, combineExposure, type Exposure, type HealthStatus } from "./exposure";
 
 export interface ToolNameCollision {
   /** The sanitized name (`toolName()` output) two or more capabilities share. */
@@ -51,10 +58,21 @@ export class Registry {
   private readonly byName: Map<string, IRTool>; // never holds an ambiguous name — see ambiguousNames
   private readonly ambiguousNames: Set<string>;
   private readonly invocable: NamedTool[];
+  // ADD-24: one exposure per tool (lifecycle + optional health), computed ONCE here so
+  // listing (toolDefinitions) and invocation (callTool) read the identical value — never
+  // recomputed independently in two places (ADD-24 §7 step 5, mirrors ADD-30 D-3).
+  private readonly exposureById: Map<string, Exposure>;
 
   readonly toolNameCollisions: ReadonlyArray<ToolNameCollision>;
 
-  constructor(public readonly ir: IR) {
+  /**
+   * @param health An optional, already-parsed capabilityId -> HealthStatus map (e.g. from
+   *   `archstone verify --json`'s `{results: ToolVerification[]}`, ADD-20). Fs-free here —
+   *   the caller (runtime's buildRegistry) is the one place that reads a snapshot file. Health
+   *   NEVER lowers into the IR (ADD-24 D-7) and NEVER gates `invocable` (ADD-24 D-9) — it only
+   *   ever raises a tool's hint severity, composed with its lifecycle-derived exposure below.
+   */
+  constructor(public readonly ir: IR, health?: ReadonlyMap<string, HealthStatus>) {
     this.byId = new Map(ir.tools.map((t) => [t.id, t]));
 
     this.byName = new Map();
@@ -100,6 +118,21 @@ export class Registry {
     // A name that turned out ambiguous is never advertised as invocable — advertising a
     // name that can never resolve would itself be a silent-misroute risk (BR-6).
     this.invocable = invocable.filter((nt) => !this.ambiguousNames.has(nt.name));
+
+    // ADD-24: exposure is computed for EVERY tool (bound or not) — lifecycle is a fact of
+    // the capability itself, independent of whether a binding exists. Boundness continues to
+    // gate `invocableTools()`/`byName` above, unaffected by lifecycle/health.
+    this.exposureById = new Map(
+      ir.tools.map((t) => [t.id, combineExposure(lifecycleExposure(t.lifecycle), health?.get(t.id))]),
+    );
+  }
+
+  /** A tool's combined exposure (lifecycle + optional health, ADD-24) — the single value
+   *  both `toolDefinitions` (listing) and `callTool` (invocation) read. Every `ir.tools`
+   *  entry has one; an unknown id falls back to the neutral default (never reached in
+   *  practice, since callers resolve `id` via `getCapability` first). */
+  getExposure(id: string): Exposure {
+    return this.exposureById.get(id) ?? { listed: true, invocable: true };
   }
 
   /** All capabilities (bound or not), for MCP tool listing / reporting. */
