@@ -1,6 +1,6 @@
 {
   "name": "@archstone/cli",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": false,
   "type": "module",
   "description": "CLI (#1): archstone apply — wires the pipeline (parse -> validate -> IR -> runtime).",

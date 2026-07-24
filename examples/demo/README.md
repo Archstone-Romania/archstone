@@ -44,6 +44,47 @@ Restart Claude Desktop. The `tourism_search` tool appears; ask a travel question
 
 > Point `STAYS_API_URL` at a real booking sandbox to run against live availability — the CDL and the generated tool do not change. That is the whole thesis: swap the backend, not the integration.
 
+## Local models (Ollama, LM Studio)
+
+Same server, same manifest, no code changes — only the client differs. `archstone serve` is
+a standard stdio MCP server, so any MCP client can drive it, including ones built for local
+models.
+
+**[`ollmcp`](https://github.com/jonigl/mcp-client-for-ollama)** (a third-party MCP client for
+Ollama, `pipx install mcp-client-for-ollama`) reads a `servers.json` in the same
+`mcpServers` shape as Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "archstone-tourism": {
+      "command": "/bin/zsh",
+      "args": [
+        "-c",
+        "cd <REPO> && export STAYS_API_URL=http://localhost:8787 && exec pnpm serve examples/manifests/tourism"
+      ]
+    }
+  }
+}
+```
+
+```bash
+pnpm demo:mock                                  # start the mock backend first
+ollmcp --servers-json <path-to-servers.json> --model llama3.1:8b
+```
+
+Verified end-to-end with `llama3.1:8b`: the model reads the generated `inputSchema`,
+produces a schema-matching `tourism_search` call, and gets back real typed `Stay` resources
+from the mock backend. Smaller or non-tool-tuned models (e.g. some 8B "thinking" models with
+extended reasoning enabled) may reason about the right call in their thinking trace but never
+emit it — that's the model's tool-calling behavior, not this server. Prefer an explicitly
+tool-tuned 8B+ model.
+
+**LM Studio** has had a built-in stdio MCP client since v0.3.17 — add the same `command`/`args`
+shape to its `mcp.json` (see [LM Studio's MCP docs](https://lmstudio.ai/docs/app/mcp)). This
+project hasn't verified that path end-to-end (LM Studio is GUI-only, so it takes a person
+clicking through it once) — if you try it, we'd love to hear how it goes.
+
 ## What Claude sees
 
 `archstone serve` emits one MCP tool, `tourism_search`, with a typed `outputSchema` lowered

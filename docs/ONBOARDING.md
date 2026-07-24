@@ -280,6 +280,22 @@ bindings use in the `env` block, and restart — the tool (e.g. `tourism_search`
 the agent can call it. A complete, copy-pasteable Claude Desktop walkthrough lives in
 [`examples/demo/README.md`](../examples/demo/README.md).
 
+### Local models (Ollama, LM Studio, or any other MCP client)
+
+`archstone serve` is a standard stdio MCP server — it doesn't know or care whether the peer
+on the other end of stdin/stdout is Claude Desktop or a client driving a model running on
+your own machine. Nothing about the emitter changes for local models; only the client-side
+config does. A copy-pasteable config for `ollmcp` (a third-party MCP client for Ollama) and
+for LM Studio's built-in MCP client lives in
+[`examples/demo/README.md`](../examples/demo/README.md#local-models-ollama-lm-studio).
+
+One thing that *is* model-dependent: whether the model reliably emits a tool call at all.
+That's a property of the model's tool-calling training, not of the MCP protocol or of
+archstone — confirmed first-hand pointing several local models at this exact demo. Prefer an
+explicitly tool-tuned 8B+ model; smaller or non-tool-tuned models may reason correctly about
+which tool to call and still fail to emit the structured call, or call it correctly but loop
+instead of concluding.
+
 ### Acting on behalf of the end user (`policies: [authenticated]`)
 
 Everything in Steps 1–6 above — and the tourism/booking examples — describes **sandbox /

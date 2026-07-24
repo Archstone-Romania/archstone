@@ -5,6 +5,21 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.5.1]
+
+Patch release: documentation only, no code or package behavior changed.
+
+### Docs
+
+- **Local-model MCP path (Ollama, LM Studio) documented (follow-up to #23 spike).** #23
+  confirmed `archstone serve` needs no code changes to work with local models — it already
+  speaks stdio MCP, and any MCP-capable local client (Ollama via `ollmcp`, LM Studio, or
+  otherwise) can attach directly. `ONBOARDING.md` gains a "Local models (Ollama, LM Studio, or
+  any other MCP client)" section (between "Step 6 — Serve it to an AI agent" and "Acting on
+  behalf of the end user"), and `examples/demo/README.md` gains a matching "Local models
+  (Ollama, LM Studio)" section with a copy-paste `ollmcp` config verified end-to-end against
+  the tourism demo.
+
 ## [0.5.0]
 
 Minor release: an observability hook for bound-capability LLM spend, plus documentation of the

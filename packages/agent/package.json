@@ -1,6 +1,6 @@
 {
   "name": "@archstone/agent",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": false,
   "type": "module",
   "description": "Embedded agent SDK (RFC-0008/ADD-0008): tool definitions (Anthropic/OpenAI/Gemini/JSON-Schema) + fail-closed execute() over compiled IR. Root entry — zero MCP SDK reachability; /mcp subpath — mountable Streamable-HTTP handler.",
