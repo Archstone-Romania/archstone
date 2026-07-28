@@ -41,6 +41,20 @@ function runApply(dir: string): void {
   for (const d of res.capabilityDocs) {
     console.log(`    ✓ ${d.capability.id}  [${d.capability.effect}] → ${d.capability.provider ?? "?"}`);
   }
+  // #43: a policy the author believes is enforced must never be invisible here — the whole
+  // point of the semantic pass's scope diagnostics is that "attached to nothing" is loud.
+  if (res.policyDocs.length > 0) {
+    console.log(`  policies   ${res.policyDocs.length} policy document(s)`);
+    for (const p of res.policyDocs) {
+      const target =
+        p.metadata.scope === "capability"
+          ? `capability ${p.metadata.capabilityId ?? "?"}`
+          : p.metadata.scope === "provider"
+            ? `provider ${p.metadata.provider ?? "?"}`
+            : "(no scope)";
+      console.log(`    ✓ ${p.metadata.id}  → ${target}`);
+    }
+  }
 
   // Shape (schema) issues from #2 — "valid shapes" is not "deployable".
   if (res.issues.length > 0) {
@@ -114,9 +128,18 @@ function runBuild(dir: string, outPath: string | undefined): void {
     process.exit(1);
   }
 
-  // D-8: the artifact ships with no code alongside it — the fingerprint + golden-fixture
-  // path have no meaning without the fixture file / `archstone verify`, so strip `contract`
-  // from every tool before writing.
+  // THE STRIP RULE, stated as a principle rather than a list (ADD-43 D-9), so the next field
+  // added to `IRTool` is classified deliberately instead of by whichever example was copied:
+  //
+  //     strip what the INVOCATION PATH cannot use.
+  //
+  // `contract` qualifies (ADD-0008 D-8): it is verify-time-only and carries an fs path that is
+  // meaningless once the golden fixture is not shipping alongside the artifact.
+  //
+  // `policyRules` (#43) is the exact opposite and MUST survive: it is invocation-path data, read
+  // by the evaluator on every `execute()` call. Stripping it would ship an unpoliced embedded
+  // SDK beside a policed MCP surface — the precise cross-path drift #43 exists to prevent, and
+  // silent, because `fromIR` validates only `version` and treats the rest as opaque.
   const stripped: IR = { ...ir, tools: ir.tools.map(({ contract: _contract, ...t }) => t) };
 
   const outFile = resolve(process.cwd(), outPath ?? "archstone.ir.json");
@@ -147,11 +170,69 @@ function runServeHttp(dir: string, port: number, token: string | undefined): voi
 
   const handler = createHttpHandler(built.registry, { bearerToken: token });
   const server = createServer((req, res) => {
-    void handleHttpRequest(handler, req, res);
+    // #49 belt-and-braces: this used to be `void handleHttpRequest(...)`. Fire-and-forget
+    // means nothing is attached to the returned promise, so ANY rejection escaping the
+    // function became an unhandled rejection — fatal under Node's default
+    // `--unhandled-rejections=throw`, killing the server on one aborted client connection.
+    // handleHttpRequest now contains its own failures, but this `.catch` is the seam that
+    // makes the fix independent of that catch staying exhaustive: a future throw added
+    // outside its `try` cannot resurrect the process-death bug.
+    handleHttpRequest(handler, req, res).catch((err: unknown) => {
+      console.error("archstone serve --http: request handling failed —", err);
+      endResponseQuietly(res, 500);
+    });
   });
   server.listen(port, () => {
     console.error(`archstone: serving MCP over HTTP on http://localhost:${port}/ (bearer-token gated)`);
   });
+}
+
+/**
+ * Largest request body `archstone serve --http` will buffer, in bytes (#50).
+ *
+ * 4 MiB is not chosen by feel: it is the limit the MCP SDK itself applies to an MCP message
+ * arriving over HTTP (`MAXIMUM_MESSAGE_SIZE = '4mb'` in the SDK's own Node SSE transport,
+ * enforced via `raw-body`). Same protocol, same message class, same SDK version this package
+ * already depends on — so the ceiling matches what an MCP client can reasonably expect to send
+ * anywhere else in the ecosystem, rather than inventing an Archstone-specific number. The
+ * Web-standard transport used here never reads the socket itself (this adapter hands it an
+ * already-built `Request`), which is precisely why the SDK's limit does not apply on this path
+ * and has to be reapplied here.
+ *
+ * For scale: an MCP `tools/call` body carries a capability's declared inputs as JSON. 4 MiB is
+ * orders of magnitude above any manifest in `examples/`.
+ */
+const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Terminate a response without ever throwing (#49). Every exit path out of the adapter goes
+ * through here, including the ones reached after the client is already gone: on an aborted
+ * connection the socket is destroyed, and a naive `res.end()` there is at best pointless and
+ * at worst a second error thrown out of an error path. Ending is still attempted whenever the
+ * socket survives — a truncated body on a keep-alive connection has a live socket that would
+ * otherwise hang until the client's own timeout.
+ */
+function endResponseQuietly(
+  res: ServerResponse,
+  status: number,
+  opts: { closeConnection?: boolean } = {},
+): void {
+  try {
+    if (res.writableEnded || res.destroyed) return;
+    if (!res.headersSent) {
+      res.statusCode = status;
+      // #50: on a refused oversized body the connection must not be reused. The client is
+      // mid-upload and the rest of its bytes are still in flight, so a keep-alive socket
+      // would leave that remainder to be misparsed as the next request. `Connection: close`
+      // lets Node flush the response first and then close — destroying the socket here
+      // instead would race the 413 and the client would see nothing.
+      if (opts.closeConnection) res.setHeader("connection", "close");
+    }
+    res.end();
+  } catch {
+    // The socket went away between the checks above and the write. Nothing is left to
+    // terminate and there is no one to tell — swallowing here is the whole point.
+  }
 }
 
 // D-3's "~20-line wrapper": Node's http.IncomingMessage/ServerResponse <-> Web-standard
@@ -159,28 +240,112 @@ function runServeHttp(dir: string, port: number, token: string | undefined): voi
 // @archstone/agent/mcp's mcpHandler()) can serve real Node HTTP traffic without a second
 // transport implementation. CLI-level plumbing only — HTTP itself still lives in
 // providers/rest for business-backend calls; this adapter never touches a backend.
+//
+// #49 (P0, unauthenticated remote DoS): this function must never reject and must always
+// reach a terminal `res.end()`. It is invoked from a Node `request` listener, where an
+// escaping rejection is an unhandled rejection and therefore a fatal uncaught exception —
+// one client that declares a Content-Length and disconnects mid-body used to kill the
+// process, before any handler and therefore before any credential check ran.
 async function handleHttpRequest(
   handler: (request: Request) => Promise<Response>,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+  // #50: the body is buffered BEFORE authentication (the bearer check lives inside
+  // createHttpHandler, reached only once the Request is built), so an unauthenticated client
+  // controls how much memory this allocates. Measured server-side: the body is held ~4x over
+  // simultaneously — the chunk array, `Buffer.concat`'s copy, and undici's own copies inside
+  // `new Request` — so a 256 MiB body peaked at 1,081 MiB RSS, essentially all of it in
+  // `external`/`arrayBuffers`. Being external is what makes it nasty: `--max-old-space-size`
+  // does not bound it, and the terminal symptom is an uncatchable OOM abort.
+  //
+  // A declared Content-Length over the cap is refused before a single byte is read; the
+  // running total is then enforced during streaming as well, because Content-Length can lie
+  // and chunked encoding omits it entirely. Like every other client fault in this adapter the
+  // 413 is NOT logged — an unauthenticated caller must not be able to drive log volume (#49
+  // BF-1).
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
+    endResponseQuietly(res, 413, { closeConnection: true });
+    return;
   }
-  const hasBody = req.method !== "GET" && req.method !== "HEAD" && chunks.length > 0;
-  const request = new Request(`http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`, {
-    method: req.method ?? "GET",
-    headers,
-    body: hasBody ? Buffer.concat(chunks) : undefined,
-  });
 
-  const response = await handler(request);
-  res.statusCode = response.status;
-  response.headers.forEach((value, key) => res.setHeader(key, value));
-  res.end(response.body ? Buffer.from(await response.arrayBuffer()) : undefined);
+  const chunks: Buffer[] = [];
+  try {
+    let received = 0;
+    for await (const chunk of req) {
+      const buf = chunk as Buffer;
+      received += buf.length;
+      if (received > MAX_REQUEST_BODY_BYTES) {
+        // Returning from inside `for await` calls the iterator's `return()`, which tears the
+        // request stream down — so the remaining bytes are never buffered, and the client is
+        // not left streaming into a socket nobody drains.
+        endResponseQuietly(res, 413, { closeConnection: true });
+        return;
+      }
+      chunks.push(buf);
+    }
+  } catch {
+    // The client went away mid-body (ECONNRESET / aborted), or delivered fewer bytes than
+    // its declared Content-Length. On a public endpoint this is routine traffic — a closed
+    // laptop, a cancelled fetch, a load-balancer health probe — NOT a server fault, so it is
+    // deliberately not logged: turning an aborted-request flood into a log flood just trades
+    // one denial of service for another.
+    //
+    // 400 is the deliberate status, not 500: the request was never completed, and nothing on
+    // the server failed. In practice nobody reads it — this catch is reached only once the
+    // socket is already dead. (Node does NOT surface a short body while the connection is
+    // still open: it waits for the declared bytes until `server.requestTimeout`, 300 s by
+    // default, and answers that itself.) The end is still attempted rather than skipped
+    // because this code cannot tell from here whether `res` is writable — `req` erroring
+    // does not by itself prove the response side is gone — and `endResponseQuietly` makes
+    // the attempt free when it is.
+    endResponseQuietly(res, 400);
+    return;
+  }
+
+  // Translating the raw request into a Web `Request` is still CLIENT input handling, and it
+  // runs BEFORE authentication (the bearer check lives inside createHttpHandler, reached only
+  // at `handler(request)` below). `req.headers.host` and `req.url` are attacker-controlled and
+  // a malformed value throws here — a bad `Host` was in fact a second unauthenticated kill
+  // vector before #49's containment landed. So this gets its own client-fault arm, on exactly
+  // the argument the body-read catch above makes: answering 500 and logging a stack trace per
+  // request would hand an unauthenticated caller ~13x log amplification and trade the crash
+  // for a disk-fill DoS. RFC 9112 §3.2 also makes 400 the required answer to an invalid Host.
+  //
+  // Classification is positional, not by error sniffing: what failed decides the class, so it
+  // cannot drift when undici changes an error's shape between Node versions.
+  let request: Request;
+  try {
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+    }
+    const hasBody = req.method !== "GET" && req.method !== "HEAD" && chunks.length > 0;
+    request = new Request(`http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`, {
+      method: req.method ?? "GET",
+      headers,
+      body: hasBody ? Buffer.concat(chunks) : undefined,
+    });
+  } catch {
+    endResponseQuietly(res, 400);
+    return;
+  }
+
+  try {
+    const response = await handler(request);
+    res.statusCode = response.status;
+    response.headers.forEach((value, key) => res.setHeader(key, value));
+    res.end(response.body ? Buffer.from(await response.arrayBuffer()) : undefined);
+  } catch (err) {
+    // A genuine server-side failure: the handler rejected, or serialising its Response threw.
+    // Unlike a malformed or abandoned request this IS worth surfacing, so it is logged — and
+    // answered with a 500 rather than left to hang the caller. Nothing attacker-controlled
+    // reaches this arm without first passing through the handler, so it cannot be used as a
+    // log-amplification primitive the way the pre-auth construction path above could.
+    console.error("archstone serve --http: request handling failed —", err);
+    endResponseQuietly(res, 500);
+  }
 }
 
 const HEALTH_ICON: Record<HealthStatus, string> = { green: "🟢", yellow: "🟡", red: "🔴" };

@@ -65,3 +65,19 @@ export function applyResponseMapping(tool: IRTool, body: unknown, resources: IRR
   const data: Record<string, unknown> = { [mapping.field]: value };
   return degraded.size > 0 ? { status: "degraded", data, degraded: [...degraded] } : { status: "ok", data };
 }
+
+/**
+ * The human text a contract VIOLATION is reported with — one spelling, shared by both
+ * invocation consumers (#44).
+ *
+ * Extracted rather than duplicated because the audit record must carry, verbatim, the message
+ * the consumer already surfaces, and the two consumers surface a violation differently: the MCP
+ * path returns this exact sentence as tool content (five shipped assertions pin it byte-for-
+ * byte), while the embedded path returns `{status:"violation", missing}` with no text at all.
+ * Without one shared spelling, an `mcp` record and a `function-calling` record for the identical
+ * failure would read differently — precisely the drift a single record builder exists to
+ * prevent, and invisible until an auditor compares the two.
+ */
+export function contractViolationMessage(capabilityId: string, missing: readonly string[]): string {
+  return `contract violation: capability '${capabilityId}' — provider response is missing required field(s): ${missing.join(", ")}. Declared output shape not met; raw body withheld.`;
+}

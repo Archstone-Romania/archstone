@@ -21,9 +21,37 @@ export type {
   JsonSchemaToolDef,
 } from "./tools";
 export { sanitizeGeminiSchema } from "./tools";
-export type { ExecuteOptions, ExecuteResult } from "./execute";
-export type { FetchLike } from "@archstone/provider-rest";
+export type { ExecuteOptions, ExecuteResult, ExecuteDenial } from "./execute";
+/** #43: the closed set of policy denial reason codes carried on `ExecuteResult.denial`.
+ *  Re-exported so a consumer can name/exhaustively switch on it without importing
+ *  `@archstone/emitter-support` — type-only, no runtime edge (test/boundary.test.ts). */
+export type { PolicyDenialReason } from "@archstone/emitter-support";
+/** `CallerContext` is the type of `ExecuteOptions.caller` (and of what the `/mcp` subpath's
+ *  `resolveCaller` returns). Re-exported for the same reason as `FetchLike`: a consumer must be
+ *  able to name it without importing `@archstone/provider-rest`, which is a transitive
+ *  dependency of this package and not a declared dependency of theirs (#46). Type-only — no
+ *  runtime edge, no change to this entry's import graph (test/boundary.test.ts). */
+export type { FetchLike, CallerContext } from "@archstone/provider-rest";
 export { Registry } from "@archstone/emitter-support";
+/** #44: the audit sink surface. Re-exported here (and from `@archstone/runtime`) so a deployer
+ *  wires a sink from the package they already depend on, rather than adding
+ *  `@archstone/emitter-support` — a transitive dependency of this one — to their own manifest.
+ *  `jsonLinesAuditSink` is the shipped reference sink and imports no `node:` module, so the
+ *  root entry's fs-free/SDK-free property is unchanged (test/boundary.test.ts). */
+export {
+  jsonLinesAuditSink,
+  REDACTED,
+  LIFECYCLE_BLOCKED_REASON,
+} from "@archstone/emitter-support";
+export type {
+  AuditSink,
+  AuditWritable,
+  ExecutionRecord,
+  ExecutionStatus,
+  ExecutionPhase,
+  ExecutionConsumer,
+  ExecutionDenialReason,
+} from "@archstone/emitter-support";
 
 /** Thrown by fromIR() when the artifact isn't a `version: "0"` IR — D-2's one enforced
  *  public contract surface (ADD-0008 §3). Fail-closed: missing, wrong-typed, or a future

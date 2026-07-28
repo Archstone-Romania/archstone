@@ -8,5 +8,5 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  external: ["@archstone/compiler"],
+  external: ["@archstone/compiler", "@archstone/emitter-support"],
 });

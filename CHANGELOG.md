@@ -5,6 +5,171 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.0]
+
+Minor release, never a patch: `invokeRest` is a published function and its behaviour changed (see
+"Changed" below). It also carries a security fix that was live in published `@archstone/cli` 0.6.0,
+accompanied by a GitHub Security Advisory per [`SECURITY.md`](SECURITY.md) rather than a changelog
+line alone.
+
+### Security
+
+- **`archstone serve --http` could be killed by one unauthenticated request (#49).** Two vectors,
+  both reachable **before any credential check**, because the request body is read and the Web
+  `Request` is built before the bearer gate inside `createHttpHandler` runs. A client that declared
+  a `Content-Length` and disconnected mid-body, or that sent a malformed `Host`
+  (`curl -H 'Host: ['` was enough), made the Node adapter's promise reject; `handleHttpRequest` had
+  no `try`/`catch` and was invoked as `void handleHttpRequest(...)`, so nothing could catch it and
+  Node's default `--unhandled-rejections=throw` turned it into a fatal uncaught exception. **The
+  process terminated** — this was not a failed request. Present since v0.3.0 (#29), when
+  `serve --http` was introduced.
+
+  `handleHttpRequest` is now split into three arms by *which operation failed*, not by error shape
+  (undici's error shapes are not a stable contract): body read and request construction are client
+  faults answered with `400` and **deliberately not logged**; only a handler or serialisation
+  failure is a server fault, answered `500` and logged. Logging a pre-auth client fault would have
+  traded the crash for a disk-fill denial of service — measured at ~786 bytes of stderr per 60-byte
+  unauthenticated request before that was corrected during review. The call site now attaches a
+  rejection handler, so a throw added outside those arms cannot resurrect the process death.
+
+- **Unauthenticated request bodies were buffered with no size cap (#50).** Also pre-authentication.
+  The body was held roughly 4× over simultaneously (the chunk array, `Buffer.concat`'s copy, and
+  undici's copies inside `new Request`) in **external** memory, so `--max-old-space-size` did not
+  bound it and the terminal symptom was an uncatchable OOM abort. Now capped at **4 MiB** — the
+  limit the MCP SDK already applies to MCP messages arriving over HTTP, rather than an
+  Archstone-specific number. A declared oversize is refused on the `Content-Length` header before a
+  byte is read; the running total is enforced during streaming as well, because `Content-Length` can
+  lie and chunked encoding omits it entirely. Refusals answer `413` with `Connection: close` and are
+  not logged.
+
+  **Scope, stated honestly:** both defects and both fixes are confined to the CLI's Node HTTP
+  adapter. `@archstone/agent`'s `mcpHandler` and `@archstone/runtime`'s `createHttpHandler` were
+  **not affected and are not hardened** by this release — a host mounting them supplies its own
+  server, and whatever containment and body limits that server has are the ones that apply.
+
+### Added
+
+- **One policy evaluation point before connector execution (#43, ADD-43).** `policies:` was
+  authored in every example manifest and inert except `authenticated`. Policy documents
+  (`*.policy.yaml`) now load, resolve onto tools as a neutral `IRTool.policyRules`, and are decided
+  by a single pure evaluator in `@archstone/emitter-support` that **all three** invocation paths
+  call — `callTool`, `executeCapability`, and `verifyTool`. Denials fail closed and surface as a
+  structured `policy_denied` following ADD-19, never a raw pass-through, with one of four reason
+  codes. Matching is exact and case-sensitive; any `*` in an `allow`/`deny` entry is a compile-time
+  error, so a future wildcard grammar stays a pure widening. Multiple policies compose by
+  intersection on `allow` and union on `deny`, with a diagnostic when the intersection is provably
+  empty. `spec.constraints` (non-empty) and `spec.rateLimit` are authoring-time errors rather than
+  silent no-ops; an empty `constraints: {}` is accepted and never lowered.
+
+  A verify-time policy denial is marked and skipped by the health snapshot, so it never becomes a
+  tool-listing hint — without that, a denied capability would be advertised to agents as
+  "the last contract verification failed", which is false.
+
+  **Operational note:** policy travels inside the compiled artifact. A deployed
+  `archstone.ir.json` that predates a manifest's policy carries no policy and is **not** policed
+  until it is rebuilt and redeployed, exactly as it carries stale bindings. The IR version was
+  deliberately not bumped, because doing so would reject every artifact shipped to date.
+
+- **`mcpHandler` accepts a per-request caller (#46).** `McpHandlerOptions` omitted `resolveCaller`,
+  so no TypeScript consumer could supply per-request identity through the embedded MCP path — the
+  only identity reachable was `invoke.caller`, which is fixed at construction time. The wrapper
+  already forwarded its options object, so this was a type-level gap with an accidental escape
+  hatch (the same value laundered through a `CreateHttpHandlerOptions`-typed variable compiled and
+  worked); that path is deliberately kept working. `CallerContext` is now re-exported as a type from
+  both `@archstone/agent` and `@archstone/agent/mcp` — naming it previously required depending on
+  `@archstone/provider-rest`, a transitive dependency consumers do not declare.
+
+- **`CallerContext.principal`** — an opaque, host-supplied identifier (ADD-42). Archstone never
+  parses, decodes, or verifies it; its trustworthiness is exactly that of the host's own
+  authentication, and that statement ships with the field rather than after it.
+
+- **`Execution` audit record — one per invocation attempt, including the ones that never reach a
+  backend (#44, ADD-44).** `callTool` and `executeCapability` now emit a structured `Execution`
+  record for every attempt — `succeeded`, `failed`, and, for the first time, `denied` — so a policy
+  refusal, a lifecycle block, a missing caller credential, or an `allowedHosts` rejection all leave
+  a trail, not just the ones that made it to a backend. Wired via `auditSink` / `sessionId` /
+  `workflowId` on the **existing** options bag across `execute()`, `callTool`, `serveStdio`,
+  `createHttpHandler`, and `mcpHandler` — no new parameter, no second construction path.
+  `archstone verify` emits nothing, deliberately: a probe replays a golden fixture, and recording
+  it would attribute synthetic traffic to whatever principal happened to be on the bag.
+
+  Ships with a reference sink, `jsonLinesAuditSink` (`@archstone/emitter-support`, re-exported from
+  `@archstone/agent` and `@archstone/runtime`) — one JSON line per record, to `process.stderr` by
+  default or a caller-supplied writable (e.g. a file stream). It refuses `process.stdout` outright,
+  at construction, because stdout is the MCP protocol channel on the stdio transport and a logger
+  writing there would corrupt every subsequent message.
+
+  A record never carries a credential, a header, a URL, a request body, or a backend's response —
+  structurally, not just by scrub: those fields don't exist on the type. What redaction it does do
+  is a byte-search-proven substring scrub, generalized to every string field `caller` carries
+  except `principal` (code review found and closed a gap here — see Fixed, below). `spec` gains a
+  required-but-possibly-empty `policyRuleIds: string[]`, populated identically on every phase; an
+  empty list on a capability the manifest governs is the visible signal that the deployed artifact
+  predates its policy. `status.denialReason`'s vocabulary grows a fifth member, `lifecycle_blocked`
+  — the one refusal the policy evaluator itself can never produce, because the exposure gate that
+  blocks a `retired` capability runs before policy is consulted.
+
+  `execution.schema.json` is edited (the enum, and `policyRuleIds`) and is joined to the compiled
+  validator set for the first time — every emitted record is now checked against it. **No existing
+  behaviour changes when no sink is configured**: no record is built, no clock reading, no id
+  generated, no allocation — a strict no-op.
+
+  **The trail is best-effort and lossy by design, and this is not a footnote.** Requirement 3 (never
+  break or delay the invocation) and a guaranteed-complete trail cannot both hold, and this increment
+  chose the invocation. A sink that throws, rejects, or hangs loses the record it was building — the
+  invocation is unaffected, and the only trace is one line to stderr, reported once per failure and
+  never deduplicated or rate-limited into silence. **A regulated reader who sees the word "audit"
+  will assume completeness unless told otherwise, so this is stated here, not only in ONBOARDING.**
+
+### Fixed
+
+- **A caller-influenced `baseUrl` rejection could leak `caller.tenantId` into an `Execution` record
+  (found in code review of #44, fixed before merge).** The redaction scrub was keyed to
+  `accessToken` by name; when an `allowedHosts` rejection embedded the resolved (caller-influenced)
+  host in its error message, that host — built from a substituted `${caller.tenantId}` — reached
+  `status.message` unscrubbed. The scrub is now generic: every non-empty string field `caller`
+  carries except `principal`, discovered at `Object.entries` time rather than by name, so the next
+  field `CallerContext` grows is covered without further code. Verified by mutation in both
+  directions — reverting the fix reproduces the leak; removing its precondition fails the guard
+  test loudly rather than passing it vacuously.
+
+- **`execution.schema.json`'s `status.phase` enum drops `pending` and `running` (#53, ADD-44
+  Amendment 1).** An `Execution` record models a terminal outcome only — one record is built after
+  an attempt concludes (ADD-44 D-1), never an in-flight or partial one — and the enum now reads
+  `["succeeded", "failed", "denied"]`, with a `description` added to the schema stating why the two
+  removed members must not come back. This is not a behaviour change: `ExecutionPhase` has been
+  three-valued in TypeScript since #44's first commit and was never five-valued at any point in
+  history, so neither removed value ever had a producer and no consumer could ever have received a
+  record carrying one — the schema was the one artifact that had not caught up. Removing an enum
+  member is non-additive by nature, which is exactly why it lands now rather than as a routine
+  tightening: this schema was joined to the compiled validator set for the first time by #44, and
+  0.7.0 is the first release in which anything emits an `Execution` record at all — the only point
+  at which this removal is free. After this release ships, the identical edit stops being free and
+  becomes a real, if narrow, breaking change.
+
+### Changed
+
+- **`invokeRest` no longer enforces `policies: [authenticated]` — behaviour change on a published
+  function (#43).** The gate **moved** to the shared evaluation point; it was removed, not copied,
+  because two enforcement sites is the defect this increment exists to remove. The predicate and the
+  error message are preserved byte-for-byte, and every caller inside Archstone is gated upstream, so
+  `archstone serve`, `archstone verify` and `@archstone/agent` are unaffected. **A third party
+  calling the exported `invokeRest` directly loses a fail-closed check** and must call
+  `evaluatePolicy` itself. In practice the exposure is narrower than it sounds: a binding that
+  references `${caller.accessToken}` still fails on the missing placeholder value, so only bindings
+  with no `${caller.…}` placeholder at all are newly reachable without a credential.
+
+- **`LoadResult.policyDocs` is required, not optional**, matching `resourceDocs`. `validateSemantics`
+  and `compile` still guard with `?? []`, so a JavaScript caller holding a pre-#43 object degrades to
+  "no policies" rather than crashing; a TypeScript caller constructing a `LoadResult` by hand needs
+  the field.
+
+### Docs
+
+- `ONBOARDING.md` gains a principal and policy-authoring section, including the
+  rebuild-and-redeploy rule above and a note that the CLI wires no identity seam, so a capability
+  with an `allow` rule denies everything when served from the CLI.
+
 ## [0.6.0]
 
 Minor release: capability lifecycle states and binding health now drive what `archstone serve`'s
@@ -145,7 +310,7 @@ runtime actually enforces.
   increment. The `bank` example manifest gains a binding for `banking.list-accounts` as the
   end-to-end fixture.
 
-ADD: `internal/docs/architecture/32-caller-credential-propagation-add.md`.
+Design: ADD-32.
 
 ## [0.3.2]
 
@@ -169,8 +334,7 @@ returned by `tools()`/`buildToolDefs()` could not be resolved by `execute()`.
   validation at all.
 
 Reviewed: BA → principal-architect → developer → code-reviewer pipeline, approved (non-blocking
-findings only). ADD: `internal/docs/architecture/30-agent-tool-name-roundtrip-add.md`. AC:
-`internal/docs/product/requirements/30-agent-tool-name-roundtrip-ac.md`.
+findings only). Design: ADD-30.
 
 ## [0.3.1]
 
@@ -197,8 +361,7 @@ includes a related, additive IR change reviewed together with the fix.
   Same treatment applies to a `ref:`-originated field nested inside another resource's own
   field map.
 
-Reviewed together: `internal/docs/reviews/25-26-bugfix-review.md` (✅ Approved). ADD for #25:
-`internal/docs/architecture/25-ref-field-identity-add.md`.
+Reviewed together (✅ Approved). Design for #25: ADD-25.
 
 ## [0.3.0]
 

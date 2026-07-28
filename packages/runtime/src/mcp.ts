@@ -12,6 +12,19 @@ import { buildRegistry } from "./registry";
 import { toolDefinitions, createMcpServer } from "./server";
 
 export { toolName, inputJsonSchema, objectJsonSchema } from "@archstone/emitter-support";
+/** #44: the audit sink surface, re-exported so a deployer wiring `serveStdio`/`createMcpServer`
+ *  imports it from the package they already depend on. See `AuditSink`'s own doc comment for
+ *  the fire-and-forget contract and for the statement that the trail is best-effort and lossy. */
+export { jsonLinesAuditSink, REDACTED, LIFECYCLE_BLOCKED_REASON } from "@archstone/emitter-support";
+export type {
+  AuditSink,
+  AuditWritable,
+  ExecutionRecord,
+  ExecutionStatus,
+  ExecutionPhase,
+  ExecutionConsumer,
+  ExecutionDenialReason,
+} from "@archstone/emitter-support";
 export * from "./server";
 
 /**

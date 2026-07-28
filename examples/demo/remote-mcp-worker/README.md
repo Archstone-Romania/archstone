@@ -7,9 +7,9 @@ call a real Archstone-compiled tool — no local install, no `git clone`.
 
 ## What this is *not*
 
-**This is not Phase 2.** The Archstone roadmap (`AGENTS.md`, `principal-architect.md`,
-`internal/docs/product/05-mvp-scope.md` D-21) explicitly defers "hosting the generated MCP
-server remotely on Cloudflare" and excludes "Cloud SaaS / multi-tenant" from the MVP. This
+**This is not Phase 2.** The Archstone roadmap (MVP scope, decision D-21) explicitly defers
+"hosting the generated MCP server remotely on Cloudflare" and excludes "Cloud SaaS /
+multi-tenant" from the MVP. This
 Worker does not contradict that: it serves exactly **one fixed, unauthenticated, read-only**
 capability that was already committed to the repo and already compiled by the real pipeline
 at build time — nobody's business description or CDL is compiled here, there is no

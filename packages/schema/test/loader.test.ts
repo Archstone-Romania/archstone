@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,5 +105,105 @@ describe("load — rejections (validation actually bites)", () => {
     expect(r.ok).toBe(false);
     expect(r.issues.some((i) => i.file === "x.capability.yaml" && /parse error/.test(i.message))).toBe(true);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// #43 (ADD-43 §8.1 / BR-1, BR-2) — `*.policy.yaml` joins the loaded set. Shape only: whether
+// the scope RESOLVES, and whether this version can evaluate what the spec declares, is the
+// semantic pass's job (see packages/compiler/test/policy.test.ts).
+
+const CAPS = "company:\n  id: acme\ncapabilities:\n  - shop.search\nproviders:\n  - store\n";
+const CAP = "capability:\n  id: shop.search\n  description: find\n  effect: read\n  provider: store\n";
+const POLICY = [
+  "apiVersion: archstone/v1",
+  "kind: Policy",
+  "metadata:",
+  "  id: shop-search-allow",
+  "  name: Shop search allow-list",
+  "  scope: capability",
+  "  capabilityId: shop.search",
+  "spec:",
+  "  allow:",
+  '    - "user:alice"',
+  "",
+].join("\n");
+
+describe("load — *.policy.yaml (#43)", () => {
+  it("discovers a policy document by suffix from the manifest root and shape-validates it", () => {
+    const dir = fixture({ "capabilities.yaml": CAPS, "x.capability.yaml": CAP, "shop.policy.yaml": POLICY });
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    expect(r.policyDocs).toHaveLength(1);
+    expect(r.policyDocs[0].file).toBe("shop.policy.yaml");
+    expect(r.policyDocs[0].metadata.id).toBe("shop-search-allow");
+    expect(r.policyDocs[0].spec.allow).toEqual(["user:alice"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // BR-2: capabilities.schema.json is `additionalProperties: false` with no slot for policies,
+  // so there is deliberately NO declared-without-file / file-not-declared cross-check for them —
+  // exactly the *.resource.yaml precedent.
+  it("needs no declaration in capabilities.yaml and produces no declaration cross-check", () => {
+    const dir = fixture({ "capabilities.yaml": CAPS, "x.capability.yaml": CAP, "shop.policy.yaml": POLICY });
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // S-US1.2 — policy.schema.json sets additionalProperties:false on spec.
+  it("reports a malformed policy document as a shape issue naming the file", () => {
+    const dir = fixture({
+      "capabilities.yaml": CAPS,
+      "x.capability.yaml": CAP,
+      "bad.policy.yaml": POLICY.replace("  allow:", "  bogusKey: 1\n  allow:"),
+    });
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.file === "bad.policy.yaml")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports a policy with a bad metadata.id pattern", () => {
+    const dir = fixture({
+      "capabilities.yaml": CAPS,
+      "x.capability.yaml": CAP,
+      "bad.policy.yaml": POLICY.replace("id: shop-search-allow", "id: Shop_Search"),
+    });
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.file === "bad.policy.yaml")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("handles malformed policy YAML without throwing", () => {
+    const dir = fixture({
+      "capabilities.yaml": CAPS,
+      "x.capability.yaml": CAP,
+      "bad.policy.yaml": "spec: [unterminated\n",
+    });
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.file === "bad.policy.yaml" && /parse error/.test(i.message))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // EC-2: discovery is manifest-ROOT only, mirroring *.resource.yaml. A policy under bindings/
+  // is inert — documented in ONBOARDING as a placement rule so it is not mistaken for a bug.
+  it("does not discover a policy placed in bindings/ (root-only, like *.resource.yaml)", () => {
+    const dir = fixture({ "capabilities.yaml": CAPS, "x.capability.yaml": CAP });
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(join(dir, "bindings", "shop.policy.yaml"), POLICY);
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    expect(r.policyDocs).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves policyDocs empty for every shipped example manifest (nothing changes meaning)", () => {
+    for (const name of ["booking", "bank", "tourism"]) {
+      expect(load(join(manifests, name)).policyDocs).toEqual([]);
+    }
   });
 });

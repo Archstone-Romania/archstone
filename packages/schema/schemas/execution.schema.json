@@ -44,7 +44,7 @@
     "spec": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["input"],
+      "required": ["input", "policyRuleIds"],
       "properties": {
         "input": {
           "type": "object",
@@ -57,6 +57,11 @@
         "principal": {
           "type": "string",
           "description": "Identity principal if resolved"
+        },
+        "policyRuleIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ids of the resolved policy rules this attempt was decided against — required and possibly empty, on EVERY phase. IDS ONLY: never allow/deny entries, which would write an allow-list into an evidentiary log. Decision INPUT, which is why it sits beside `principal` in spec rather than in status; an allowed record listing two ids means 'these were in force and were satisfied', not 'these fired'. An EMPTY list on a capability the manifest governs is the stale-artifact drift signal."
         }
       }
     },
@@ -67,7 +72,8 @@
       "properties": {
         "phase": {
           "type": "string",
-          "enum": ["pending", "running", "succeeded", "failed", "denied"]
+          "enum": ["succeeded", "failed", "denied"],
+          "description": "Terminal outcome of a completed invocation attempt. One `Execution` record is built after the attempt concludes (ADD-44 D-1) — there is no in-flight or partial record. Do not add `pending`/`running`/`in_progress`/etc. for symmetry with a job-queue or workflow-engine model: that would WIDEN the sink contract from one record per attempt to many, breaking every consumer written against 'exactly one record per attempt.' A genuinely new progress/streaming model is a new ADD naming the new producer and assessing that widening against every existing consumer — never a silent re-use of a reserved string. See ADD-44 Amendment 1 (#53)."
         },
         "message": { "type": "string" },
         "output": {
@@ -76,7 +82,14 @@
         },
         "denialReason": {
           "type": "string",
-          "description": "Policy denial reason when phase is denied"
+          "enum": [
+            "authenticated_no_credential",
+            "principal_not_allowed",
+            "principal_denied",
+            "policy_unevaluatable",
+            "lifecycle_blocked"
+          ],
+          "description": "Why the attempt was refused when phase is denied. A CLOSED set, enforced here and not only in a TypeScript union — this file is the product contract a non-TypeScript consumer of the audit log reads. The first four are exactly the policy evaluator's PolicyDenialReason, copied verbatim; `lifecycle_blocked` is the one non-policy refusal code, produced by the exposure gate that refuses a `retired` capability BEFORE policy is consulted. Standing rule: every member has exactly one enumerated producer, and the set grows only by an architecture decision naming the new producer."
         }
       }
     }

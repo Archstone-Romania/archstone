@@ -7,6 +7,11 @@
 // and nowhere else — the compiler/IR/emitter never touch it.
 
 import type { IRTool } from "@archstone/compiler";
+// #44: TYPE-ONLY. `invokeRest` never reads the audit sink — see `InvokeOptions.auditSink`
+// below. The type is owned by the layer that acts on it (beside the policy evaluator and the
+// record builder), and this package merely carries the field so a deployer keeps ONE options
+// bag. Same shape of dependency as @archstone/agent type-importing `CallerContext` from here.
+import type { AuditSink } from "@archstone/emitter-support";
 
 export interface InvokeResult {
   ok: boolean;
@@ -29,18 +34,47 @@ export interface CallerContext {
    *  fail-closed gate below distinguishes that from an explicit `""`, which is treated as
    *  present (ADD-32 §3/R-6, mirrors this file's existing env-var precedent). */
   accessToken?: string;
-  /** Reserved for `tenant-scoped` policy enforcement — NOT enforced by ADD-32 (D-4/R-5). The
-   *  shape carries this now so a future increment doesn't need a second breaking change to
-   *  `CallerContext`; nothing reads this field yet. */
+  /** Reserved for `tenant-scoped` policy enforcement — NOT enforced by ADD-32 (D-4/R-5), and
+   *  deliberately still not enforced by #43 (BR-39: tenant scoping is a third axis, distinct
+   *  from credential-presence and identity, and is refused rather than absorbed as a side
+   *  effect of a policy increment). The shape carries this now so a future increment doesn't
+   *  need a second breaking change to `CallerContext`; nothing reads this field yet. */
   tenantId?: string;
+  /**
+   * WHO this invocation acts on behalf of — the caller's identity, as opposed to `accessToken`,
+   * which is a credential to act WITH (ADD-42 D-2/D-3; two fields, never merged: #44's audit
+   * record must always carry the principal and must never carry the credential).
+   *
+   * **Asserted by the host, never verified by Archstone.** Archstone does not parse, decode,
+   * split, normalize, or validate this value at any entry point, ever (ADD-42 D-1) — it is an
+   * opaque, deployer-chosen string, matched byte-for-byte against a policy's `allow`/`deny`
+   * entries and nothing more. Its trustworthiness is exactly the trustworthiness of the host's
+   * own authentication and no more: if the host reads a JWT's `sub` without verifying the
+   * signature against the issuer's JWKS, Archstone will faithfully authorize on an
+   * attacker-controlled string and #44 will faithfully record it. Archstone cannot detect this.
+   *
+   * Absent means ANONYMOUS, not denied (ADD-42 D-4) — there is no sentinel value. An absent
+   * principal simply satisfies no `allow` entry, so a capability that must not be invoked
+   * anonymously says so by declaring one. Supplying a principal does NOT satisfy
+   * `policies: [authenticated]`, which still requires `accessToken` (D-7).
+   *
+   * Usable in `${caller.principal}` interpolation with zero new mechanism, via the existing
+   * `resolveCaller()` pass below (ADD-42 D-10) — the common enterprise shape where a backend is
+   * reached with a service account that accepts a trusted identity header.
+   */
+  principal?: string;
 }
 
 export interface InvokeOptions {
   env?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
-  /** ADD-32: the end user this specific invocation acts on behalf of. Absent = no caller
-   *  (byte-for-byte today's behavior unless `tool.policies` includes `authenticated`, in which
-   *  case the call fails closed — see `invokeRest`). */
+  /** ADD-32: the end user this specific invocation acts on behalf of. `invokeRest` uses it for
+   *  `${caller.NAME}` placeholder substitution ONLY — it makes no authorization decision from
+   *  it, so an absent caller changes nothing here beyond leaving those placeholders unresolved
+   *  (which fails closed on its own, as a missing value rather than a refusal).
+   *
+   *  Whether a caller is REQUIRED — `policies: [authenticated]` — is decided upstream at the
+   *  one evaluation point (#43), not in this file. Do not look for that gate here. */
   caller?: CallerContext;
   /**
    * Security-hardening follow-up to ADD-32: a **deployer-level policy**, static for the whole
@@ -74,9 +108,11 @@ export interface InvokeOptions {
    * inside the binding author's own trusted process, not on the MCP boundary).
    *
    * It MUST NOT fire when `invokeRest` returns before any HTTP round-trip completes — no REST
-   * connector, an `authenticated`-policy gate failure, missing env/caller placeholder(s), a
-   * caller-influenced-baseUrl allowlist rejection, a missing required path parameter, or a
-   * `doFetch` exception/timeout (BR-4) — none of those ever produced a response to observe.
+   * connector, missing env/caller placeholder(s), a caller-influenced-baseUrl allowlist
+   * rejection, a missing required path parameter, or a `doFetch` exception/timeout (BR-4) —
+   * none of those ever produced a response to observe. The same guarantee holds for a policy
+   * refusal (#43), which short-circuits in the CALLER before `invokeRest` is entered at all, so
+   * this function is never reached and the hook cannot fire.
    *
    * `capabilityId` is `tool.id` — the unsanitized CDL id, never any MCP-sanitized advertised
    * tool name (BR-8). `data` is the exact same value that ends up in `InvokeResult.data`:
@@ -107,6 +143,40 @@ export interface InvokeOptions {
   // Return type is `void | Promise<void>` (not just `void`) so a caller may supply an async
   // callback (OQ-1) — invokeRest never awaits either variant; see fireOnResponse below.
   onResponse?: (info: { capabilityId: string; status: number; data: unknown; durationMs: number }) => void | Promise<void>;
+  /**
+   * Issue #44 / ADD-44: the `Execution` audit sink — one record per invocation ATTEMPT.
+   *
+   * **`invokeRest` never reads, calls, or branches on this field.** It rides this bag so that a
+   * deployer wires one options object (the same one they already pass `env`/`caller` in) and so
+   * that every shipped pass-through — `ExecuteOptions`, `serveStdio`'s `invoke`,
+   * `createHttpHandler`'s/`mcpHandler`'s `invoke` — forwards it with zero new plumbing. The
+   * record is built and emitted by the two AUDITED CONSUMERS, `@archstone/runtime`'s `callTool`
+   * and `@archstone/agent`'s `executeCapability` — the same two sites that call the policy
+   * evaluator, so a path that skips the gate also skips the record instead of emitting one that
+   * falsely implies a gate ran. Do not look for the emission here, and do not add one:
+   * `verifyTool` forwards this identical bag into `invokeRest`, so a sink read in this file
+   * would make "the contract prober emits nothing" unimplementable without a special case.
+   * (This file now does the same for `authenticated`, whose gate #43 moved out of it.)
+   *
+   * See `AuditSink` in `@archstone/emitter-support` for the fire-and-forget contract and for
+   * the statement that the trail is best-effort and lossy.
+   */
+  auditSink?: AuditSink;
+  /**
+   * #44: correlation ids, **passed through to the audit record exactly as the host supplied
+   * them** — never synthesized, defaulted, or derived, and never read by `invokeRest`. Absent
+   * means the key is absent from the record.
+   *
+   * **Scope trap, and it differs from `caller`'s.** On `serveStdio` a value set here is
+   * per-process and architecturally correct — one child process per conversation. On
+   * `createHttpHandler`/`mcpHandler` the handler rebuilds this bag per request as
+   * `{...invoke, caller: resolveCaller?.(request)}`: `caller` is overwritten and therefore
+   * fails loudly, but these two **survive the spread** and silently stamp every concurrent
+   * request with one session. There is no per-request correlation seam on the HTTP surface
+   * today and this increment does not invent one.
+   */
+  sessionId?: string;
+  workflowId?: string;
 }
 
 // Issue #39 (OQ-1/OQ-2/BR-6): fire onResponse synchronously but never await it. A thrown
@@ -254,7 +324,27 @@ function safeJson(text: string): unknown {
   }
 }
 
-/** Invoke a compiled capability against its REST backend. */
+/**
+ * Invoke a compiled capability against its REST backend.
+ *
+ * **This function performs NO AUTHORIZATION.** It is mechanical: connector presence → env/caller
+ * placeholder resolution → caller-influenced-`baseUrl` allowlist → required path params → fetch.
+ * It reads no `tool.policies`, branches on no `caller.principal`, and contains no allow/deny
+ * logic of any kind.
+ *
+ * That is deliberate and was previously otherwise: the `policies: [authenticated]` gate used to
+ * live here and was **moved** — not copied — to the one shared evaluation point in
+ * `@archstone/emitter-support` (#43 / ADD-43 D-4, ADD-42 D-8). Two enforcement sites is exactly
+ * the "one answer to where a policy is decided" this project set out to establish, and a check
+ * inside an HTTP adapter is invisible to every non-REST connector added later. Callers
+ * (`callTool`, `executeCapability`, `verifyTool`) evaluate policy BEFORE reaching this function.
+ *
+ * Consequence, named rather than hidden: a third party calling this exported function directly
+ * against an `authenticated` capability with no caller now **proceeds** to the backend where it
+ * previously failed closed. If you are re-adding a gate here because it looks missing — it is
+ * not missing, it moved. Add your check at your own call site, or call one of the three
+ * consumers above.
+ */
 export async function invokeRest(
   tool: IRTool,
   input: Record<string, unknown>,
@@ -268,17 +358,10 @@ export async function invokeRest(
     return { ok: false, status: 0, error: `capability '${tool.id}' has no REST connector` };
   }
 
-  // ADD-32 D-3: fail-closed BEFORE any env resolution, URL building, or network call — a
-  // missing caller credential on an `authenticated` capability is more actionable than (and
-  // must not be masked by) a downstream missing-env/missing-baseUrl error. `accessToken` is
-  // "present" once it's anything other than undefined — an explicit "" counts (§3/R-6).
-  if (tool.policies.includes("authenticated") && opts.caller?.accessToken === undefined) {
-    return {
-      ok: false,
-      status: 0,
-      error: `capability '${tool.id}' requires policies:[authenticated] — no caller credential (accessToken) provided on invoke`,
-    };
-  }
+  // (#43 / ADD-43 D-4) The ADD-32 `policies: [authenticated]` gate that used to sit here has
+  // MOVED to `evaluatePolicy` in @archstone/emitter-support — see this function's doc comment.
+  // Its predicate (`caller?.accessToken === undefined`, an explicit "" counting as present) and
+  // its error text are preserved byte-for-byte there.
 
   const rest = connector.rest;
 

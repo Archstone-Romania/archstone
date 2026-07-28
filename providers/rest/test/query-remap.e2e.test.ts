@@ -10,7 +10,7 @@ import { invokeRest, type FetchLike } from "../src/index";
 // embedding them in the path template.
 //
 // Originally this test loaded ArtVinci's real, production-verified manifest from
-// examples/manifests/artvinci. That manifest was retired from ai-gateway as part of #35
+// examples/manifests/artvinci. That manifest was retired from this repository as part of #35
 // (its real contract now lives solely in artvinci-website's own repository — see
 // Issue #34's manifest-ownership pattern). This test now loads a small, wholly fictional
 // fixture manifest (test/fixtures/query-remap/) that exercises the exact same

@@ -4,8 +4,8 @@
 // Pure: model -> IR. No MCP SDK, no HTTP. Assumes the model passed the semantic
 // pass (validateSemantics); it builds what it can regardless.
 
-import type { LoadResult, CapabilityDoc } from "@archstone/schema";
-import { SEMANTIC_TYPES, LIFECYCLE_STATES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRFieldMapping, type IRContract, type Lifecycle, type SemanticType } from "./ir";
+import type { LoadResult, CapabilityDoc, PolicyDoc } from "@archstone/schema";
+import { SEMANTIC_TYPES, LIFECYCLE_STATES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRFieldMapping, type IRContract, type IRPolicyRule, type Lifecycle, type SemanticType } from "./ir";
 import { domainOf, resolveResourceName, resourceIndex } from "./resolve";
 
 const CONNECTOR_TYPES = new Set<IRConnector["type"]>(["rest", "graphql", "grpc", "sql", "soap"]);
@@ -120,6 +120,48 @@ function lowerContract(raw: Record<string, unknown>): IRContract | undefined {
   return { fingerprint: raw.fingerprint, probeFixture: probe.fixture };
 }
 
+/**
+ * Does a Policy document's scope land on this capability? (#43 / ADD-43 D-1.)
+ *
+ * Exported and shared with `validate.ts` deliberately: the semantic pass's disjoint-`allow`
+ * warning (BR-46) has to reason about the same attachment set the lowering below produces, and
+ * two independent copies of "which policies apply here" is exactly the drift #43 exists to
+ * remove. Resolution only — it decides nothing about whether a call is permitted.
+ *
+ * A policy with no `scope` matches nothing (the semantic pass reports it as an error; here it
+ * is the safe floor this file's header promises — "builds what it can regardless").
+ */
+export function policyScopesCapability(
+  meta: PolicyDoc["metadata"],
+  capabilityId: string,
+  provider: string,
+): boolean {
+  if (meta.scope === "capability") return meta.capabilityId !== undefined && meta.capabilityId === capabilityId;
+  if (meta.scope === "provider") return meta.provider !== undefined && meta.provider === provider;
+  return false;
+}
+
+/**
+ * Lower every policy document scoped onto one capability into neutral `IRPolicyRule`s.
+ *
+ * Copies `allow`/`deny` VERBATIM and evaluates nothing (BR-7). `rateLimit` and `constraints`
+ * are not copied — by explicit field selection rather than by a delete, the same "no unchecked
+ * cast" discipline `lowerConnector` uses. That is ADD-43 D-3's strip: an empty `constraints: {}`
+ * is legal to author and simply never reaches the IR, so the evaluator's fail-closed
+ * unknown-key branch needs no exception for it (a non-empty one never compiles at all, D-2).
+ */
+function lowerPolicyRules(docs: PolicyDoc[], capabilityId: string, provider: string): IRPolicyRule[] | undefined {
+  const rules: IRPolicyRule[] = [];
+  for (const p of docs) {
+    if (!policyScopesCapability(p.metadata, capabilityId, provider)) continue;
+    const rule: IRPolicyRule = { id: p.metadata.id };
+    if (Array.isArray(p.spec?.allow)) rule.allow = [...p.spec.allow];
+    if (Array.isArray(p.spec?.deny)) rule.deny = [...p.spec.deny];
+    rules.push(rule);
+  }
+  return rules.length > 0 ? rules : undefined;
+}
+
 /** Read a capability's authored `lifecycle`, defaulting to "stable" when absent or not a
  *  recognized state (same defensive-default style as `raw.required`, ADD-24 D-4). */
 function lowerLifecycle(raw: unknown): Lifecycle {
@@ -164,6 +206,8 @@ export function compile(model: LoadResult): IR {
       input: lowerFields(c.input, canon),
       output: lowerFields(c.output, canon),
     };
+    const policyRules = lowerPolicyRules(model.policyDocs ?? [], c.id, tool.provider);
+    if (policyRules) tool.policyRules = policyRules;
     const connector = connectorByCap.get(c.id);
     if (connector) tool.connector = connector;
     const rawResponse = responseByCap.get(c.id);

@@ -107,12 +107,39 @@ export interface IRContract {
   probeFixture: string; // path to the golden fixture, relative to the manifest dir
 }
 
+/**
+ * One resolved Policy document (`*.policy.yaml`), lowered onto a tool (#43 / ADD-43 D-1).
+ *
+ * SHAPE ONLY — no evaluation lives in this file, and this type carries NO identity semantics:
+ * no principal, no claims, no auth scheme, no verification config (ADD-42 §2's instruction to
+ * #43, BR-7). The compiler decides *which* policies attach to *which* tools; whether a given
+ * call is permitted is decided exactly once, in @archstone/emitter-support's evaluator.
+ *
+ * There is deliberately **no `constraints` member**: a non-empty `spec.constraints` is a
+ * semantic error at authoring time (ADD-43 D-2) and an empty one is stripped at lowering
+ * (D-3), so `constraints` reaches the IR by no path whatsoever. That is what lets the
+ * evaluator's "deny anything I cannot fully evaluate" rule need no exception clause.
+ */
+export interface IRPolicyRule {
+  id: string; // the policy document's metadata.id
+  allow?: string[]; // principals permitted to invoke — exact, byte-for-byte matches (BR-9)
+  deny?: string[]; // principals refused outright; deny always wins over allow (BR-15)
+}
+
 export interface IRTool {
   id: string; // e.g. tourism.search
   description: string;
   effect: "read" | "write" | "irreversible";
   provider: string;
+  /** The capability's authored CDL policy TOKENS (`authenticated`, `tenant-scoped`, …) — a
+   *  closed enum in cdl.schema.json. NOT policy documents: see `policyRules` below, and
+   *  ADD-43 D-1 for why the two vocabularies carry deliberately different field names. */
   policies: string[];
+  /** Resolved Policy DOCUMENTS scoped onto this capability (ADD-43 D-1). Absent when none
+   *  resolved — which is every capability shipping today, so nothing changes meaning (BR-14).
+   *  Inline per tool rather than a normalized top-level registry, so the evaluator stays a pure
+   *  function of `(tool, caller)` with no lookup and no second argument. */
+  policyRules?: IRPolicyRule[];
   lifecycle: Lifecycle; // always present, default "stable" (ADD-24 D-4) — never MCP-specific
   input: IRField[];
   output: IRField[];

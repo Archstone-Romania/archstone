@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fingerprintShape, type IRTool, type IRResourceRegistry } from "@archstone/compiler";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
+import { evaluatePolicy } from "@archstone/emitter-support";
 import { applyResponseMapping } from "./mapping";
 // ADD-24: HealthStatus's canonical home moved to @archstone/emitter-support (registry.ts's
 // exposure composition needs it, and runtime depends on emitter-support, never the reverse) —
@@ -22,6 +23,33 @@ export interface ToolVerification {
   capabilityId: string;
   status: HealthStatus;
   detail: string;
+  /**
+   * #43 (ADD-43 D-14): set iff this verification was refused by the policy evaluation point
+   * before any request was issued — i.e. the probe observed **nothing at all** about the
+   * backend's contract.
+   *
+   * Why an additive optional field rather than a fourth `HealthStatus` value: `HealthStatus` is
+   * a CLOSED set already consumed by ADD-24's `combineExposure` and by ADD-20's published
+   * `archstone verify --json` shape, so a `"denied"` member would take a published CLI contract
+   * and the exposure severity ordering with it. `red` stays correct for the OPERATOR-facing
+   * report — they asked "is this binding healthy?" and the honest answer is "I could not
+   * establish that" (D-7).
+   *
+   * What this flag exists to stop is that `red` travelling ONWARD into an AGENT-facing surface.
+   * `readHealthSnapshot` (registry.ts) skips any entry carrying it, so the tool ends up with no
+   * health entry at all, `combineExposure` leaves its exposure untouched, and no hint is
+   * appended to its advertised description. Without it, the documented ADD-24 D-8 workflow
+   * (`archstone verify --json` > `.archstone-health.json`, then serve) would append
+   * `"binding health: red — the last contract verification failed"` at the highest severity to
+   * a policy-gated tool's description, for EVERY caller including permitted ones — a statement
+   * that is factually false (no verification occurred) and that makes policy affect listing,
+   * which BR-36 forbids. Because the CLI supplies no caller, that is the DEFAULT outcome for
+   * any `allow`-bearing capability, not a corner case.
+   *
+   * The failure is silent: nothing throws, no exit code changes, an agent just reads a false
+   * warning. `runtime/test/lifecycle.integration.test.ts` asserts it.
+   */
+  policyDenied?: true;
 }
 
 export interface GoldenFixture {
@@ -48,6 +76,28 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
 
   const fixture = readFixture(dir, contract.probeFixture);
   if (!fixture) return { ...base, status: "red", detail: `fixture not found or unreadable: ${contract.probeFixture}` };
+
+  // #43 (ADD-43 D-6): the contract prober is the THIRD invocation consumer, and it must route
+  // through the same evaluation point as `callTool`/`executeCapability`. A probe makes a real
+  // call with real credentials and is `authenticated`-gated today only because that gate lives
+  // inside `invokeRest`; moving the gate (D-4) would silently un-gate `archstone verify` and the
+  // published `runVerify()` unless this call exists. Placed immediately before `invokeRest`, so
+  // "no contract" / "fixture not found" keep reporting themselves first.
+  const decision = evaluatePolicy(tool, {
+    principal: opts?.caller?.principal,
+    credentialPresent: opts?.caller?.accessToken !== undefined,
+  });
+  if (!decision.allowed) {
+    // `red`, with a detail textually distinguishable from the `live request failed:` prefix
+    // below — because no live request was made (BR-37). `policyDenied` keeps this out of the
+    // health snapshot entirely (D-14, see the field's doc comment).
+    return {
+      ...base,
+      status: "red",
+      detail: `policy denied before any request was made: ${decision.denial.message}`,
+      policyDenied: true,
+    };
+  }
 
   const result = await invokeRest(tool, fixture.request, opts);
   if (!result.ok) return { ...base, status: "red", detail: `live request failed: ${result.error ?? `status ${result.status}`}` };

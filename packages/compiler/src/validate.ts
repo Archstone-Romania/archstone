@@ -5,9 +5,28 @@
 // in #2, so this pass is strictly CROSS-FILE: does the provider resolve? do
 // declared IDs match files? do bindings resolve? Errors block; warnings inform.
 
-import type { LoadResult, CapabilityDoc } from "@archstone/schema";
+import type { LoadResult, CapabilityDoc, PolicyDoc } from "@archstone/schema";
 import { domainOf, referencedResourceName, resolveResourceName, resourceIndex } from "./resolve";
 import { parsePath } from "./path";
+import { policyScopesCapability } from "./compile";
+
+/**
+ * CDL policy tokens (`cdl.schema.json`'s closed enum) that Archstone does NOT enforce in this
+ * version. `authenticated` is deliberately absent — it is enforced, at the one evaluation point
+ * (#43 / ADD-43 D-4), so it must not be warned about.
+ *
+ * BR-40: each remaining token gets exactly one warning per capability that declares it, so a
+ * `policies:` list is never mistaken for a list of shipped guarantees by a compliance reviewer
+ * reading the manifest as evidence. The list shrinks as tokens gain enforcement (`rate-limited`
+ * is #45's); there is deliberately no suppression flag (AC OQ-H — a mechanism whose only
+ * purpose is to hide a true statement).
+ */
+const UNENFORCED_POLICY_TOKENS: Readonly<Record<string, string>> = {
+  "rate-limited": "enforcing it needs invocation counting and therefore state — tracked as issue #45",
+  "tenant-scoped": "which tenant's data a call may touch is a separate axis from identity, and is deliberately not implemented yet",
+  "human-approval": "no approval mechanism exists",
+  "consent-required": "no consent mechanism exists",
+};
 
 export type Severity = "error" | "warning";
 
@@ -235,6 +254,214 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
     if (targets.length !== 1) {
       const detail = targets.length === 0 ? `no output field references resource '${canonical}'` : `${targets.length} output fields reference resource '${canonical}' (need exactly one)`;
       diags.push({ severity: "error", code: "response-output-mismatch", message: `${at}: ${detail}` });
+    }
+  }
+
+  // 6. Policy documents (#43 / ADD-43 §8.4). Every policy diagnostic lives here — the compiler
+  // resolves scope and lowers verbatim, this pass decides what is authorable at all. Errors
+  // block `apply`/`build`/`serve`; warnings inform and never block. Nothing here evaluates a
+  // policy against a caller: that is the runtime evaluator's single job (BR-7).
+  const policies = model.policyDocs ?? [];
+
+  // BR-4 — two documents sharing metadata.id. Mirrors the shipped `duplicate-capability` rule
+  // above rather than inventing a new severity.
+  const policyById = new Map<string, PolicyDoc>();
+  for (const p of policies) {
+    const existing = policyById.get(p.metadata.id);
+    if (existing) {
+      diags.push({
+        severity: "error",
+        code: "duplicate-policy",
+        message: `policy '${p.metadata.id}' is defined in more than one file (${existing.file}, ${p.file})`,
+      });
+    } else {
+      policyById.set(p.metadata.id, p);
+    }
+  }
+
+  for (const p of policies) {
+    const at = `policy '${p.metadata.id}' (${p.file})`;
+    const spec = p.spec ?? {};
+
+    // BR-5 — the scope must resolve. `policy.schema.json` marks scope/provider/capabilityId all
+    // optional (metadata requires only id/name), so a scope-less policy is shape-valid and
+    // semantically meaningless. Refusing it is what prevents the failure this rule is named for:
+    // a policy silently applied to nothing while its author believed it was enforced.
+    if (p.metadata.scope === undefined) {
+      diags.push({
+        severity: "error",
+        code: "policy-scope-unresolvable",
+        message: `${at} declares no metadata.scope, so it applies to nothing — set scope: capability (with capabilityId) or scope: provider (with provider)`,
+      });
+    } else if (p.metadata.scope === "capability") {
+      const cid = p.metadata.capabilityId;
+      if (!cid) {
+        diags.push({
+          severity: "error",
+          code: "policy-scope-unresolvable",
+          message: `${at} declares scope: capability but no metadata.capabilityId, so it applies to nothing`,
+        });
+      } else {
+        const target = byId.get(cid);
+        if (!target) {
+          diags.push({
+            severity: "error",
+            code: "policy-scope-unresolvable",
+            message: `${at} scopes capability '${cid}', which no *.capability.yaml defines`,
+          });
+        } else if (p.metadata.provider !== undefined && target.capability.provider !== p.metadata.provider) {
+          // EC-3: a capability-scoped policy may carry a redundant `provider`. When the two
+          // agree it is ignored; when they disagree the author's intent is genuinely unknown,
+          // so this is an error rather than a silent precedence rule.
+          diags.push({
+            severity: "error",
+            code: "policy-scope-conflict",
+            message: `${at} scopes capability '${cid}' but also declares provider '${p.metadata.provider}', while that capability's provider is '${target.capability.provider ?? "?"}' — remove the provider or correct it`,
+          });
+        }
+      }
+    } else {
+      const prov = p.metadata.provider;
+      if (!prov) {
+        diags.push({
+          severity: "error",
+          code: "policy-scope-unresolvable",
+          message: `${at} declares scope: provider but no metadata.provider, so it applies to nothing`,
+        });
+      } else if (caps && !providers.has(prov)) {
+        diags.push({
+          severity: "error",
+          code: "policy-scope-unresolvable",
+          message: `${at} scopes provider '${prov}', which is not listed in capabilities.yaml`,
+        });
+      }
+    }
+
+    // BR-10/BR-11 — the pattern grammar is exact, byte-for-byte string equality (BR-9), so two
+    // entry shapes must be refused rather than silently matching nothing.
+    for (const [key, list] of [
+      ["allow", spec.allow],
+      ["deny", spec.deny],
+    ] as const) {
+      for (const entry of list ?? []) {
+        if (entry === "") {
+          diags.push({
+            severity: "error",
+            code: "policy-empty-entry",
+            message: `${at} has an empty-string entry in ${key} — an empty principal is always an authoring accident (policy.schema.json sets no minLength)`,
+          });
+        } else if (entry.includes("*")) {
+          // The reason this is an ERROR and not a warning: under exact matching, `deny: ["*"]`
+          // reads to a human reviewer as "deny everyone" and would in fact deny NO ONE — a
+          // silent fail-open in the one list where intent is most safety-critical. Refusing the
+          // character also keeps `*` unclaimed, so a future wildcard grammar is a pure widening.
+          diags.push({
+            severity: "error",
+            code: "policy-wildcard-entry",
+            message: `${at} has ${key} entry '${entry}' containing '*' — '*' is not a wildcard in this version; principal matching is exact, case-sensitive string equality`,
+          });
+        }
+      }
+    }
+
+    // BR-22 — `rateLimit` needs a counter and therefore state, which would break the
+    // evaluator's purity. "Excluded from this slice" must mean REFUSED, not ignored: silently
+    // accepting the document would ship the very defect #43 opens with, a manifest advertising
+    // a control that does not exist.
+    if (spec.rateLimit !== undefined) {
+      diags.push({
+        severity: "error",
+        code: "policy-ratelimit-unsupported",
+        message: `${at} declares spec.rateLimit, which is not enforced in this version — rate limiting needs invocation state and is tracked as issue #45; remove it or the manifest advertises a control that does not exist`,
+      });
+    }
+
+    // BR-23 — a NON-EMPTY `constraints` is refused. `policy.schema.json` declares it
+    // `additionalProperties: true` with one illustrative key and no grammar whatsoever: nothing
+    // states which input field a constraint bounds, with what operator, in what units, or how
+    // two compose. Implementing it is not writing an evaluator, it is inventing a permanent
+    // comparison language (Rule #11) as a side-task of a plumbing increment. An EMPTY
+    // `constraints: {}` is accepted and simply never lowered (ADD-43 D-3).
+    if (spec.constraints !== undefined && Object.keys(spec.constraints).length > 0) {
+      diags.push({
+        severity: "error",
+        code: "policy-constraints-unsupported",
+        message: `${at} declares spec.constraints, which are not evaluated in this version — no constraint grammar exists yet; remove them or the manifest advertises a control that does not exist`,
+      });
+    }
+
+    const allow = spec.allow ?? [];
+    const deny = spec.deny ?? [];
+
+    // EC-5 — a rule-less policy is evaluable and imposes nothing, but is almost certainly
+    // unfinished authoring. Warning, not error: it is legal.
+    if (allow.length === 0 && deny.length === 0 && spec.rateLimit === undefined && Object.keys(spec.constraints ?? {}).length === 0) {
+      diags.push({
+        severity: "warning",
+        code: "policy-without-rules",
+        message: `${at} declares no allow and no deny — it imposes nothing`,
+      });
+    }
+
+    // BR-17 — the footgun this warning exists for: an author writes `deny: [...]` and believes
+    // the capability is now protected. An ABSENT principal matches no deny entry (ADD-42 D-4),
+    // so an anonymous caller proceeds. The rule is correct; the warning is what stops it being
+    // a surprise discovered in production.
+    if (deny.length > 0 && allow.length === 0) {
+      diags.push({
+        severity: "warning",
+        code: "policy-deny-only",
+        message: `${at} declares deny but no allow — an anonymous caller (no principal) matches no deny entry and is therefore ALLOWED; add an allow list to require an identified caller`,
+      });
+    }
+
+    // EC-7 — the same principal in both lists of one policy. Deny wins (BR-15), so the
+    // behaviour is defined; it is still almost certainly an authoring error.
+    const contradictions = allow.filter((a) => deny.includes(a));
+    if (contradictions.length > 0) {
+      diags.push({
+        severity: "warning",
+        code: "policy-allow-deny-contradiction",
+        message: `${at} lists ${contradictions.map((c) => `'${c}'`).join(", ")} in both allow and deny — deny wins, so ${contradictions.length === 1 ? "it is" : "they are"} denied`,
+      });
+    }
+  }
+
+  // BR-46 / ADD-43 D-13 — under intersection semantics, two policies whose non-empty `allow`
+  // sets are disjoint make the capability invocable by NOBODY. That is legal and fail-closed
+  // (a deployer may genuinely want it during a lockdown), which is why this warns rather than
+  // erroring — but without it the author learns of it from a production denial rather than
+  // from `apply`.
+  for (const d of docs) {
+    const scoped = policies.filter(
+      (p) => policyScopesCapability(p.metadata, d.capability.id, d.capability.provider ?? "") && (p.spec?.allow?.length ?? 0) > 0,
+    );
+    if (scoped.length < 2) continue;
+    const intersection = scoped
+      .map((p) => p.spec.allow ?? [])
+      .reduce((acc, list) => acc.filter((entry) => list.includes(entry)));
+    if (intersection.length === 0) {
+      diags.push({
+        severity: "warning",
+        code: "policy-disjoint-allow",
+        message: `capability '${d.capability.id}' resolves policies ${scoped.map((p) => `'${p.metadata.id}'`).join(", ")} whose allow sets have no principal in common — every policy's allow must be satisfied (intersection, not union), so this capability is invocable by nobody`,
+      });
+    }
+  }
+
+  // 7. BR-40 — declared-but-unenforced CDL policy tokens. The minimum honest fix for #43's own
+  // opening complaint, generalized: after this increment and #45, three of the five tokens
+  // still have no enforcement and no issue. A warning costs no new primitive (Rule #10) and
+  // stops `policies:` reading as a list of shipped guarantees.
+  for (const d of docs) {
+    for (const token of d.capability.policies ?? []) {
+      const why = UNENFORCED_POLICY_TOKENS[token];
+      if (!why) continue;
+      diags.push({
+        severity: "warning",
+        code: "unenforced-policy-token",
+        message: `capability '${d.capability.id}' (${d.file}) declares policies:[${token}], which is not enforced in this version — ${why}`,
+      });
     }
   }
 

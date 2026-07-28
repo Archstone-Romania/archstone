@@ -35,6 +35,15 @@ const HEALTH_STATUSES: ReadonlySet<string> = new Set(["green", "yellow", "red"])
  * (ADD-20) into a capabilityId -> HealthStatus map. Fail-open (ADD-24 D-9): a missing file, a
  * parse error, or a malformed/unexpected shape all return `undefined` — the caller then
  * proceeds with lifecycle-only exposure, never mistaking "no snapshot" for "known bad".
+ *
+ * #43 (ADD-43 D-14): an entry marked `policyDenied` is SKIPPED. A refusal that happened before
+ * the call is not a health fact — no request was issued, so nothing about the backend's contract
+ * was observed. Left in, it would reach `combineExposure` as a `red` and append
+ * `"binding health: red — the last contract verification failed"` to the tool's agent-facing
+ * description at the highest severity: a statement that never happened, shown to every caller
+ * including permitted ones, making policy affect listing (which BR-36 forbids). Skipping leaves
+ * the tool with NO health entry, which is exactly ADD-24 D-9's ratified posture — absent health
+ * must never be manufactured into known-bad.
  */
 function readHealthSnapshot(dir: string): Map<string, HealthStatus> | undefined {
   let parsed: unknown;
@@ -50,6 +59,10 @@ function readHealthSnapshot(dir: string): Map<string, HealthStatus> | undefined 
   const map = new Map<string, HealthStatus>();
   for (const r of results) {
     if (!r || typeof r !== "object") continue;
+    // ADD-43 D-14: a policy denial is not a health reading — drop it rather than let it become
+    // an agent-facing "the last contract verification failed" hint for a verification that
+    // never ran. See this function's doc comment.
+    if ((r as { policyDenied?: unknown }).policyDenied === true) continue;
     const capabilityId = (r as { capabilityId?: unknown }).capabilityId;
     const status = (r as { status?: unknown }).status;
     if (typeof capabilityId === "string" && typeof status === "string" && HEALTH_STATUSES.has(status)) {

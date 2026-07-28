@@ -101,27 +101,56 @@ describe("invokeRest", () => {
   });
 });
 
+// #43 (ADD-43 D-4 / AC BR-20, EC-14) — these two tests previously asserted that `invokeRest`
+// ITSELF refused an `authenticated` capability with no caller. That gate has MOVED to the one
+// shared evaluation point in @archstone/emitter-support: `invokeRest` now performs no
+// authorization at all, and a third party calling it directly proceeds where it used to fail
+// closed. That is a named, ratified, deliberate behaviour change, so these are the two
+// assertions AC BR-44 exempts from "every existing test must pass unmodified" — rewritten to
+// pin the NEW contract rather than deleted, because "this layer decides nothing" is exactly the
+// property a future reader will be tempted to undo by re-adding the gate here.
+//
+// The `authenticated` enforcement these used to prove is not lost: it is asserted at all three
+// consumers (runtime/test/mcp.test.ts, runtime/test/http.test.ts, agent/test/mcp.test.ts,
+// agent/test/execute.test.ts) and unit-tested in emitter-support/test/policy.test.ts.
 describe("invokeRest — ADD-32 caller credential propagation", () => {
-  it("fails closed with no HTTP call attempted when an authenticated capability has no caller", async () => {
+  it("performs NO authorization: an authenticated capability with no caller is not refused here (the gate moved, #43 D-4)", async () => {
+    // The binding below happens to reference ${caller.accessToken}, so this specific call still
+    // fails closed — but via the placeholder-resolution path, NOT an authorization decision.
+    // The distinction is the whole point: the message proves which mechanism refused.
     const fetchImpl: FetchLike = async () => {
-      throw new Error("must not be called — the gate must short-circuit before any request");
+      throw new Error("must not be called — the missing placeholder must short-circuit first");
     };
     const r = await invokeRest(authedSearch, {}, { env: { BOOKING_API_URL: "https://api.example.com" }, fetchImpl });
     expect(r.ok).toBe(false);
-    expect(r.status).toBe(0);
-    expect(r.error).toMatch(/requires policies:\[authenticated\]/);
-    expect(r.error).toContain("tourism.search");
+    expect(r.error).toMatch(/missing caller credential\(s\): accessToken/);
+    expect(r.error).not.toMatch(/requires policies:\[authenticated\]/);
   });
 
-  it("fires the gate before env resolution — a missing env var never masks the missing-caller message", async () => {
-    // BOOKING_API_URL deliberately unset too — the caller-gate message must win.
+  it("performs NO authorization: an authenticated capability whose binding needs no caller placeholder reaches the backend", async () => {
+    // The sharp edge of EC-14, isolated: with nothing forcing a caller placeholder, there is
+    // now NOTHING in this layer between an `authenticated` capability and its backend. If this
+    // test ever fails, someone re-added a policy decision to the HTTP adapter — read
+    // `invokeRest`'s doc comment before "fixing" it.
+    let called = false;
+    const fetchImpl: FetchLike = async () => {
+      called = true;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const noPlaceholder: IRTool = { ...search, policies: ["authenticated"] };
+    const r = await invokeRest(noPlaceholder, {}, { env: { BOOKING_API_URL: "https://api.example.com" }, fetchImpl });
+    expect(r.ok).toBe(true);
+    expect(called).toBe(true);
+  });
+
+  it("does not let a policy decision mask a missing env var — env resolution now reports itself", async () => {
     const fetchImpl: FetchLike = async () => {
       throw new Error("must not be called");
     };
     const r = await invokeRest(authedSearch, {}, { env: {}, fetchImpl });
     expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/requires policies:\[authenticated\]/);
-    expect(r.error).not.toMatch(/missing env var/);
+    expect(r.error).toMatch(/missing env var/);
+    expect(r.error).not.toMatch(/requires policies:\[authenticated\]/);
   });
 
   it("attaches ${caller.accessToken} to the outbound request when supplied", async () => {

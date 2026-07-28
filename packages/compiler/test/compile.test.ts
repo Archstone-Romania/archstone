@@ -13,6 +13,7 @@ function modelWith(connector: Record<string, unknown>): LoadResult {
     capabilityDocs: [{ file: "x.capability.yaml", capability: { id: "svc.do", description: "d", effect: "read" } }],
     bindings: [{ file: "svc.do.binding.yaml", binding: { capabilityId: "svc.do", connector } }],
     resourceDocs: [],
+    policyDocs: [],
     issues: [],
   };
 }
@@ -26,6 +27,7 @@ function modelWithCapability(capability: Record<string, unknown>): LoadResult {
     capabilityDocs: [{ file: "x.capability.yaml", capability: { id: "svc.do", description: "d", effect: "read", ...capability } }],
     bindings: [],
     resourceDocs: [],
+    policyDocs: [],
     issues: [],
   };
 }

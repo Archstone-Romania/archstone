@@ -47,6 +47,20 @@ describe("emitter-support — no MCP SDK / node:fs / node:path reachable from sr
     }
     expect(violations).toEqual([]);
   });
+
+  // S-US2.6 / ADD-42 D-5 — the evaluator (#43) lives here and decides on a caller's identity,
+  // which is exactly the pressure that would drag `providers/rest` in. It must not: the
+  // principal arrives as a bare `string | undefined` on a small structural object, never as a
+  // `CallerContext`. If this ever fails, the shared substrate has started knowing about HTTP.
+  it("no source file imports @archstone/provider-rest (the evaluator takes a bare principal)", () => {
+    const violations: { file: string; spec: string }[] = [];
+    for (const file of walk(src)) {
+      for (const spec of collectImports(file)) {
+        if (/^@archstone\/provider-rest/.test(spec)) violations.push({ file: relative(file), spec });
+      }
+    }
+    expect(violations).toEqual([]);
+  });
 });
 
 function relative(file: string): string {

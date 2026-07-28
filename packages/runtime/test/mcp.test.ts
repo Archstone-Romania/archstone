@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Registry } from "@archstone/emitter-support";
 import { buildRegistry } from "../src/registry";
 import { toolDefinitions, callTool, createMcpServer } from "../src/mcp";
 import type { FetchLike, InvokeOptions } from "@archstone/provider-rest";
@@ -202,6 +203,47 @@ describe("#19 ADD-19 Rev 2 R2.2/R2.7 step 4 — a real SDK Client survives a VIO
         error: "contract_violation",
         capability: "tourism.search",
         missing: ["pricePerNight"],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+// #43 (S-US3.2 / BR-26): `policy_denied` follows ADD-19 Rev 2 D-3′/D-6 VERBATIM, so the same
+// client-crash property is re-PROVEN here rather than assumed. The reference SDK Client
+// validates `structuredContent` against the advertised `outputSchema` unconditionally — not
+// gated on `isError` — so a third `_meta` mechanism that quietly grew a `structuredContent`
+// would reintroduce the exact failure ADD-19 Rev 1 shipped and had to withdraw.
+describe("#43 — a real SDK Client survives a policy denial (S-US3.2)", () => {
+  it("does not throw, and the structured refusal survives in result._meta", async () => {
+    const base = buildRegistry(tourism).registry!.ir;
+    // tourism.search declares an outputSchema (collection Stay) — that is what arms the
+    // client-side validator. Attach a policy that denies the (caller-less) invocation.
+    const ir = JSON.parse(JSON.stringify(base)) as typeof base;
+    ir.tools[0].policyRules = [{ id: "nobody", allow: ["user:alice"] }];
+
+    const fetchImpl: FetchLike = () => {
+      throw new Error("must not be called — denied before any connector work");
+    };
+    const server = createMcpServer(new Registry(ir), { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const { tools } = await client.listTools(); // caches the outputSchema validator
+      expect(tools.map((t) => t.name)).toContain("tourism_search");
+
+      const result = await client.callTool({ name: "tourism_search", arguments: { destination: "Nice" } });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(result._meta?.["dev.archstone/policy_denied"]).toEqual({
+        error: "policy_denied",
+        capability: "tourism.search",
+        reason: "principal_not_allowed",
       });
     } finally {
       await client.close();

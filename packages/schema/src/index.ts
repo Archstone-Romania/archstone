@@ -24,6 +24,8 @@ interface Validators {
   capability: ValidateFunction;
   binding: ValidateFunction;
   resource: ValidateFunction;
+  policy: ValidateFunction;
+  execution: ValidateFunction;
 }
 
 let validators: Validators | undefined;
@@ -54,9 +56,47 @@ function getValidators(): Validators {
   ajv.addSchema(readSchema("contract.schema.json")); // referenced by binding.schema.json
   const binding: ValidateFunction = ajv.compile(readSchema("binding.schema.json"));
   const resource: ValidateFunction = ajv.compile(readSchema("resource.schema.json"));
+  // #43 / ADD-43 §8.1: policy.schema.json joins the compiled set UNMODIFIED (BR-3). Every
+  // additional policy requirement is cross-file (does `capabilityId` resolve? is `*` present in
+  // an entry?) and therefore inexpressible in JSON Schema — those live in the semantic pass.
+  const policy: ValidateFunction = ajv.compile(readSchema("policy.schema.json"));
+  // #44: execution.schema.json joins the compiled set the way policy.schema.json did in #43.
+  // Unlike every other schema here it validates nothing on disk — an `Execution` record is
+  // MACHINE-EMITTED at invocation time, never authored — so it is reached through
+  // `validateExecution` below rather than through `load()`.
+  const execution: ValidateFunction = ajv.compile(readSchema("execution.schema.json"));
 
-  validators = { capabilities, capability, binding, resource };
+  validators = { capabilities, capability, binding, resource, policy, execution };
   return validators;
+}
+
+export interface ExecutionValidation {
+  ok: boolean;
+  /** Human-readable, semicolon-joined ajv errors; `""` when `ok`. */
+  errors: string;
+}
+
+/**
+ * Validate one emitted `Execution` audit record against the shipped `execution.schema.json`
+ * (#44). The record's producers live in `@archstone/emitter-support` and cannot call this —
+ * that package is deliberately fs-free and this one reads schema files from disk — so this is
+ * the seam a consumer (and Archstone's own test suite) uses to check the emitter against the
+ * published contract rather than against a hand-written object literal.
+ *
+ * The schema is `additionalProperties: false` at all four levels, so this also proves no
+ * undeclared key was written, and `status.denialReason` carries a five-member `enum`, so free
+ * text is rejected here rather than only by a TypeScript union.
+ *
+ * **Known limitation, stated rather than assumed:** this loader registers `date-time` (and
+ * `uri`/`date`/`email`) as always-true formats, because authoring-time documents legitimately
+ * carry `${ENV}` placeholders where a format would otherwise apply. An `Execution` record has
+ * no placeholders, so `metadata.startedAt`/`completedAt` are shape-checked as strings here and
+ * their RFC-3339 well-formedness is asserted by the emitter's own tests, not by this call.
+ */
+export function validateExecution(record: unknown): ExecutionValidation {
+  const validate = getValidators().execution;
+  const ok = validate(record) as boolean;
+  return { ok, errors: ok ? "" : formatErrors(validate.errors) };
 }
 
 export interface CapabilitiesFile {
@@ -101,6 +141,38 @@ export interface ResourceDoc {
   };
 }
 
+/**
+ * A Policy document (`*.policy.yaml`, `kind: Policy`) — #43 / ADD-43 §8.1.
+ *
+ * Shape only: `metadata.scope`/`provider`/`capabilityId` are all optional in
+ * `policy.schema.json`, so a scope-less policy is shape-valid and semantically meaningless.
+ * Resolving the scope (and refusing what this version cannot evaluate) is the semantic pass's
+ * job, exactly as with `*.resource.yaml` names.
+ *
+ * NOT the same vocabulary as a capability's `policies: [authenticated, …]` CDL token list
+ * (AC §0.1 / BR-38): a policy document cannot express `authenticated`, and `spec.rateLimit`
+ * is not the `rate-limited` token.
+ */
+export interface PolicyDoc {
+  file: string;
+  apiVersion: string;
+  kind: string;
+  metadata: {
+    id: string;
+    name: string;
+    description?: string;
+    provider?: string;
+    scope?: "provider" | "capability";
+    capabilityId?: string;
+  };
+  spec: {
+    allow?: string[];
+    deny?: string[];
+    rateLimit?: Record<string, unknown>; // refused at authoring time (BR-22 → #45)
+    constraints?: Record<string, unknown>; // non-empty refused (BR-23); empty stripped (D-3)
+  };
+}
+
 export interface LoadIssue {
   file: string;
   message: string;
@@ -113,6 +185,7 @@ export interface LoadResult {
   capabilityDocs: CapabilityDoc[];
   bindings: BindingDoc[];
   resourceDocs: ResourceDoc[];
+  policyDocs: PolicyDoc[];
   issues: LoadIssue[];
 }
 
@@ -125,11 +198,12 @@ function formatErrors(errors: ErrorObject[] | null | undefined): string {
 
 /** Load and shape-validate a manifest directory (capabilities.yaml + *.capability.yaml + bindings/). */
 export function load(dir: string): LoadResult {
-  const { capabilities: validateCapabilities, capability: validateCapability, binding: validateBinding, resource: validateResource } = getValidators();
+  const { capabilities: validateCapabilities, capability: validateCapability, binding: validateBinding, resource: validateResource, policy: validatePolicy } = getValidators();
   const issues: LoadIssue[] = [];
   const capabilityDocs: CapabilityDoc[] = [];
   const bindings: BindingDoc[] = [];
   const resourceDocs: ResourceDoc[] = [];
+  const policyDocs: PolicyDoc[] = [];
   let capabilities: CapabilitiesFile | undefined;
 
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
@@ -139,6 +213,7 @@ export function load(dir: string): LoadResult {
       capabilityDocs,
       bindings,
       resourceDocs,
+      policyDocs,
       issues: [{ file: dir, message: "directory not found" }],
     };
   }
@@ -193,5 +268,21 @@ export function load(dir: string): LoadResult {
     }
   }
 
-  return { ok: issues.length === 0, dir, capabilities, capabilityDocs, bindings, resourceDocs, issues };
+  // 5. *.policy.yaml — Policy documents (#43 / BR-1, BR-2). Discovered by SUFFIX from the
+  // manifest ROOT only, mirroring *.resource.yaml above: `capabilities.schema.json` is
+  // `additionalProperties: false` with no slot to declare one, so there is deliberately no
+  // "declared-without-file"/"file-not-declared" cross-check for policies (BR-2). A policy under
+  // bindings/ is not discovered and is inert (EC-2) — documented in ONBOARDING as a placement
+  // rule so it is not mistaken for a bug.
+  for (const name of readdirSync(dir).filter((f) => f.endsWith(".policy.yaml")).sort()) {
+    try {
+      const parsed = parseYaml(readFileSync(join(dir, name), "utf8"));
+      if (validatePolicy(parsed)) policyDocs.push({ file: name, ...(parsed as object) } as PolicyDoc);
+      else issues.push({ file: name, message: formatErrors(validatePolicy.errors) });
+    } catch (err) {
+      issues.push({ file: name, message: `parse error: ${(err as Error).message}` });
+    }
+  }
+
+  return { ok: issues.length === 0, dir, capabilities, capabilityDocs, bindings, resourceDocs, policyDocs, issues };
 }

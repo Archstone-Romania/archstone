@@ -351,11 +351,210 @@ service account. Wire it up like this:
      `bearerToken`: `bearerToken` gates who may reach the MCP endpoint *at all*;
      `resolveCaller` decides whose backend data a given, already-authorized call acts on. Set
      both — one doesn't substitute for the other.
+   - `@archstone/agent/mcp`'s `mcpHandler()` — takes the **same** `resolveCaller` hook, with the
+     same per-request semantics: it is a thin wrapper over `createHttpHandler` and forwards its
+     options unchanged. This is the seam to use when you mount Archstone inside your own app's
+     request pipeline (the embedded topology). `invoke: { caller }` is **not** an alternative on
+     this path: the HTTP handler recomputes the caller for every request, so a static one set
+     there is overwritten and never reaches your backend. Use `resolveCaller` or nothing.
    - `@archstone/agent`'s `execute()` — pass `{ caller: { accessToken } }` directly on each call.
 
-With no caller supplied (any of the three ways above) on an `authenticated` capability, the
+With no caller supplied (any of the ways above) on an `authenticated` capability, the
 call fails closed **before any request reaches your backend**, with an error naming the
 capability — never a silent service-account fallback.
+
+#### Who the caller *is*: `principal`
+
+`accessToken` is a credential to act **with**. `principal` is an identifier saying **who** is
+calling — a second, independent field on the same `caller` object, and they are supplied
+independently:
+
+| You supply | Meaning |
+|---|---|
+| `accessToken` only | Act on the user's behalf against your backend; Archstone does not know who they are |
+| `principal` only | Archstone knows who is calling (for policy); your backend is reached with a service account |
+| both | Policy decides, and the backend acts as the user |
+
+```ts
+resolveCaller: (request) => ({
+  principal: "user:8f2a",        // WHO — from YOUR authentication, below
+  accessToken: "eyJhbGciOi...",  // WHAT THEY MAY DO — forwarded to your backend
+})
+```
+
+Three things to internalize, because they are not negotiable and not detectable by Archstone:
+
+- **The principal is asserted by you and never verified by Archstone.** It is an opaque string:
+  Archstone never parses, decodes, splits, or normalizes it, and never contacts an identity
+  provider. Its trustworthiness is exactly the trustworthiness of your own authentication and
+  no more. If your inbound request carries a JWT, **verify the signature against the issuer's
+  JWKS and check `iss`/`aud`/`exp` first**, and only then read `sub` into `principal`. Decoding
+  a payload without verifying it yields an attacker-controlled string that Archstone will
+  faithfully authorize on.
+- **Supplying a principal does not satisfy `policies: [authenticated]`.** That token means "a
+  caller credential was supplied" and still requires `accessToken`. "We know who you are" and
+  "we can act as you" are different claims.
+- **An absent principal is anonymous, not denied.** There is no sentinel value. It simply
+  matches no `allow` entry, which is how a capability says "not anonymously".
+
+`${caller.principal}` also works as a binding placeholder, exactly like `${caller.accessToken}`
+— useful when your backend is reached with a service account but accepts a trusted identity
+header (`X-On-Behalf-Of: "${caller.principal}"`).
+
+### Restricting *who* may invoke (`*.policy.yaml`)
+
+`policies: [authenticated]` says a credential is required. A **Policy document** says which
+principals are permitted. Write a `*.policy.yaml` in your manifest directory — the same place
+your `*.capability.yaml` files live (**the manifest root only**; a policy under `bindings/` is
+not discovered and silently does nothing), and with no entry needed in `capabilities.yaml`:
+
+```yaml
+# treasury.policy.yaml
+apiVersion: archstone/v1
+kind: Policy
+metadata:
+  id: treasury-transfers          # lowercase, dashed; unique across the manifest
+  name: Treasury transfers
+  scope: capability               # or: provider
+  capabilityId: banking.initiate-transfer
+spec:
+  allow:
+    - "user:8f2a"
+    - "role:treasury"             # namespace your own role model into the string
+  deny:
+    - "user:offboarded-3c1"
+```
+
+- **`scope: capability`** applies to the one capability named by `capabilityId`;
+  **`scope: provider`** applies to every capability of the named `provider`. A capability may
+  carry both.
+- **Matching is exact, case-sensitive string equality.** No wildcards, no prefixes, no regex —
+  a `*` anywhere in an entry is a compile-time error, deliberately, so that `deny: ["*"]` can
+  never *read* as "deny everyone" while in fact denying no one.
+- **`deny` wins over `allow`**, always. Across multiple policies, `deny` is a union and `allow`
+  is an **intersection**: every policy carrying a non-empty `allow` must be satisfied. If two
+  of them have no principal in common the capability is invocable by nobody, and `apply` warns.
+- **A `deny`-only policy does not stop an anonymous caller** — an absent principal matches no
+  entry at all. To require an identified caller, write an `allow`. `apply` warns about this too.
+- **Not evaluated in this version:** `spec.rateLimit` and `spec.constraints` are **rejected at
+  `archstone apply`**, naming the file, rather than silently accepted. A manifest never
+  advertises a control that does not exist.
+
+A refused call returns a structured refusal before any request reaches your backend, carrying
+one of four reason codes — `authenticated_no_credential`, `principal_not_allowed`,
+`principal_denied`, `policy_unevaluatable` — on `_meta["dev.archstone/policy_denied"]` over MCP,
+and on `ExecuteResult.denial` from `execute()`. It deliberately does **not** tell the caller
+which policy refused them or who *is* allowed: that would let anyone vary the principal and
+enumerate your identifiers one refused call at a time.
+
+Two operational notes:
+
+- **The compiled artifact is the deployment unit.** Policy travels inside `archstone.ir.json`,
+  so changing a `*.policy.yaml` has no effect on an embedded deployment until you re-run
+  `archstone build` **and redeploy**. A stale artifact carries stale policy exactly as it
+  carries stale bindings.
+- **`archstone serve` / `serve --http` / `verify` supply no caller.** They wire none of the
+  identity seams, so every invocation through them is anonymous and an `allow`-bearing
+  capability will deny. That is expected: the CLI is a development surface, and production
+  identity goes through the programmatic seams above (`mcpHandler`, `createHttpHandler`,
+  `serveStdio`, `execute()`).
+
+`archstone apply` also now warns on every declared CDL policy token Archstone does not yet
+enforce — `rate-limited`, `tenant-scoped`, `human-approval`, `consent-required` — naming the
+token and the capability. The warnings never block anything. They exist so a `policies:` list is
+never mistaken for a list of shipped guarantees by someone reading your manifest as evidence.
+
+---
+
+### Recording what happened (the `Execution` audit trail)
+
+A policy you can enforce but cannot evidence is not a control a compliance reviewer will
+accept. Supply an **audit sink** and Archstone hands it one `Execution` record per invocation
+**attempt** — including the attempts that were refused before your backend was ever contacted.
+
+The sink rides the options bag you already use for `env` and `caller`. There is no new
+parameter and no second thing to wire:
+
+```ts
+import { fromIR, jsonLinesAuditSink } from "@archstone/agent";
+// or, on the MCP side: import { jsonLinesAuditSink } from "@archstone/runtime";
+
+const auditSink = jsonLinesAuditSink();           // one JSON line per record, to stderr
+// const auditSink = jsonLinesAuditSink(createWriteStream("audit.jsonl", { flags: "a" }));
+// const auditSink = (record) => myLogger.info(record);   // a sink is just a function
+
+// embedded SDK
+await archstone.execute("banking.list-accounts", input, { caller, env, auditSink });
+
+// MCP over stdio
+await serveStdio(dir, { env, caller, auditSink });
+
+// mounted MCP endpoint
+const handler = mcpHandler(archstone, { bearerToken, resolveCaller, invoke: { env, auditSink } });
+```
+
+A record looks like this — and this is the whole of it:
+
+```json
+{"apiVersion":"archstone/v1","kind":"Execution",
+ "metadata":{"id":"9c1f…","capabilityId":"banking.list-accounts","provider":"core-banking",
+             "startedAt":"2026-07-28T09:14:02.113Z","completedAt":"2026-07-28T09:14:02.441Z"},
+ "spec":{"input":{},"consumer":"mcp","principal":"user:8f2a","policyRuleIds":["treasury-baseline"]},
+ "status":{"phase":"succeeded"}}
+```
+
+- **`status.phase`** is one of three. **`succeeded`** — the call completed (a *degraded* result,
+  where an optional mapped field was absent, is a success). **`failed`** — it was attempted and
+  did not complete: an unbound capability, a missing env var or caller credential, an allowlist
+  rejection, a network error, a non-2xx response, or a contract violation. `status.message`
+  carries the same text the agent was shown, verbatim, so you can grep one and find the other.
+  **`denied`** — the platform refused it before any backend work, and `status.denialReason` says
+  which kind of refusal: `authenticated_no_credential`, `principal_not_allowed`,
+  `principal_denied`, `policy_unevaluatable` (the four policy codes) or `lifecycle_blocked` (a
+  `retired` capability refused by the exposure gate).
+- **`spec.principal`** is present only when your host supplied one; anonymous invocations simply
+  omit the key. That presence or absence is also how you tell an anonymous denial from a
+  wrong-principal one — the reason code is `principal_not_allowed` for both, deliberately, so
+  that a refused caller cannot enumerate your identifiers one call at a time.
+- **`spec.policyRuleIds`** lists the policy rules the decision was made against — on *every*
+  phase, allowed included. It means "these were in force and were satisfied", not "these fired".
+  **An empty list on a capability your manifest governs means your deployed
+  `archstone.ir.json` predates that policy**: the call was decided against no policy at all.
+  That is the one query worth putting on a dashboard.
+- **`spec.consumer`** is set by Archstone, never by you: `mcp` for anything arriving over the MCP
+  protocol (including `mcpHandler`, whatever package mounted it) and `function-calling` for
+  `execute()`.
+- **`metadata.sessionId` / `workflowId`** are passed through from what you supply and are omitted
+  otherwise. On `serveStdio` that is per-conversation and correct. On `createHttpHandler` /
+  `mcpHandler` a value set on `invoke` is **process-wide and shared by every concurrent
+  request** — unlike `caller`, which is resolved per request. There is no per-request
+  correlation seam today.
+
+**Read this part twice — it is the limitation a regulated reader will assume away.**
+
+- **The trail is best-effort and lossy by design, and must not be your deployment's sole audit
+  control.** A sink that throws, rejects, or hangs must never break or delay the invocation it
+  observes, and a guaranteed-complete trail is the other side of that same coin. Archstone chose
+  the invocation. When a sink fails, **the record is lost** and the only trace is a single line
+  on stderr — one per failure, never deduplicated. Monitor those lines.
+- **A record is exactly as trustworthy as your own authentication.** `spec.principal` is copied
+  verbatim from a string your host asserted and Archstone never verifies. If you read a token's
+  subject without checking its signature, Archstone will faithfully authorize on an
+  attacker-controlled string and faithfully record it.
+- **The record never carries the response body, the outbound request, a header, a URL, or the
+  caller's credential**, and gains no field for any of them. Any string equal to the caller's
+  `accessToken` is replaced by `[redacted]` before the record leaves Archstone.
+- **`archstone serve`, `serve --http` and `verify` produce no audit records, and no flag turns
+  them on.** The CLI wires no identity seam, so every row would answer "who" with silence.
+  Production audit goes through the programmatic seams above. `archstone verify` never emits a
+  record even when handed a sink — a fixture replay is not a real invocation.
+- **A `retired` capability is blocked over MCP but still invocable through `execute()`**, and the
+  trail will therefore record `succeeded` for it on the embedded path. That asymmetry predates
+  the audit trail; the trail is simply the first place you can see it.
+- **Records are not size-capped.** A capability with a large input writes a large line — size
+  the sink accordingly. A silent cap would be a lossy transformation of evidence.
+- **Never point the JSON Lines sink at stdout.** On the stdio transport stdout *is* the MCP
+  protocol channel; `jsonLinesAuditSink` refuses `process.stdout` outright for that reason.
 
 ---
 
@@ -594,6 +793,12 @@ import { mcpHandler } from "@archstone/agent/mcp";
 
 const handler = mcpHandler(archstone, {
   bearerToken: process.env.ARCHSTONE_TOKEN, // required; empty throws at construction
+
+  // Optional — only if you serve `policies: [authenticated]` capabilities. Called fresh for
+  // every inbound request, so two concurrent end users never share an identity. Orthogonal to
+  // bearerToken: that gates who may reach this endpoint at all, this decides whose backend
+  // data an already-authorized call acts on. See "Acting on behalf of the end user" above.
+  resolveCaller: (request) => ({ accessToken: yourSessionToken(request) }),
 });
 ```
 

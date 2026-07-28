@@ -24,3 +24,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+# Everything under this directory ships verbatim to the public repo (release.yml pushes
+# `HEAD:archstone` as its own tree), so editor scratch must never become committable here.
+*.code-workspace

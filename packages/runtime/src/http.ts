@@ -21,7 +21,14 @@ export interface CreateHttpHandlerOptions {
    *  open by default; R-5). */
   bearerToken: string;
   /** Forwarded to createMcpServer for REST-provider calls (env/fetchImpl). A `caller` set here
-   *  is a static, process-wide default — see `resolveCaller` below for the per-request case. */
+   *  is a static, process-wide default — see `resolveCaller` below for the per-request case.
+   *
+   *  #44, and read this before setting a correlation id here: the per-request rebuild below
+   *  overwrites exactly ONE key, `caller`. Everything else — including `auditSink`,
+   *  `sessionId` and `workflowId` — survives the spread. That is what makes an audit sink set
+   *  here work at all, and it is also the trap: a `sessionId` set here silently stamps every
+   *  concurrent request with the same session, where a `caller` set here fails loudly instead.
+   *  There is no per-request correlation seam on this surface today. */
   invoke?: InvokeOptions;
   /**
    * ADD-32: extracts the caller credential for ONE inbound request. Called inside the
