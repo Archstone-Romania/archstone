@@ -274,20 +274,94 @@ describe("the record makes stale-artifact drift visible (US-10, BR-11)", () => {
   });
 });
 
-// Known, filed separately, and deliberately NOT obscured by this increment: the embedded path
-// has no exposure gate, so the trail will say a retired capability ran cleanly. Pinned as a
-// characterization test so the day someone adds the gate, this test fails and points at the
-// decision rather than at a mystery.
-describe("characterization — a retired capability records `succeeded` on the embedded path (EC-5, R-7)", () => {
-  it("records succeeded, not denied/lifecycle_blocked, because executeCapability has no exposure gate", async () => {
+// ADD-51 (#51): the embedded path now carries the SAME ADD-24 exposure gate `callTool` already
+// enforces. This block used to be a "characterization" test pinning the defect (a retired
+// capability recorded `phase: "succeeded"` — manufactured evidence). It now asserts the fix:
+// `executeCapability` refuses the call, before any connector work, and records `denied`/
+// `lifecycle_blocked` instead.
+describe("execute() — the ADD-51 lifecycle exposure gate (#51)", () => {
+  it("a retired capability is refused and records denied/lifecycle_blocked, never succeeded (S-US1.1/S-US1.4)", async () => {
     const s = spySink();
     const ir = artifact(bank);
     ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = "retired";
     const r = await fromIR(ir).execute("banking.list-accounts", {}, {
-      env: { CORE_BANKING_URL: "https://core.example" }, fetchImpl: ok200, caller: { accessToken: "caller-token-7d1e" }, auditSink: s.sink,
+      env: { CORE_BANKING_URL: "https://core.example" },
+      fetchImpl: forbiddenFetch,
+      caller: { accessToken: "caller-token-7d1e" },
+      auditSink: s.sink,
     });
-    expect(r.status).toBe("ok");
-    expect(s.records[0].status.phase).toBe("succeeded");
-    expect(s.records[0].status.denialReason).toBeUndefined();
+    expect(r.status).toBe("error");
+    expect(r.denial).toEqual({ reason: "lifecycle_blocked", capability: "banking.list-accounts" });
+    expect(r.error).toBe("capability 'banking.list-accounts' is retired and can no longer be invoked.");
+
+    expect(s.records).toHaveLength(1);
+    expect(s.records[0].status).toEqual({
+      phase: "denied",
+      message: "capability 'banking.list-accounts' is retired and can no longer be invoked.",
+      denialReason: "lifecycle_blocked",
+    });
+    expect(validateExecution(s.records[0])).toEqual({ ok: true, errors: "" });
+  });
+
+  it("fires before invokeRest is ever reached — an unbound, retired capability never reports 'no REST connector' (EC-2, S-US2.4)", async () => {
+    const ir = artifact(bank);
+    ir.tools.find((t) => t.id === "banking.generate-statement")!.lifecycle = "retired";
+    const r = await fromIR(ir).execute("banking.generate-statement", {}, {
+      fetchImpl: forbiddenFetch,
+      caller: { accessToken: "caller-token-7d1e" },
+    });
+    expect(r.denial?.reason).toBe("lifecycle_blocked");
+    expect(r.error).not.toMatch(/no REST connector/);
+  });
+
+  it("denies regardless of whether the caller would satisfy the resolved policy, and the record's policyRuleIds is populated exactly as any other phase's (BR-8/BR-19, S-US2.3/S-US5.2)", async () => {
+    const s = spySink();
+    const ir = artifact(bank);
+    const tool = ir.tools.find((t) => t.id === "banking.list-accounts")!;
+    tool.lifecycle = "retired";
+    tool.policyRules = [{ id: "treasury-baseline", allow: ["user:alice"] }];
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, {
+      env: { CORE_BANKING_URL: "https://core.example" },
+      fetchImpl: forbiddenFetch,
+      caller: { accessToken: "caller-token-7d1e", principal: "user:alice" }, // policy WOULD allow this principal
+      auditSink: s.sink,
+    });
+    expect(r.denial?.reason).toBe("lifecycle_blocked");
+    expect(r.denial?.reason).not.toBe("principal_not_allowed");
+
+    // BR-19: `spec.policyRuleIds` is populated from `tool.policyRules ?? []` UNCONDITIONALLY —
+    // by the shared `buildExecutionRecord` helper, regardless of the fact that `evaluatePolicy`
+    // was never called for this attempt (the lifecycle gate ran and returned first). It must
+    // NOT be forced empty "because policy did not run" — that is precisely the plausible-looking
+    // wrong fix this assertion exists to catch.
+    expect(s.records).toHaveLength(1);
+    expect(s.records[0].spec.policyRuleIds).toEqual(["treasury-baseline"]);
+    expect(validateExecution(s.records[0])).toEqual({ ok: true, errors: "" });
+  });
+
+  it("with no sink configured, the result is byte-for-byte identical to the sink-configured case (BR-20)", async () => {
+    const ir = artifact(bank);
+    ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = "retired";
+    const opts = {
+      env: { CORE_BANKING_URL: "https://core.example" },
+      fetchImpl: forbiddenFetch,
+      caller: { accessToken: "caller-token-7d1e" },
+    };
+    const withSink = await fromIR(ir).execute("banking.list-accounts", {}, { ...opts, auditSink: () => {} });
+    const withoutSink = await fromIR(ir).execute("banking.list-accounts", {}, opts);
+    expect(withSink).toEqual(withoutSink);
+  });
+
+  it("no sink is a strict no-op even for a lifecycle denial: no clock read, no id generated (S-US6.1, BR-20)", async () => {
+    const clock = vi.spyOn(Date.prototype, "toISOString");
+    const uuid = vi.spyOn(globalThis.crypto, "randomUUID");
+    const ir = artifact(bank);
+    ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = "retired";
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, { fetchImpl: forbiddenFetch });
+    expect(r.denial?.reason).toBe("lifecycle_blocked");
+    expect(clock).not.toHaveBeenCalled();
+    expect(uuid).not.toHaveBeenCalled();
+    clock.mockRestore();
+    uuid.mockRestore();
   });
 });

@@ -83,6 +83,18 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
   // inside `invokeRest`; moving the gate (D-4) would silently un-gate `archstone verify` and the
   // published `runVerify()` unless this call exists. Placed immediately before `invokeRest`, so
   // "no contract" / "fixture not found" keep reporting themselves first.
+  //
+  // ADD-51 (#51) D-6, deliberately, do NOT "fix" this into a third exposure gate: unlike
+  // `callTool`/`executeCapability`, `verifyTool` does not read `registry.getExposure(tool.id)`
+  // and a `lifecycle: retired` capability is still probed here exactly like a `stable` one. Two
+  // reasons, both load-bearing. (1) `verifyTool` never emits an `Execution` audit record under
+  // any outcome, so the manufactured-evidence harm ADD-51 exists to close is structurally
+  // impossible on this path regardless of lifecycle wiring. (2) Gating it would make
+  // `archstone verify`'s CI release gate (`reports.some(r => r.status === "red")`,
+  // `cli/src/index.ts`, no escape hatch) fail permanently the day a manifest retires a
+  // `contract:`-bearing capability without also deleting its contract block — a real,
+  // permanent regression for a routine operational event. Named residual risk, filed as **#54**,
+  // not solved here.
   const decision = evaluatePolicy(tool, {
     principal: opts?.caller?.principal,
     credentialPresent: opts?.caller?.accessToken !== undefined,

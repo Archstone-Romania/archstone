@@ -5,6 +5,38 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.8.0]
+
+Minor release, never a patch: `ExecuteDenial.reason`'s published type widens (see "Changed" below)
+and `execute()`'s behaviour changes for a `retired` capability — ADD-43 R-3 is the precedent for
+treating a behaviour-changing, type-widening fix as a minor bump under 0.x (ADD-51, OQ-51-A,
+founder-ratified).
+
+### Changed
+
+- **`execute()`/`executeCapability` now refuses a `retired` capability the same way `callTool`
+  already does (#51).** Previously, `@archstone/agent`'s embedded SDK — the surface RFC-0008
+  calls the flagship, and the one the bank pilot mounts — had no exposure gate: a capability a
+  business had withdrawn (`lifecycle: retired`) still reached the backend through `execute()`,
+  while the identical capability over MCP was correctly refused. Since #44 shipped, that
+  asymmetry became worse than silent: with an audit sink configured, the trail recorded
+  `phase: "succeeded"` for the retired capability's invocation — manufactured evidence that a
+  withdrawn capability ran cleanly. `executeCapability` now reads the same ADD-24
+  `registry.getExposure(tool.id).invocable` computation `callTool` already reads, checked
+  immediately after resolution and strictly **before** policy evaluation, so a capability that is
+  both `retired` and otherwise policy-deniable reports `lifecycle_blocked` — never
+  `policy_denied` — on both paths. With a sink configured, the refusal is now recorded as
+  `phase: "denied"`, `denialReason: "lifecycle_blocked"`, using the existing
+  `execution.schema.json` enum member (no schema change). `verifyTool`/`archstone verify` is
+  deliberately **not** gated by this change (tracked separately, #54); `tools()`/`buildToolDefs`
+  still does not filter or hint on lifecycle (tracked separately, #55).
+- **`ExecuteDenial.reason`'s published type widens additively**, from `PolicyDenialReason` to
+  `ExecutionDenialReason` (`PolicyDenialReason | "lifecycle_blocked"`) — a type
+  `@archstone/agent` already exported. No existing exhaustive `switch` over this field exists in
+  this codebase; a downstream consumer doing exhaustive narrowing over the previous four values
+  will need a new arm to keep compiling. Recommended as a **minor** version bump, not a patch
+  (ADD-51, OQ-51-A, founder-ratified).
+
 ## [0.7.0]
 
 Minor release, never a patch: `invokeRest` is a published function and its behaviour changed (see

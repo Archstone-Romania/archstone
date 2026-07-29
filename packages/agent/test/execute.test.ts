@@ -118,6 +118,47 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
   });
 });
 
+// ADD-51 (#51) BR-10/BR-12: only `lifecycle: retired` may block invocation through execute() —
+// `experimental`/`beta`/`deprecated`/`stable` must remain exactly as invocable as they were
+// before this increment. A gate that over-fires on any of these is a worse defect than the one
+// #51 fixes (US-3).
+describe("execute() — US-3: every lifecycle state other than retired stays invocable (#51)", () => {
+  const fetchImpl: FetchLike = async () =>
+    new Response(
+      JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+      { status: 200 },
+    );
+
+  it.each(["experimental", "beta", "deprecated", "stable"] as const)(
+    "lifecycle '%s' remains invocable and reaches the backend (S-US3.1..S-US3.4)",
+    async (lifecycle) => {
+      const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
+      artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle = lifecycle;
+      const archstone = fromIR(artifact);
+      const r = await archstone.execute(
+        "tourism.search",
+        { destination: "Nice" },
+        { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
+      );
+      expect(r.status).toBe("ok");
+      expect(r.denial).toBeUndefined();
+    },
+  );
+
+  it("no lifecycle field declared (defaults to stable) remains invocable (S-US3.4)", async () => {
+    const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
+    delete artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle;
+    const archstone = fromIR(artifact);
+    const r = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
+    );
+    expect(r.status).toBe("ok");
+    expect(r.denial).toBeUndefined();
+  });
+});
+
 // ADD-32: execute() forwards `caller` to invokeRest as a pure pass-through — no policy
 // logic lives here. tourism.search itself carries no `authenticated` policy (#32 removed
 // it as a mislabeled demo policy — see tourism.search.capability.yaml), so this uses a

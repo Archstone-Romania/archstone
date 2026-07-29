@@ -254,3 +254,123 @@ describe("cross-path parity: MCP and execute() decide identically (US-2)", () =>
     expect(fromIR(artifact(ALLOW_ALICE)).tools("anthropic")).toEqual(fromIR(artifact()).tools("anthropic"));
   });
 });
+
+// ADD-51 (#51) BR-6/BR-7, R-5: lifecycle must outrank policy IDENTICALLY on both paths. Required
+// as a TEST, not documentation — without it, closing #51's asymmetry (embedded SDK invoking a
+// retired capability) could silently open a new one: one path reporting `lifecycle_blocked`, the
+// other `policy_denied`, for the identical fixture. Extends the "cross-path parity" pattern
+// above (ADD-43 §8 step 9) to lifecycle.
+function writeRetiredManifest(dir: string): void {
+  writeFileSync(
+    join(dir, "capabilities.yaml"),
+    "company:\n  id: demo\ncapabilities:\n  - demo.retired\nproviders:\n  - acme\n",
+  );
+  writeFileSync(
+    join(dir, "demo.retired.capability.yaml"),
+    ["capability:", "  id: demo.retired", "  description: A retired thing.", "  effect: read", "  provider: acme", "  lifecycle: retired", ""].join(
+      "\n",
+    ),
+  );
+  writeFileSync(
+    join(dir, "demo.retired.policy.yaml"),
+    [
+      "apiVersion: archstone/v1",
+      "kind: Policy",
+      "metadata:",
+      "  id: alice-only-retired",
+      "  name: Alice only",
+      "  scope: capability",
+      "  capabilityId: demo.retired",
+      "spec:",
+      "  allow:",
+      '    - "user:alice"',
+      "",
+    ].join("\n"),
+  );
+  mkdirSync(join(dir, "bindings"), { recursive: true });
+  writeFileSync(
+    join(dir, "bindings", "demo.retired.binding.yaml"),
+    [
+      "binding:",
+      "  capabilityId: demo.retired",
+      "  connector:",
+      "    type: rest",
+      "    rest:",
+      '      baseUrl: "https://backend.example"',
+      "      method: GET",
+      "      path: /thing",
+      "",
+    ].join("\n"),
+  );
+}
+
+function retiredArtifact(): Record<string, unknown> {
+  const dir = mkdtempSync(join(tmpdir(), "archstone-agent-retired-"));
+  try {
+    writeRetiredManifest(dir);
+    const built = buildRegistry(dir);
+    expect(built.ok).toBe(true);
+    return JSON.parse(JSON.stringify(built.registry!.ir)) as Record<string, unknown>;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// NF-1 (review, #51): the two tests below vary `caller.principal` across "would be denied" vs
+// "would be allowed" by the resolved policy, but — unlike the pre-existing S-US2.2 parity test
+// above, which DOES fail if `resolveCaller`'s wiring breaks — that variance carries no
+// discriminating power here. This is deliberate, not a wiring gap: BR-8 requires the lifecycle
+// gate to short-circuit BEFORE `evaluatePolicy` is ever reached, on both paths, so caller
+// identity cannot influence the outcome either way. The two scenarios are kept because BR-6/BR-7
+// (ordering) are proven by the "never policy_denied" / "_meta lifecycle_blocked, not
+// policy_denied" assertions below, not by the caller value itself.
+describe("cross-path parity: lifecycle outranks policy, identically on both paths (ADD-51 BR-6/BR-7/R-5)", () => {
+  const auth = { authorization: "Bearer endpoint-secret" };
+  const callBody = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "demo_retired", arguments: {} } };
+
+  it("both report lifecycle_blocked, never policy_denied, for a retired + policy-deniable capability", async () => {
+    const built = retiredArtifact();
+
+    const embedded = await fromIR(built).execute("demo.retired", {}, {
+      fetchImpl: forbiddenFetch,
+      caller: { principal: "user:bob" }, // would ALSO be denied by policy, but must never be reached
+    });
+
+    const handler = mcpHandler(fromIR(built), {
+      bearerToken: "endpoint-secret",
+      invoke: { fetchImpl: forbiddenFetch },
+      resolveCaller: () => ({ principal: "user:bob" }),
+    });
+    const mcp = await toolResult(await handler(mcpRequest(callBody, auth)));
+
+    expect(embedded.status).toBe("error");
+    expect(embedded.denial?.reason).toBe("lifecycle_blocked");
+    expect(embedded.denial?.reason).not.toBe("principal_not_allowed");
+    expect(embedded.error).toBe("capability 'demo.retired' is retired and can no longer be invoked.");
+
+    expect(mcp.isError).toBe(true);
+    expect(mcp._meta?.["dev.archstone/lifecycle_blocked"]).toBeDefined();
+    expect(mcp._meta?.["dev.archstone/policy_denied"]).toBeUndefined();
+    expect(mcp.content?.[0]?.text).toBe(embedded.error);
+  });
+
+  it("both report lifecycle_blocked even when the caller WOULD be allowed by policy (BR-8)", async () => {
+    const built = retiredArtifact();
+
+    const embedded = await fromIR(built).execute("demo.retired", {}, {
+      fetchImpl: forbiddenFetch,
+      caller: { principal: "user:alice" }, // policy WOULD allow this principal
+    });
+
+    const handler = mcpHandler(fromIR(built), {
+      bearerToken: "endpoint-secret",
+      invoke: { fetchImpl: forbiddenFetch },
+      resolveCaller: () => ({ principal: "user:alice" }),
+    });
+    const mcp = await toolResult(await handler(mcpRequest(callBody, auth)));
+
+    expect(embedded.denial?.reason).toBe("lifecycle_blocked");
+    expect(mcp._meta?.["dev.archstone/lifecycle_blocked"]).toBeDefined();
+    expect(mcp._meta?.["dev.archstone/policy_denied"]).toBeUndefined();
+  });
+});

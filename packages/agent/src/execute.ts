@@ -18,8 +18,9 @@ import {
   auditNow,
   buildExecutionRecord,
   emitExecutionRecord,
+  LIFECYCLE_BLOCKED_REASON,
   type ExecutionStatus,
-  type PolicyDenialReason,
+  type ExecutionDenialReason,
 } from "@archstone/emitter-support";
 import { invokeRest, type FetchLike, type CallerContext, type InvokeOptions } from "@archstone/provider-rest";
 
@@ -58,9 +59,14 @@ export interface ExecuteOptions {
 /** #43 ADD-43 D-11: the embedded rendering of a policy refusal — the `ExecuteResult` sibling of
  *  the MCP path's `_meta["dev.archstone/policy_denied"]`. Same decision, same reason code, same
  *  human message; only the envelope differs, and the two are deliberately NOT forced to
- *  converge (BR-32). `capability` is the unsanitized CDL id (BR-28). */
+ *  converge (BR-32). `capability` is the unsanitized CDL id (BR-28).
+ *
+ *  ADD-51 (#51): `reason` also carries `"lifecycle_blocked"` — populated when this call was
+ *  refused by the ADD-24 exposure gate below, which is distinct from and runs BEFORE the policy
+ *  evaluation point (ADD-43 D-4's boundary between the two vocabularies). This field is no
+ *  longer populated only by policy. */
 export interface ExecuteDenial {
-  reason: PolicyDenialReason;
+  reason: ExecutionDenialReason;
   capability: string;
 }
 
@@ -71,8 +77,10 @@ export interface ExecuteResult {
   degraded?: string[]; // present on degraded
   error?: string; // present on error — invokeRest returned ok:false (InvokeResult.error verbatim)
   /**
-   * #43 (ADD-43 D-11): present iff this call was refused by the policy evaluation point, in
-   * which case `status` is `"error"` and `error` carries the human message.
+   * #43 (ADD-43 D-11): present iff this call was refused — by the policy evaluation point, OR
+   * (ADD-51, #51) by the ADD-24 exposure gate for a `retired` capability, which runs BEFORE
+   * policy and is explicitly NOT the policy evaluation point (ADD-43 D-4's boundary). In either
+   * case `status` is `"error"` and `error` carries the human message.
    *
    * Additive and optional ON PURPOSE. A fifth `status` value (`"denied"`) would read better
    * against #44's `Execution.status.phase` vocabulary, but `ExecuteResult.status` is a published
@@ -97,15 +105,9 @@ export async function executeCapability(
     return { status: "error", error: `unknown capability: ${capabilityId}` };
   }
 
-  // #44: the attempt clock starts before policy evaluation, so a denied attempt has a real
-  // start time. Strict no-op with no sink: no clock read, no id, no record, no allocation.
-  //
-  // NOTE for whoever reads a trail produced here: this consumer has **no exposure gate** — it
-  // never had one and #43 deliberately did not add one — so a `retired` capability invoked
-  // through the embedded SDK reaches the backend and records `phase: "succeeded"`, while the
-  // same capability over MCP records `denied`/`lifecycle_blocked`. That asymmetry is not this
-  // increment's to fix; what IS new is that the audit trail now turns it into written evidence
-  // an auditor will read. Tracked separately.
+  // #44: the attempt clock starts before the exposure gate and before policy evaluation, so a
+  // denied attempt has a real start time. Strict no-op with no sink: no clock read, no id, no
+  // record, no allocation.
   const auditSink = opts?.auditSink;
   const startedAt = auditSink ? auditNow() : "";
   const audit = (status: ExecutionStatus): void => {
@@ -126,6 +128,26 @@ export async function executeCapability(
     );
   };
 
+  // ADD-51 (#51): the SAME ADD-24 exposure gate `callTool` (runtime/src/server.ts) already
+  // enforces — `registry.getExposure(tool.id).invocable`, checked immediately after resolution/
+  // startedAt and strictly BEFORE `evaluatePolicy`, mirroring `callTool`'s pinned order
+  // (ADD-43 BR-34) so a capability that is both `retired` and policy-deniable reports
+  // `lifecycle_blocked` here too, never `policy_denied`. Message text is `server.ts`'s, reused
+  // verbatim. Before this ADD, a `retired` capability reached the backend on this path and,
+  // since #44 shipped, the audit trail recorded `phase: "succeeded"` — manufactured evidence
+  // that a withdrawn capability ran cleanly. `verifyTool` (runtime/src/verify.ts) deliberately
+  // stays ungated (ADD-51 D-6) — see that file's own comment for why.
+  const exposure = registry.getExposure(tool.id);
+  if (!exposure.invocable) {
+    const text = `capability '${tool.id}' is retired and can no longer be invoked.`;
+    audit({ phase: "denied", message: text, denialReason: LIFECYCLE_BLOCKED_REASON });
+    return {
+      status: "error",
+      error: text,
+      denial: { reason: LIFECYCLE_BLOCKED_REASON, capability: tool.id },
+    };
+  }
+
   // Never assume process.env (Workers-style, ADD-0008 §7.2): default to {} rather than
   // leaving env undefined — invokeRest itself falls back to `process.env` when its own
   // `opts.env` is undefined, which would be wrong on a Worker. An empty env just means
@@ -133,10 +155,8 @@ export async function executeCapability(
   // a normal `ok:false` (mapped below to `status: "error"`).
   // #43 (ADD-43 D-5/D-6): the SAME evaluation point `callTool` and `verifyTool` call — one
   // shared function in @archstone/emitter-support, never a second copy here (the ADD-30 defect
-  // class). Called unconditionally, before any connector work, so a denial issues zero outbound
-  // requests and no `onResponse` hook fires. Note there is deliberately no exposure gate here:
-  // `executeCapability` has never had one and #43 does not add one (BR-35 — that asymmetry is
-  // ADD-24's to answer and is orthogonal to policy).
+  // class). Called unconditionally, after the exposure gate above and before any connector work,
+  // so a denial issues zero outbound requests and no `onResponse` hook fires.
   const decision = evaluatePolicy(tool, {
     principal: opts?.caller?.principal,
     credentialPresent: opts?.caller?.accessToken !== undefined,
