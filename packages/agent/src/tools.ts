@@ -145,5 +145,14 @@ export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[]
           schema: inputJsonSchema(t.input, resources),
         }),
       );
+    default:
+      // ADD-56 D-5: zero-risk hardening, NOT a fix to a reachable defect. `format` is supplied
+      // directly by the trusted host program calling `tools(format)` — it never originates from
+      // a `fromIR` artifact or any other externally-sourced data (unlike `lifecycle`, ADD-56's
+      // actual defect). Reachable only by a caller bypassing this package's own `ToolFormat`
+      // type checking (an `as`/`any` cast on a value it constructs itself). Before this branch,
+      // that case silently returned `undefined` where `ToolDef[]` is declared, crashing the
+      // caller downstream on `.map`/spread instead of here, with a clear cause.
+      throw new Error(`buildToolDefs: unrecognized tool format: ${String(format)}`);
   }
 }

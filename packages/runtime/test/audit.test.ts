@@ -100,6 +100,78 @@ describe("callTool — one record per attempt, on every termination point (BR-2,
     expect(s.records[0].status.denialReason).not.toBe("principal_not_allowed");
   });
 
+  // ADD-56 (#56): TP-2's sibling — the exposure gate's SECOND denying outcome, for a `lifecycle`
+  // value this build does not recognize at all (only reachable via a hand-written/forward-
+  // versioned artifact — `registryOf`/`tool()` simulate exactly that by widening past the
+  // `Lifecycle` type, mirroring an untrusted `fromIR` artifact).
+  it("TP-2b (S-US2.1, BR-4, BR-6): an unrecognized lifecycle records denied/lifecycle_unevaluatable, with a message distinct from retired's", async () => {
+    const s = spySink();
+    const r = await callTool(
+      registryOf(tool({ lifecycle: "sunset" as IRTool["lifecycle"] })),
+      "bank.list",
+      {},
+      { auditSink: s.sink, fetchImpl: forbiddenFetch },
+    );
+    expect(s.records).toHaveLength(1);
+    expect(s.records[0].status.denialReason).toBe("lifecycle_unevaluatable");
+    expect(s.records[0].status.message).not.toBe("capability 'bank.list' is retired and can no longer be invoked.");
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).not.toBe("capability 'bank.list' is retired and can no longer be invoked.");
+    expect(validateExecution(s.records[0])).toEqual({ ok: true, errors: "" });
+  });
+
+  it("S-US2.2/BR-9: the unevaluatable _meta is distinguishable from the retired _meta — a distinct key, never identical", async () => {
+    const unevaluatable = await callTool(
+      registryOf(tool({ lifecycle: "sunset" as IRTool["lifecycle"] })),
+      "bank.list",
+      {},
+      { fetchImpl: forbiddenFetch },
+    );
+    const retired = await callTool(registryOf(tool({ lifecycle: "retired" })), "bank.list", {}, { fetchImpl: forbiddenFetch });
+    expect(unevaluatable._meta?.["dev.archstone/lifecycle_unevaluatable"]).toEqual({
+      error: "lifecycle_unevaluatable",
+      capability: "bank.list",
+      lifecycle: "sunset",
+    });
+    expect(unevaluatable._meta?.["dev.archstone/lifecycle_blocked"]).toBeUndefined();
+    expect(retired._meta?.["dev.archstone/lifecycle_blocked"]).toBeDefined();
+    expect(unevaluatable._meta).not.toEqual(retired._meta);
+  });
+
+  it("TP-2b wins over TP-3: unrecognized lifecycle AND policy-deniable records lifecycle_unevaluatable, never a policy reason (S-US5.1, BR-18)", async () => {
+    const s = spySink();
+    await callTool(
+      registryOf(tool({ lifecycle: "sunset" as IRTool["lifecycle"], policyRules: [{ id: "p", allow: ["user:alice"] }] })),
+      "bank.list",
+      {},
+      { auditSink: s.sink, fetchImpl: forbiddenFetch, caller: { principal: "user:mallory" } },
+    );
+    expect(s.records[0].status.denialReason).toBe("lifecycle_unevaluatable");
+    expect(s.records[0].status.denialReason).not.toBe("principal_not_allowed");
+  });
+
+  it("EC-3/S-US1.3: a lifecycle field entirely absent from a hand-written tool entry is refused as unevaluatable, not defaulted to stable", async () => {
+    const t = tool() as Partial<IRTool>;
+    delete t.lifecycle;
+    const r = await callTool(registryOf(t as IRTool), "bank.list", {}, { fetchImpl: forbiddenFetch });
+    expect(r._meta?.["dev.archstone/lifecycle_unevaluatable"]).toBeDefined();
+  });
+
+  // EC-12: two independent fail-closed mechanisms on one call — the exposure gate wins,
+  // unconditionally, because it runs before evaluatePolicy is ever reached (mirrors #51 EC-8's
+  // identical ruling for retired + policy_unevaluatable).
+  it("EC-12: unrecognized lifecycle AND an unevaluatable policy still records lifecycle_unevaluatable, never policy_unevaluatable", async () => {
+    const s = spySink();
+    await callTool(
+      registryOf(tool({ lifecycle: "sunset" as IRTool["lifecycle"], policyRules: [{ id: "p", futureKey: 1 } as never] })),
+      "bank.list",
+      {},
+      { auditSink: s.sink, fetchImpl: forbiddenFetch },
+    );
+    expect(s.records[0].status.denialReason).toBe("lifecycle_unevaluatable");
+    expect(s.records[0].status.denialReason).not.toBe("policy_unevaluatable");
+  });
+
   it("TP-3: a policy denial records denied + the evaluator's own reason, and issues zero fetches (S-US3.1)", async () => {
     const s = spySink();
     await callTool(

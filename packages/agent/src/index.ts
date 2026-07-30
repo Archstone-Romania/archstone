@@ -42,6 +42,7 @@ export {
   jsonLinesAuditSink,
   REDACTED,
   LIFECYCLE_BLOCKED_REASON,
+  LIFECYCLE_UNEVALUATABLE_REASON,
 } from "@archstone/emitter-support";
 export type {
   AuditSink,

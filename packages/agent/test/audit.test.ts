@@ -365,3 +365,95 @@ describe("execute() — the ADD-51 lifecycle exposure gate (#51)", () => {
     uuid.mockRestore();
   });
 });
+
+// ADD-56 (#56): the exposure gate's SECOND denying outcome — an unrecognized `lifecycle` value.
+// Only reachable via a hand-written or forward-versioned `fromIR` artifact (ADD-0008 D-2); every
+// scenario here mutates the round-tripped IR artifact the same way #51's block above does.
+describe("execute() — the ADD-56 fail-closed exposure gate on an unrecognized lifecycle (#56)", () => {
+  it("S-US1.1: an unrecognized lifecycle string is refused and records denied/lifecycle_unevaluatable, never succeeded", async () => {
+    const s = spySink();
+    const ir = artifact(bank) as { tools: { id: string; lifecycle?: unknown }[] };
+    ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = "sunset";
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, {
+      env: { CORE_BANKING_URL: "https://core.example" },
+      fetchImpl: forbiddenFetch,
+      caller: { accessToken: "caller-token-7d1e" },
+      auditSink: s.sink,
+    });
+    expect(r.status).toBe("error");
+    expect(r.denial).toEqual({ reason: "lifecycle_unevaluatable", capability: "banking.list-accounts" });
+    expect(r.error).not.toBe("capability 'banking.list-accounts' is retired and can no longer be invoked.");
+
+    expect(s.records).toHaveLength(1);
+    expect(s.records[0].status.phase).toBe("denied");
+    expect(s.records[0].status.denialReason).toBe("lifecycle_unevaluatable");
+    expect(validateExecution(s.records[0])).toEqual({ ok: true, errors: "" });
+  });
+
+  it("S-US1.2/EC-2: a non-string lifecycle value (number) is refused identically", async () => {
+    const ir = artifact(bank) as { tools: { id: string; lifecycle?: unknown }[] };
+    ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = 7;
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, { fetchImpl: forbiddenFetch });
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
+  });
+
+  it("S-US1.3/EC-3: a lifecycle field entirely absent is refused, never silently treated as compiler-defaulted stable", async () => {
+    const ir = artifact(bank) as { tools: { id: string; lifecycle?: unknown }[] };
+    delete ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle;
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, { fetchImpl: forbiddenFetch });
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
+  });
+
+  it("S-US1.4: the gate fires before any connector work — an unset required env var never surfaces", async () => {
+    const ir = artifact(bank) as { tools: { id: string; lifecycle?: unknown }[] };
+    ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = "sunset";
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, { fetchImpl: forbiddenFetch });
+    expect(r.error).not.toMatch(/missing env var/i);
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
+  });
+
+  it("BR-18/S-US5.2: denies regardless of whether the caller would satisfy the resolved policy, and never calls evaluatePolicy's own module (BR-18, S-US5.1)", async () => {
+    const s = spySink();
+    const ir = artifact(bank) as { tools: { id: string; lifecycle?: unknown; policyRules?: unknown }[] };
+    const tool = ir.tools.find((t) => t.id === "banking.list-accounts")!;
+    tool.lifecycle = "sunset";
+    tool.policyRules = [{ id: "treasury-baseline", allow: ["user:alice"] }];
+    const r = await fromIR(ir).execute("banking.list-accounts", {}, {
+      env: { CORE_BANKING_URL: "https://core.example" },
+      fetchImpl: forbiddenFetch,
+      caller: { accessToken: "caller-token-7d1e", principal: "user:alice" }, // policy WOULD allow this principal
+      auditSink: s.sink,
+    });
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
+    expect(r.denial?.reason).not.toBe("principal_not_allowed");
+    expect(s.records[0].spec.policyRuleIds).toEqual(["treasury-baseline"]);
+  });
+
+  it("BR-8: callTool and executeCapability select identical message text and denialReason for the identical fixture", async () => {
+    const ir = artifact(bank) as { tools: { id: string; lifecycle?: unknown }[] };
+    ir.tools.find((t) => t.id === "banking.list-accounts")!.lifecycle = "sunset";
+    const built = fromIR(ir);
+    const r = await built.execute("banking.list-accounts", {}, { fetchImpl: forbiddenFetch });
+
+    const handler = mcpHandler(built, { bearerToken: "secret", invoke: { fetchImpl: forbiddenFetch } });
+    const res = await handler(
+      new Request("http://test.local/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: "Bearer secret",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "banking_list-accounts", arguments: {} },
+        }),
+      }),
+    );
+    const body = (await res.json()) as { result: { content: { type: string; text: string }[]; isError: boolean } };
+    expect(body.result.isError).toBe(true);
+    expect(body.result.content[0].text).toBe(r.error);
+  });
+});

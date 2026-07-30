@@ -19,6 +19,7 @@ import {
   buildExecutionRecord,
   emitExecutionRecord,
   LIFECYCLE_BLOCKED_REASON,
+  LIFECYCLE_UNEVALUATABLE_REASON,
   type ExecutionStatus,
   type ExecutionDenialReason,
 } from "@archstone/emitter-support";
@@ -64,7 +65,14 @@ export interface ExecuteOptions {
  *  ADD-51 (#51): `reason` also carries `"lifecycle_blocked"` — populated when this call was
  *  refused by the ADD-24 exposure gate below, which is distinct from and runs BEFORE the policy
  *  evaluation point (ADD-43 D-4's boundary between the two vocabularies). This field is no
- *  longer populated only by policy. */
+ *  longer populated only by policy.
+ *
+ *  ADD-56 (#56): `reason` also carries `"lifecycle_unevaluatable"` — the exposure gate's SECOND
+ *  denying outcome, populated when the capability's declared `lifecycle` is a value this build
+ *  does not recognize at all (only reachable via a hand-written or forward-versioned `fromIR`
+ *  artifact). Distinct from `"lifecycle_blocked"` on purpose: a governance refusal (`retired`)
+ *  and a compatibility refusal (unrecognized value) are different facts with different
+ *  remediations — see `Exposure.blockedReason`'s doc comment in `@archstone/emitter-support`. */
 export interface ExecuteDenial {
   reason: ExecutionDenialReason;
   capability: string;
@@ -137,8 +145,25 @@ export async function executeCapability(
   // since #44 shipped, the audit trail recorded `phase: "succeeded"` — manufactured evidence
   // that a withdrawn capability ran cleanly. `verifyTool` (runtime/src/verify.ts) deliberately
   // stays ungated (ADD-51 D-6) — see that file's own comment for why.
+  //
+  // ADD-56 (#56): `lifecycleExposure` is now TOTAL — an unrecognized `lifecycle` value ALSO sets
+  // `invocable:false`, distinguished from `retired` via `exposure.blockedReason`. Text and
+  // denialReason for the two cases MUST stay distinct (governance vs. compatibility refusal —
+  // see `exposure.ts`'s `Exposure.blockedReason` doc comment); this branch mirrors `server.ts`'s
+  // `callTool` textually. The `undefined`-`blockedReason` case (D-4's unknown-id fallback)
+  // cannot occur here: `tool` above was already resolved via `getCapability`, which reads the
+  // identical `exposureById` map `getExposure` does.
   const exposure = registry.getExposure(tool.id);
   if (!exposure.invocable) {
+    if (exposure.blockedReason === "unevaluatable") {
+      const text = `capability '${tool.id}' declares a lifecycle this build does not recognize and cannot evaluate — refusing (fail-closed).`;
+      audit({ phase: "denied", message: text, denialReason: LIFECYCLE_UNEVALUATABLE_REASON });
+      return {
+        status: "error",
+        error: text,
+        denial: { reason: LIFECYCLE_UNEVALUATABLE_REASON, capability: tool.id },
+      };
+    }
     const text = `capability '${tool.id}' is retired and can no longer be invoked.`;
     audit({ phase: "denied", message: text, denialReason: LIFECYCLE_BLOCKED_REASON });
     return {

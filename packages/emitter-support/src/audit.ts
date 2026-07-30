@@ -33,27 +33,46 @@ import type { PolicyDenialReason } from "./policy";
 
 /**
  * The record's denial vocabulary: the policy evaluator's four codes, copied verbatim, plus
- * exactly ONE non-policy refusal code.
+ * exactly TWO non-policy refusal codes (ADD-56 widens this from one to two).
  *
- * `phase: "denied"` has two producers. The policy evaluator is one. The other is the exposure
- * gate that refuses a `retired` capability BEFORE policy is ever consulted — a refusal by
- * lifecycle, which is a denial and not a failure. Recording it as `failed` would conflate
- * "refused by governance" with "the backend broke" in the one log where that distinction is the
- * entire product.
+ * `phase: "denied"` has two PRODUCERS, not two codes: the policy evaluator is one, and the
+ * exposure gate — `lifecycleExposure` (`exposure.ts`) — is the other. The exposure gate itself
+ * now has two DISTINCT denying outcomes, each its own code:
+ *  - `lifecycle_blocked` — a `retired` capability: a business withdrew it. A GOVERNANCE fact,
+ *    remedied only by a business decision to un-retire it.
+ *  - `lifecycle_unevaluatable` (ADD-56) — a `lifecycle` value this build does not recognize at
+ *    all (an unrecognized string, a non-string, or an absent field on a hand-written or
+ *    forward-versioned artifact, ADD-56 D-1). A COMPATIBILITY fact, remedied only by upgrading
+ *    the runtime or recompiling with a compatible builder — no business decision is possible.
+ * Recording either as `failed` would conflate "refused by governance/compatibility" with "the
+ * backend broke" in the one log where that distinction is the entire product (ADD-44). Conflating
+ * the two denial CODES with each other is the narrower version of the same mistake — see
+ * `exposure.ts`'s `lifecycleExposure` doc comment and ADD-56's Challenge section for why they
+ * must stay distinguishable.
  *
  * **`PolicyDenialReason` stays exactly four and is NOT widened** — the evaluator can never
- * return `lifecycle_blocked`, and this union exists precisely so it does not have to.
+ * return either lifecycle code, and this union exists precisely so it does not have to.
  *
  * **Standing rule: every member has exactly one enumerated producer, and this set grows only by
- * an architecture decision naming the new producer.** Today: four from `evaluatePolicy`, one
- * from the exposure gate. Without that rule the enum is a list; with it, it is a contract — and
- * it is permanent the moment a customer filters on one of these strings.
+ * an architecture decision naming the new producer.** Today: four from `evaluatePolicy`, two
+ * from the exposure gate's two denying branches (ADD-24 D-10 named `lifecycle_blocked`'s
+ * producer; ADD-56 D-1/D-3 names `lifecycle_unevaluatable`'s). Without that rule the enum is a
+ * list; with it, it is a contract — and it is permanent the moment a customer filters on one of
+ * these strings.
  */
-export type ExecutionDenialReason = PolicyDenialReason | "lifecycle_blocked";
+export type ExecutionDenialReason = PolicyDenialReason | "lifecycle_blocked" | "lifecycle_unevaluatable";
 
-/** The non-policy refusal code. Spelled to match the agent-facing `LIFECYCLE_BLOCKED_META_KEY`
- *  the MCP surface already ships — one concept, one spelling, across both surfaces. */
+/** The non-policy refusal code for a `retired` capability. Spelled to match the agent-facing
+ *  `LIFECYCLE_BLOCKED_META_KEY` the MCP surface already ships — one concept, one spelling,
+ *  across both surfaces. */
 export const LIFECYCLE_BLOCKED_REASON = "lifecycle_blocked" satisfies ExecutionDenialReason;
+
+/** ADD-56: the non-policy refusal code for a capability whose declared `lifecycle` this build
+ *  does not recognize at all — distinct from `LIFECYCLE_BLOCKED_REASON` (`retired`) because the
+ *  two are different facts with different remediations (see `ExecutionDenialReason`'s own doc
+ *  comment). Spelled to match the agent-facing `LIFECYCLE_UNEVALUATABLE_META_KEY` the MCP
+ *  surface ships alongside it — one concept, one spelling, across both surfaces. */
+export const LIFECYCLE_UNEVALUATABLE_REASON = "lifecycle_unevaluatable" satisfies ExecutionDenialReason;
 
 /**
  * The protocol surface the call arrived on — **fixed by the emitting call site, never

@@ -8,8 +8,10 @@ import {
   auditNow,
   REDACTED,
   LIFECYCLE_BLOCKED_REASON,
+  LIFECYCLE_UNEVALUATABLE_REASON,
   type AuditSink,
   type ExecutionRecord,
+  type ExecutionDenialReason,
 } from "../src/audit";
 import { contractViolationMessage } from "../src/mapping";
 import type { PolicyDenialReason } from "../src/policy";
@@ -368,8 +370,8 @@ describe("jsonLinesAuditSink — the reference sink (BR-24, BR-26, US-7)", () =>
   });
 });
 
-describe("the denial vocabulary — five codes, five producers (D-4, BR-13, BR-14)", () => {
-  it("the policy evaluator's union stays exactly four and cannot spell lifecycle_blocked (S-US3.5)", () => {
+describe("the denial vocabulary — six codes, five producers (D-4, BR-13, BR-14)", () => {
+  it("the policy evaluator's union stays exactly four and cannot spell either lifecycle code (S-US3.5)", () => {
     const four: PolicyDenialReason[] = [
       "authenticated_no_credential",
       "principal_not_allowed",
@@ -379,11 +381,15 @@ describe("the denial vocabulary — five codes, five producers (D-4, BR-13, BR-1
     expect(four).toHaveLength(4);
     // @ts-expect-error — `lifecycle_blocked` is NOT a PolicyDenialReason; the evaluator can
     // never return it. If this stops erroring, the evaluator's contract was widened.
-    const widened: PolicyDenialReason = "lifecycle_blocked";
-    expect(widened).toBe(LIFECYCLE_BLOCKED_REASON);
+    const widenedBlocked: PolicyDenialReason = "lifecycle_blocked";
+    expect(widenedBlocked).toBe(LIFECYCLE_BLOCKED_REASON);
+    // @ts-expect-error — same for `lifecycle_unevaluatable` (ADD-56, BR-5): the evaluator can
+    // never return it either — it is produced exclusively by the exposure gate.
+    const widenedUnevaluatable: PolicyDenialReason = "lifecycle_unevaluatable";
+    expect(widenedUnevaluatable).toBe(LIFECYCLE_UNEVALUATABLE_REASON);
   });
 
-  it("the schema closes denialReason — free text FAILS validation (S-US3.6, BR-12)", () => {
+  it("the schema closes denialReason — free text FAILS validation (S-US3.6, BR-12, S-US7.2)", () => {
     const r = record({ status: { phase: "denied", message: "x" } }) as ExecutionRecord;
     (r.status as { denialReason?: string }).denialReason = "some_other_reason";
     expect(validateExecution(r).ok).toBe(false);
@@ -393,6 +399,7 @@ describe("the denial vocabulary — five codes, five producers (D-4, BR-13, BR-1
       "principal_denied",
       "policy_unevaluatable",
       "lifecycle_blocked",
+      "lifecycle_unevaluatable",
     ]) {
       (r.status as { denialReason?: string }).denialReason = reason;
       expect(validateExecution(r).ok).toBe(true);
@@ -411,6 +418,36 @@ describe("the denial vocabulary — five codes, five producers (D-4, BR-13, BR-1
     const r = record() as ExecutionRecord;
     (r.status as { phase: string }).phase = "not_a_phase";
     expect(validateExecution(r).ok).toBe(false);
+  });
+});
+
+// ADD-56 (#56) D-3/BR-20…BR-23, US-7: the schema/type widening is additive — nothing that
+// validated before this increment stops validating, and the new member is rejected until now.
+describe("ADD-56 — the schema edit is additive (US-7, BR-20…BR-23)", () => {
+  it("S-US7.1: every pre-existing denialReason value, and no denialReason at all, still validates against the post-#56 schema", () => {
+    const preExisting: (ExecutionDenialReason | undefined)[] = [
+      "authenticated_no_credential",
+      "principal_not_allowed",
+      "principal_denied",
+      "policy_unevaluatable",
+      "lifecycle_blocked",
+      undefined,
+    ];
+    for (const denialReason of preExisting) {
+      const r = record({ status: { phase: denialReason ? "denied" : "succeeded", denialReason } }) as ExecutionRecord;
+      expect(validateExecution(r).ok).toBe(true);
+    }
+  });
+
+  it("BR-23: ExecutionDenialReason widens to include lifecycle_unevaluatable, additively", () => {
+    const widened: ExecutionDenialReason = LIFECYCLE_UNEVALUATABLE_REASON;
+    expect(widened).toBe("lifecycle_unevaluatable");
+  });
+
+  it("lifecycle_unevaluatable is a real member producible by buildExecutionRecord and validates end to end", () => {
+    const r = record({ status: { phase: "denied", message: "x", denialReason: LIFECYCLE_UNEVALUATABLE_REASON } });
+    expect(r.status.denialReason).toBe("lifecycle_unevaluatable");
+    expect(validateExecution(r)).toEqual({ ok: true, errors: "" });
   });
 });
 

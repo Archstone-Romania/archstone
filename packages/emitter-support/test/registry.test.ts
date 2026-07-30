@@ -150,3 +150,54 @@ describe("Registry.getExposure (ADD-24)", () => {
     expect(registry.getExposure("tourism.book").hint?.level).toBe("caution");
   });
 });
+
+// ADD-56 (#56) D-1/D-2/D-4: an unrecognized `lifecycle` value fails closed at Registry
+// construction (never stored as `undefined`), and a direct `getExposure` call for an id that
+// names no tool at all fails closed too (defense in depth, not a reachable defect — see D-4's
+// own doc comment on `getExposure`).
+describe("Registry.getExposure — ADD-56 fail-closed coverage", () => {
+  it("BR-1/BR-2/EC-1: a tool with an unrecognized lifecycle value resolves to a real, fail-closed Exposure — never undefined-as-open", () => {
+    const registry = new Registry(ir([tool({ id: "tourism.search", lifecycle: "sunset" as IRTool["lifecycle"] })]));
+    expect(registry.getExposure("tourism.search")).toEqual({
+      listed: false,
+      invocable: false,
+      blockedReason: "unevaluatable",
+    });
+  });
+
+  it("EC-3: a tool with lifecycle entirely absent from the hand-written IR entry is refused, not defaulted to stable (that default is compile()'s alone)", () => {
+    const t = tool({ id: "tourism.search" }) as Partial<IRTool>;
+    delete t.lifecycle;
+    const registry = new Registry(ir([t as IRTool]));
+    expect(registry.getExposure("tourism.search")).toEqual({
+      listed: false,
+      invocable: false,
+      blockedReason: "unevaluatable",
+    });
+  });
+
+  it("EC-8: a resolved id whose lifecycle is unrecognized resolves via the map's own default-branch value, never the D-4 fallback", () => {
+    const registry = new Registry(ir([tool({ id: "tourism.search", lifecycle: "sunset" as IRTool["lifecycle"] })]));
+    // Distinguishable from EC-9 below only by the fact that a tool actually exists here.
+    expect(registry.getExposure("tourism.search").blockedReason).toBe("unevaluatable");
+  });
+
+  it("D-4/S-US8.1/EC-9: an id absent from exposureById entirely (no such tool) returns {listed:false, invocable:false}, no blockedReason", () => {
+    const registry = new Registry(ir([tool({ id: "tourism.search" })]));
+    expect(registry.getExposure("does-not-exist")).toEqual({ listed: false, invocable: false });
+    expect(registry.getExposure("does-not-exist").blockedReason).toBeUndefined();
+  });
+
+  it("S-US8.2: the three internal call sites (getCapability/listCapabilities-resolved ids) are unaffected by the flipped fallback", () => {
+    const registry = new Registry(ir([tool({ id: "tourism.search", lifecycle: "stable" })]));
+    // Every id these two entry points can ever hand back is, by construction, present in
+    // exposureById — the flipped fallback never fires for a resolved id.
+    for (const t of registry.listCapabilities()) {
+      expect(registry.getExposure(t.id)).toEqual({ listed: true, invocable: true });
+    }
+    expect(registry.getExposure(registry.getCapability("tourism.search")!.id)).toEqual({
+      listed: true,
+      invocable: true,
+    });
+  });
+});

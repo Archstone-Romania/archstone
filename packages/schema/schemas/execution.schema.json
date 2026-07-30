@@ -87,9 +87,10 @@
             "principal_not_allowed",
             "principal_denied",
             "policy_unevaluatable",
-            "lifecycle_blocked"
+            "lifecycle_blocked",
+            "lifecycle_unevaluatable"
           ],
-          "description": "Why the attempt was refused when phase is denied. A CLOSED set, enforced here and not only in a TypeScript union — this file is the product contract a non-TypeScript consumer of the audit log reads. The first four are exactly the policy evaluator's PolicyDenialReason, copied verbatim; `lifecycle_blocked` is the one non-policy refusal code, produced by the exposure gate that refuses a `retired` capability BEFORE policy is consulted. Standing rule: every member has exactly one enumerated producer, and the set grows only by an architecture decision naming the new producer."
+          "description": "Why the attempt was refused when phase is denied. A CLOSED set, enforced here and not only in a TypeScript union — this file is the product contract a non-TypeScript consumer of the audit log reads. The first four are exactly the policy evaluator's PolicyDenialReason, copied verbatim. The last two are both produced by the exposure gate (never by the policy evaluator), which runs BEFORE policy is consulted, and are deliberately distinct from each other: `lifecycle_blocked` is a GOVERNANCE refusal (the capability's declared `retired` lifecycle — a business withdrew it, remedied only by a business decision to un-retire it); `lifecycle_unevaluatable` (ADD-56) is a COMPATIBILITY refusal (the declared `lifecycle` value is not one this build recognizes at all — an unrecognized string, a non-string, or an absent field on a hand-written or forward-versioned artifact — remedied only by upgrading the runtime or recompiling with a compatible builder, never by a business decision). Standing rule: every member has exactly one enumerated producer, and the set grows only by an architecture decision naming the new producer."
         }
       }
     }

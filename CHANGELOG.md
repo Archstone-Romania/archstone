@@ -5,6 +5,103 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.9.0]
+
+Minor release, never a patch: `denialReason`'s enum gains a sixth, additive member and
+`ExecutionDenialReason`/`Exposure` both widen at the type level — ADD-43 R-3 / ADD-51 OQ-51-A's
+precedent for treating a behaviour-changing, type-widening fix as a minor bump under 0.x applies
+identically here (ADD-56, D-7).
+
+### Fixed
+
+- **`lifecycleExposure()` had no `default` branch and failed OPEN on an unrecognized `lifecycle`
+  value (#56, ADD-56).** The function's `switch` covered exactly the five known `Lifecycle`
+  literals; a value outside that set (an unrecognized string, a non-string, or the field absent
+  entirely) fell off the end and implicitly returned `undefined`. `Registry`'s constructor stored
+  that `undefined` as a real `Map` value, and `getExposure`'s old `?? {listed:true,
+  invocable:true}` fallback could not tell a present-but-`undefined` value apart from a missing
+  key — the capability became **fully listed and fully invocable**. Reachable only through
+  `fromIR` (`@archstone/agent`'s embedded-SDK/MCP surface), which validates only `version ===
+  "0"` by design (ADD-0008 D-2) and never runtime-checks `lifecycle` — a hand-written or
+  forward-versioned artifact was therefore the only trigger; nothing `archstone build` emits can
+  produce it (`lowerLifecycle` always defaults absent-or-unrecognized to `"stable"` at compile
+  time). `lifecycleExposure` is now a **total** function: the new `default` branch returns
+  `{listed:false, invocable:false}` — the same fail-closed shape as `retired` — so
+  `Registry.exposureById` can never again hold `undefined`. As a side effect, this also closes a
+  latent, narrower crash: `combineExposure` previously threw a `TypeError` reading `.hint` off
+  `undefined` whenever a `Registry` was constructed directly with both an unrecognized-lifecycle
+  tool and a covering (non-green) health entry.
+
+  **The refusal is deliberately distinguishable from `retired`'s.** `Exposure` gains one optional
+  field, `blockedReason?: "retired" | "unevaluatable"`, populated only when `invocable:false`. A
+  `retired` capability is a **governance** fact (a business withdrew it; remedied only by a
+  business decision to un-retire it). An unrecognized `lifecycle` is a **compatibility** fact
+  (this build cannot evaluate the declared value; remedied only by upgrading the runtime or
+  recompiling with a compatible builder). Conflating the two in the audit trail — the same harm
+  `policy_unevaluatable` exists to prevent for policy denials — would misattribute evidence to
+  someone reading it later. `callTool` (`@archstone/runtime`) and `executeCapability`
+  (`@archstone/agent`) now select message text and `denialReason` from this discriminant instead
+  of unconditionally hardcoding `retired`'s text/`lifecycle_blocked`, as they did before this
+  fix. `retired`'s own message text, `denialReason`, and MCP `_meta[LIFECYCLE_BLOCKED_META_KEY]`
+  shape are **byte-for-byte unchanged** — verified by every pre-existing #51 test passing
+  unmodified. The new case surfaces on MCP under a distinct `_meta` key,
+  `dev.archstone/lifecycle_unevaluatable` (`LIFECYCLE_UNEVALUATABLE_META_KEY`), and on the
+  embedded SDK as `ExecuteResult.denial.reason === "lifecycle_unevaluatable"`.
+
+  Two additional, zero-behaviour-change hardening `default` branches land in the same diff:
+  `exposure.ts`'s sibling `healthHint` switch and `@archstone/agent`'s `buildToolDefs`'s `switch
+  (format)`. Neither is reachable through any untrusted path today (`HealthStatus` values are
+  pre-filtered by `readHealthSnapshot`'s allowlist before ever reaching `healthHint`; `format` is
+  always supplied by the trusted host calling `tools(format)` directly) — both get an explicit
+  `default` anyway, closing the same syntactic pattern everywhere it appears rather than only
+  where it was live. `buildToolDefs` now throws a named error identifying the unrecognized
+  format instead of silently returning `undefined` where `ToolDef[]` is declared.
+
+  `Registry.getExposure`'s unknown-id fallback also flips, from `{listed:true, invocable:true}`
+  to `{listed:false, invocable:false}` — defense in depth on a public method a host can call
+  directly with an arbitrary string, bypassing `getCapability` entirely. Verified unreachable
+  through all three internal call sites (`callTool`, `executeCapability`,
+  `toolDefinitions`/`buildToolDefs`'s listing paths), each of which always resolves `id` via
+  `getCapability`/`listCapabilities` first.
+
+  **Two published contracts widen, both additively.** `execution.schema.json`'s
+  `status.denialReason` enum gains a sixth member, `lifecycle_unevaluatable`
+  (`LIFECYCLE_UNEVALUATABLE_REASON`); `ExecutionDenialReason` (TypeScript) widens to match. Every
+  record that validated against the pre-#56 five-member schema continues to validate
+  byte-for-byte against the post-#56 six-member one. `Exposure` — exported from
+  `@archstone/emitter-support`'s own root and, since `0.8.0`, live on the public npm registry —
+  gains the one optional `blockedReason` field described above; no existing consumer
+  constructing or reading an `Exposure` value is affected, because nothing reads a field that did
+  not exist before and nothing is required to populate one that stays optional. No `IRTool`,
+  `Lifecycle`, `LIFECYCLE_STATES`, IR `version`, CDL grammar, or `fromIR` validation change —
+  this defect and its fix live entirely below the IR, in how `@archstone/emitter-support` treats
+  a value it did not itself validate. `verifyTool`/`archstone verify` is unaffected, on either
+  lifecycle case, matching ADD-51 D-6's ruling. `tools()`/`buildToolDefs`'s own exposure-blindness
+  (tracked separately, #55) is unaffected and unfixed by this increment.
+
+### Upgrade notes
+
+- **If you have a persisted `archstone.ir.json` built by `archstone build` before v0.6.0
+  (before capability lifecycle states existed), upgrading past this release will silently empty
+  your tool surface.** This release makes the embedded SDK and MCP server refuse any capability
+  whose `lifecycle` value they don't recognize, closing a bug where such a capability was
+  previously exposed with no restriction at all. An IR artifact built before v0.6.0 has no
+  `lifecycle` field on any of its tools — which now falls into the same "unrecognized" bucket.
+  The practical effect: every capability in that file becomes simultaneously hidden from listing
+  and blocked from invocation, with no crash and no startup error — the tool surface just looks
+  empty.
+
+  **How to tell if you're affected:** open your `archstone.ir.json` and check whether its tool
+  entries have a `"lifecycle"` field. If it's missing on some or all tools, or if the file
+  predates v0.6.0, you're affected.
+
+  **What to do:** rebuild the artifact — run `archstone build` again using this version (or
+  later) of the compiler before upgrading whatever runs it (`@archstone/agent`,
+  `@archstone/runtime`) past this release. A freshly built artifact always carries a `lifecycle`
+  value on every tool (defaulting to `stable` unless you set one explicitly) and is unaffected by
+  this change. There's no way to patch an old artifact in place short of rebuilding it — do this
+  before you upgrade, not after.
+
 ## [0.8.0]
 
 Minor release, never a patch: `ExecuteDenial.reason`'s published type widens (see "Changed" below)

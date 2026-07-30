@@ -145,7 +145,19 @@ describe("execute() — US-3: every lifecycle state other than retired stays inv
     },
   );
 
-  it("no lifecycle field declared (defaults to stable) remains invocable (S-US3.4)", async () => {
+  // ADD-56 (#56) — CORRECTED, not merely updated: this test's title and assertion, as they read
+  // before this ADD, pinned the exact fail-open BUG #56 exists to close, mislabeled as
+  // "defaults to stable". `loadArtifact()` round-trips a REAL compiled artifact through JSON —
+  // `compile()`'s own "absent lifecycle defaults to stable" behavior (`lowerLifecycle`,
+  // asserted directly against the compiler in `packages/compiler/test/compile.test.ts`) had
+  // ALREADY run and written an explicit `lifecycle: "stable"` onto this tool. Deleting the key
+  // afterwards does not "undo" that default — it simulates a hand-written/corrupted artifact
+  // missing the field entirely, exactly EC-3's scenario, which reached `lifecycleExposure`'s old
+  // switch, matched no case, and fell through to `undefined` — the bug, not a default, and
+  // `getExposure`'s old fallback happened to also resolve to `invocable:true`, which is why the
+  // old assertion (`r.status === "ok"`) passed for the wrong reason. Per ADD-56 D-1/EC-3/
+  // S-US1.3, this now correctly refuses.
+  it("a lifecycle field entirely absent from a hand-written/corrupted artifact is refused (EC-3, S-US1.3) — the compile-time 'defaults to stable' behavior lives ONLY inside compile(), never inside lifecycleExposure", async () => {
     const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
     delete artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle;
     const archstone = fromIR(artifact);
@@ -154,8 +166,61 @@ describe("execute() — US-3: every lifecycle state other than retired stays inv
       { destination: "Nice" },
       { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
     );
-    expect(r.status).toBe("ok");
-    expect(r.denial).toBeUndefined();
+    expect(r.status).toBe("error");
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
+  });
+});
+
+// ADD-56 (#56) BR-14/BR-15/BR-16/S-US4.3: a `default`-branch gate that over-fires on a
+// RECOGNIZED lifecycle state is a worse defect than the fail-open one this ADD closes. Only a
+// hand-authored, out-of-vocabulary value may ever trigger `lifecycle_unevaluatable`.
+describe("execute() — US-4: the five recognized lifecycle states never produce lifecycle_unevaluatable (#56)", () => {
+  const fetchImpl: FetchLike = async () =>
+    new Response(
+      JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+      { status: 200 },
+    );
+
+  it.each(["experimental", "beta", "stable", "deprecated"] as const)(
+    "lifecycle '%s' never reports denial.reason lifecycle_unevaluatable (S-US4.3)",
+    async (lifecycle) => {
+      const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
+      artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle = lifecycle;
+      const archstone = fromIR(artifact);
+      const r = await archstone.execute(
+        "tourism.search",
+        { destination: "Nice" },
+        { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
+      );
+      expect(r.status).toBe("ok");
+      expect(r.denial?.reason).not.toBe("lifecycle_unevaluatable");
+    },
+  );
+
+  it("retired reports lifecycle_blocked, never lifecycle_unevaluatable (BR-16)", async () => {
+    const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
+    artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle = "retired";
+    const archstone = fromIR(artifact);
+    const r = await archstone.execute("tourism.search", { destination: "Nice" }, { fetchImpl });
+    expect(r.denial?.reason).toBe("lifecycle_blocked");
+  });
+
+  it("an unrecognized lifecycle reports lifecycle_unevaluatable, never lifecycle_blocked (BR-16, EC-1)", async () => {
+    const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
+    artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle = "sunset";
+    const archstone = fromIR(artifact);
+    const r = await archstone.execute("tourism.search", { destination: "Nice" }, { fetchImpl });
+    expect(r.status).toBe("error");
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
+    expect(r.denial?.reason).not.toBe("lifecycle_blocked");
+  });
+
+  it("EC-4: a near-miss spelling of 'retired' (capitalized) is treated as unrecognized, never coerced to the retired case", async () => {
+    const artifact = loadArtifact() as { tools: { id: string; lifecycle?: string }[] };
+    artifact.tools.find((t) => t.id === "tourism.search")!.lifecycle = "Retired";
+    const archstone = fromIR(artifact);
+    const r = await archstone.execute("tourism.search", { destination: "Nice" }, { fetchImpl });
+    expect(r.denial?.reason).toBe("lifecycle_unevaluatable");
   });
 });
 

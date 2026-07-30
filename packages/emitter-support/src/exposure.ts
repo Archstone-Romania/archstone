@@ -34,6 +34,19 @@ export interface Exposure {
   listed: boolean;
   invocable: boolean;
   hint?: ExposureHint;
+  /**
+   * ADD-56 D-2: populated ONLY when `invocable:false`, naming which of the two possible block
+   * reasons produced it — `"retired"` (a business withdrew this capability, ADD-24 D-10) or
+   * `"unevaluatable"` (this build does not recognize the declared `lifecycle` value at all,
+   * ADD-56 D-1). The two are different facts with different remediations (a business decision
+   * to un-retire, vs. a runtime/compiler upgrade) and must never be conflated in the audit
+   * trail — see `callTool`/`executeCapability`'s own comments at the exposure gate.
+   *
+   * Always absent when `invocable:true`. Also absent for `Registry.getExposure`'s unknown-id
+   * fallback (D-4) — there is no tool to report a block reason about, which is exactly what
+   * distinguishes that case from either of these two.
+   */
+  blockedReason?: "retired" | "unevaluatable";
 }
 
 /** Severity order, defined once (`none < caution < deprecation`) so health composition
@@ -53,12 +66,32 @@ function severityOf(hint: ExposureHint | undefined): number {
  *  - stable       → listed:true,  invocable:true, no hint.
  *  - deprecated   → listed:true,  invocable:true, hint: deprecation. The draft's "or hidden
  *    by Policy" branch is explicitly deferred (ADD-24 D-10/R-3) — no Policy engine exists.
- *  - retired      → listed:false, invocable:false — the ONLY state that blocks invocation
- *    (ADD-24 D-10); this is the sole gate `callTool` must enforce beyond bindings.
+ *  - retired      → listed:false, invocable:false, blockedReason:"retired" — a governance
+ *    refusal (ADD-24 D-10); this is the sole gate `callTool` must enforce beyond bindings.
  *
  * R-4 (ADD-24): `beta`/`deprecated` differ only in hint text, not listed/invocable — a valid
  * MVP simplification (every one of the five states still gets a faithful, distinct lowering
  * as a whole), not a missing behavior.
+ *
+ * ADD-56 D-1/R-1: THIS FUNCTION IS TOTAL — the `default` branch below is NOT dead code, even
+ * though `lifecycle`'s static type (`Lifecycle`) is a closed five-member union and TypeScript's
+ * own exhaustiveness narrowing will therefore prove the branch "unreachable" from the type
+ * checker's point of view (verified empirically in ADD-56 §1: `tsc --strict
+ * --noImplicitReturns` does not flag a missing `default` on an exhausted literal-union switch).
+ * The type system is right about the type and wrong about the data: `lifecycle` reaches this
+ * function un-runtime-validated whenever it arrives via `fromIR`'s `json as IR` cast
+ * (`agent/src/index.ts`) — a hand-written or forward-versioned artifact can carry ANY string
+ * (or a non-string, or an absent field) here, by design (ADD-0008 D-2, `fromIR` validates only
+ * `version === "0"`). Before this ADD, that fell off the end of the switch and returned
+ * `undefined`, which `Registry`'s constructor stored as a real `Map` value, and
+ * `getExposure`'s `?? {listed:true, invocable:true}` fallback could not tell apart from a
+ * missing key — the capability became fully listed and fully invocable. This `default` branch
+ * is what makes that impossible: every call now returns a real `Exposure`, fail-closed, exactly
+ * like `retired` but distinguishably (`blockedReason:"unevaluatable"`, never `"retired"`) so a
+ * governance refusal and a compatibility refusal are never conflated downstream. Do not remove
+ * this branch on the reasoning that "the switch is already exhaustive" — that reasoning is
+ * exactly the trap; see `policy.ts`'s `unevaluatable()` guard for the same precedent at the
+ * same trust boundary.
  */
 export function lifecycleExposure(lifecycle: Lifecycle): Exposure {
   switch (lifecycle) {
@@ -71,7 +104,12 @@ export function lifecycleExposure(lifecycle: Lifecycle): Exposure {
     case "deprecated":
       return { listed: true, invocable: true, hint: { level: "deprecation", text: "deprecated — avoid new usage" } };
     case "retired":
-      return { listed: false, invocable: false };
+      return { listed: false, invocable: false, blockedReason: "retired" };
+    default:
+      // ADD-56 D-1: `lifecycle` crossed the `fromIR` trust boundary without runtime validation
+      // (see this function's own doc comment) and matched none of the five known literals — the
+      // most restrictive, same-shaped response as `retired`, but distinguishably so.
+      return { listed: false, invocable: false, blockedReason: "unevaluatable" };
   }
 }
 
@@ -82,6 +120,13 @@ function healthHint(health: HealthStatus): ExposureHint | undefined {
     case "yellow":
       return { level: "caution", text: "binding health: yellow — the last contract verification was degraded" };
     case "green":
+      return undefined;
+    default:
+      // ADD-56 D-5: zero-risk hardening, NOT a fix to a reachable defect — verified unreachable
+      // through any untrusted path today. `HealthStatus` values are pre-filtered through
+      // `HEALTH_STATUSES` (runtime/src/registry.ts) before ever reaching this function, unlike
+      // `lifecycle` above. Matches `"green"`'s existing behavior (no hint) for symmetry with the
+      // sibling switch, not because an unrecognized reading is a live hazard.
       return undefined;
   }
 }

@@ -129,10 +129,22 @@ export class Registry {
 
   /** A tool's combined exposure (lifecycle + optional health, ADD-24) — the single value
    *  both `toolDefinitions` (listing) and `callTool` (invocation) read. Every `ir.tools`
-   *  entry has one; an unknown id falls back to the neutral default (never reached in
-   *  practice, since callers resolve `id` via `getCapability` first). */
+   *  entry has one.
+   *
+   *  ADD-56 D-4: an unknown id (absent from `exposureById` entirely — no tool exists) falls
+   *  back to `{listed:false, invocable:false}`, fail-closed — flipped from the previous
+   *  `{listed:true, invocable:true}`. Verified SAFE (never reached) for all three internal
+   *  call sites (`callTool`, `executeCapability`, `toolDefinitions`/`buildToolDefs`'s listing
+   *  paths): each resolves `id` via `getCapability`/`listCapabilities` first, sourced from the
+   *  identical `ir.tools` this map is built from, so the key is always present by construction.
+   *  Flipped anyway as defense in depth: this is a PUBLIC method, and a host embedding
+   *  `@archstone/agent`/`@archstone/runtime` can call `registry.getExposure(anyString)`
+   *  directly, bypassing `getCapability` entirely — an authorization-adjacent accessor should
+   *  not default an unresolved id to full access. No `blockedReason` is set here: this is a
+   *  distinct "no such tool" state, never conflated with either lifecycle refusal reason
+   *  (`"retired"` / `"unevaluatable"`), both of which require a resolved tool to report on. */
   getExposure(id: string): Exposure {
-    return this.exposureById.get(id) ?? { listed: true, invocable: true };
+    return this.exposureById.get(id) ?? { listed: false, invocable: false };
   }
 
   /** All capabilities (bound or not), for MCP tool listing / reporting. */

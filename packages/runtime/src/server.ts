@@ -23,6 +23,7 @@ import {
   buildExecutionRecord,
   emitExecutionRecord,
   LIFECYCLE_BLOCKED_REASON,
+  LIFECYCLE_UNEVALUATABLE_REASON,
   type ExecutionStatus,
 } from "@archstone/emitter-support";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
@@ -89,6 +90,15 @@ export const CONTRACT_VIOLATION_META_KEY = "dev.archstone/contract_violation";
  *  blocked before any connector work" from "the provider's response violated the contract". */
 export const LIFECYCLE_BLOCKED_META_KEY = "dev.archstone/lifecycle_blocked";
 
+/** ADD-56 D-2/OQ-56-B: the namespaced `_meta` key an unrecognized-lifecycle rejection is
+ *  carried under — a DISTINCT key from `LIFECYCLE_BLOCKED_META_KEY`, mirroring
+ *  `POLICY_DENIED_META_KEY` vs. `LIFECYCLE_BLOCKED_META_KEY` being genuinely distinct keys
+ *  rather than one key with a varying `error` string inside it. `retired` (a governance
+ *  refusal) and an unrecognized `lifecycle` (a compatibility refusal) are different facts with
+ *  different remediations and must be trivially distinguishable to a client — see
+ *  `exposure.ts`'s `Exposure.blockedReason` doc comment. */
+export const LIFECYCLE_UNEVALUATABLE_META_KEY = "dev.archstone/lifecycle_unevaluatable";
+
 /** #43 ADD-43: the namespaced `_meta` key a POLICY denial is carried under — the third use of
  *  the ADD-19 Rev 2 D-3′/D-6 precedent, verbatim: never `structuredContent`, because the
  *  reference SDK client validates that against the tool's `outputSchema` unconditionally (not
@@ -147,11 +157,34 @@ export async function callTool(
     );
   };
 
-  // ADD-24 D-10/D-11: only `lifecycle: retired` sets `invocable:false` (health never does,
-  // D-9) — checked immediately after resolution, before any connector/response work, same
-  // call-site discipline the `contract_violation` check already uses downstream.
+  // ADD-24 D-10/D-11: `lifecycle: retired` sets `invocable:false` (health never does, D-9) —
+  // checked immediately after resolution, before any connector/response work, same call-site
+  // discipline the `contract_violation` check already uses downstream.
+  //
+  // ADD-56 D-1/D-2: `lifecycleExposure` is now TOTAL — an unrecognized `lifecycle` value (only
+  // reachable via a hand-written or forward-versioned `fromIR` artifact, ADD-0008 D-2) ALSO sets
+  // `invocable:false`, distinguished from `retired` by `exposure.blockedReason`. The two are
+  // different facts with different remediations (governance vs. compatibility — see
+  // `exposure.ts`'s `Exposure.blockedReason` doc comment) and MUST NOT share a message or a
+  // `denialReason`. `exposure.blockedReason === "unevaluatable"` is the only branch this can take
+  // here: the `undefined` case (D-4's unknown-id fallback) cannot occur, because `tool` above was
+  // already resolved via `getCapability`, which reads the identical `exposureById` map.
   const exposure = registry.getExposure(tool.id);
   if (!exposure.invocable) {
+    if (exposure.blockedReason === "unevaluatable") {
+      const text = `capability '${tool.id}' declares a lifecycle this build does not recognize and cannot evaluate — refusing (fail-closed).`;
+      // #44: `denied`, never `failed` — refusing on a compatibility gap is not a backend
+      // failure. Deliberately distinct denialReason/message/meta-key from the `retired` branch
+      // below (ADD-56 D-2/D-3) — never `LIFECYCLE_BLOCKED_REASON`.
+      audit({ phase: "denied", message: text, denialReason: LIFECYCLE_UNEVALUATABLE_REASON });
+      return {
+        content: [{ type: "text", text }],
+        _meta: {
+          [LIFECYCLE_UNEVALUATABLE_META_KEY]: { error: "lifecycle_unevaluatable", capability: tool.id, lifecycle: tool.lifecycle },
+        },
+        isError: true,
+      };
+    }
     const text = `capability '${tool.id}' is retired and can no longer be invoked.`;
     // #44: `denied`, never `failed` — a refusal by lifecycle is a refusal by governance, and
     // recording it as a failure would conflate it with "the backend broke" in the one log where
