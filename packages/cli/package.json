@@ -1,9 +1,23 @@
 {
   "name": "@archstone/cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": false,
   "type": "module",
-  "description": "CLI (#1): archstone apply — wires the pipeline (parse -> validate -> IR -> runtime).",
+  "description": "Archstone CLI — compile a business capability definition (CDL) into tools an AI agent can call: apply, build, serve over MCP, and verify against the live backend.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "llm",
+    "archstone",
+    "cdl",
+    "cli",
+    "compiler",
+    "claude",
+    "anthropic",
+    "code-generation",
+    "api-integration"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://archstone.dev",
   "repository": {
@@ -27,6 +41,7 @@
   },
   "dependencies": {
     "@archstone/compiler": "workspace:*",
+    "@archstone/init": "workspace:*",
     "@archstone/runtime": "workspace:*",
     "@archstone/schema": "workspace:*"
   },

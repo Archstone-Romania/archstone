@@ -1,0 +1,94 @@
+openapi: 3.1.0
+
+# THE SECOND ORACLE — and the only one that is free.
+#
+# This describes `examples/demo/mock-stays-server.mjs`, the demo's own backend, which is in this
+# repository. The manifest that backend is bound to — `examples/manifests/tourism/` — is
+# hand-written, in-tree, predates this increment, and is the shape ADD-37 itself calls canonical.
+# So the pair is a real inference-quality measurement that costs nothing and vendors nobody's
+# contract.
+#
+# DERIVED FROM THE SERVER, NOT FROM THE MANIFEST. That is the whole basis for calling it an
+# oracle at all, and it is the same structural argument O-14 makes for ArtVinci's document:
+# contamination would require the spec's author to have shaped the input to produce a known
+# expected output. Everything below is readable off `mock-stays-server.mjs`:
+#
+#   - it accepts a POST with a JSON body and reads exactly one property, `destination`
+#     (`const where = query?.destination ?? "your destination"`);
+#   - it answers `{stays: [...]}` where each stay is `{id, name, location, pricePerNight,
+#     rating}` — `buildStays` constructs all five on every element, unconditionally, so all five
+#     are present and non-null on every item;
+#   - `pricePerNight` is an integer (`95 + (… % 245)`), `rating` a one-decimal number;
+#   - `STAYS_API_URL` points at the server's origin and the demo's binding path is `/v1/search`,
+#     so the server URL below carries no path prefix.
+#
+# WHAT IT DELIBERATELY DOES NOT SAY. The hand-written capability declares `dates`, `travelers`
+# and `budget`; the mock reads none of them. Writing them in here to make the diff come out clean
+# would be exactly the contamination this file's honesty depends on — so they are absent, the
+# divergence is real, and `second-oracle.test.ts` records it with its cause rather than hiding it.
+
+info:
+  title: Wanderlust Stays API
+  version: 1.0.0
+  description: Accommodation search for the Wanderlust demo backend.
+
+servers:
+  - url: http://localhost:8787
+
+paths:
+  /v1/search:
+    post:
+      summary: Find places to stay matching a traveler's destination.
+      operationId: searchStays
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination:
+                  type: string
+                  description: Where the traveler wants to stay.
+                  example: Cluj-Napoca
+      responses:
+        '200':
+          description: The matching stays, cheapest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stays]
+                properties:
+                  stays:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Stay'
+
+components:
+  schemas:
+    Stay:
+      type: object
+      description: A bookable place to stay matching a traveler's search.
+      # `buildStays` constructs every one of these on every element, so the document states what
+      # the server actually guarantees. Whether `rating` is genuinely always available is a fact
+      # about the real world that no description of this backend could settle.
+      required: [id, name, location, pricePerNight, rating]
+      properties:
+        id:
+          type: string
+          description: Stable identifier for this stay.
+        name:
+          type: string
+          description: The property's display name.
+        location:
+          type: string
+          description: Where the stay is.
+        pricePerNight:
+          type: integer
+          description: Nightly rate for the stay.
+        rating:
+          type: number
+          description: Guest review score.

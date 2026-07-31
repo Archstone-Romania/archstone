@@ -1,0 +1,18 @@
+binding:
+  capabilityId: catalog.estimate-part-price
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${ACME_API_URL}"
+      method: GET
+      path: /api/v1/parts/{partId}/price
+      # The backend expects width_cm/height_cm on the wire; the CDL input stays camelCase.
+      query:
+        widthCm: width_cm
+        heightCm: height_cm
+
+  response:
+    resource: catalog.PartPriceEstimate
+    map:
+      estimatedPrice: "$.estimatedPrice"
+      currency: "$.currency"

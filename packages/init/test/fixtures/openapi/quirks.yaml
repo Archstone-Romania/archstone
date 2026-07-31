@@ -1,0 +1,318 @@
+openapi: 3.1.0
+
+# THE REFUSALS — one operation per construct the adapter will not model.
+#
+# This file is the scope boundary made executable: every operation here must come back with a
+# named reason code and zero emitted files, and NOTHING here may throw. "Never throws, always
+# reports" is half the `SourceAdapter` contract, and it is the half that keeps R-6's scope
+# creep visible rather than silent.
+#
+# SYNTHETIC, like its sibling.
+
+info:
+  title: Acme Parts — the awkward corners
+  version: 1.0.0
+
+servers:
+  - url: https://api.acme.test/api/v2
+
+paths:
+  /polymorphic:
+    get:
+      summary: A response that is genuinely one shape OR another
+      operationId: getPolymorphic
+      security: []
+      responses:
+        '200':
+          description: Which one? Only a human can say.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Alpha'
+                  - $ref: '#/components/schemas/Beta'
+
+  /discriminated:
+    get:
+      summary: Explicit polymorphism
+      operationId: getDiscriminated
+      security: []
+      responses:
+        '200':
+          description: A discriminator says the merged shape is not the whole story.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Alpha'
+                discriminator:
+                  propertyName: kind
+
+  /conflicting-field:
+    get:
+      summary: Two composed members describe one property differently
+      operationId: getConflictingField
+      security: []
+      responses:
+        '200':
+          description: Field-scoped conflict — the operation survives, that one property does not.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictingScalar'
+
+  /conflicting-collection:
+    get:
+      summary: Two composed members disagree about whether a key is an array of objects
+      operationId: getConflictingCollection
+      security: []
+      responses:
+        '200':
+          description: The one conflict that MUST escalate — it would make the locus census a guess.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictingCollection'
+
+  /contradictory-kind:
+    get:
+      summary: Composed members that disagree about the structural kind itself
+      operationId: getContradictoryKind
+      security: []
+      responses:
+        '200':
+          description: Nothing satisfies both; picking one would be a guess.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContradictoryKind'
+
+  /agreeing-collections:
+    get:
+      # BF-2: both composed members agree the response HAS a list; they disagree about the
+      # item. The old escalation only fired when they disagreed about being a list at all, so
+      # this fell through to a field-scoped conflict, the property became `unknown`, and the
+      # locus census silently lost a collection both sides agreed was there.
+      summary: Two composed members describe the same list with different items
+      operationId: getAgreeingCollections
+      security: []
+      responses:
+        '200':
+          description: Both say `results` is a list; they disagree about what is in it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgreeingCollections'
+
+  /basic-auth:
+    get:
+      summary: An operation protected by HTTP Basic
+      operationId: getWithBasicAuth
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: Reducible-looking, and not actually reducible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alpha'
+
+  /circular:
+    get:
+      summary: A schema that refers to itself
+      operationId: getCircular
+      security: []
+      responses:
+        '200':
+          description: Depth-unbounded is not the same as depth-infinite.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cycle'
+
+  /header-param:
+    get:
+      summary: An input that travels in a header
+      operationId: getWithHeaderParam
+      security: []
+      parameters:
+        - name: X-Tenant
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A transport header is not business input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alpha'
+
+  /query-key:
+    get:
+      summary: A credential that travels in the query string
+      operationId: getWithQueryKey
+      security:
+        - adminTokenQuery: []
+      responses:
+        '200':
+          description: No connector header can carry this.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alpha'
+
+  /oauth:
+    get:
+      summary: An OAuth2-protected operation
+      operationId: getWithOauth
+      security:
+        - oauth: []
+      responses:
+        '200':
+          description: There is no static credential to place.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alpha'
+
+  /csv:
+    get:
+      summary: A non-JSON response
+      operationId: getCsv
+      security: []
+      responses:
+        '200':
+          description: Nothing here is a JSON leaf.
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /missing-document:
+    get:
+      summary: A reference into a file nobody supplied
+      operationId: getMissingDocument
+      security: []
+      responses:
+        '200':
+          description: Fail closed — an unresolved member could change the locus census.
+          content:
+            application/json:
+              schema:
+                $ref: 'nowhere.yaml#/components/schemas/Ghost'
+
+  /remote:
+    get:
+      summary: A reference to a URL
+      operationId: getRemote
+      security: []
+      responses:
+        '200':
+          description: This adapter opens no socket, ever.
+          content:
+            application/json:
+              schema:
+                $ref: 'https://example.test/schema.json#/Thing'
+
+  /escaping:
+    get:
+      summary: A reference that climbs out of the document's own subtree
+      operationId: getEscaping
+      security: []
+      responses:
+        '200':
+          description: A spec file must not become an arbitrary file-read primitive.
+          content:
+            application/json:
+              schema:
+                $ref: '../../../etc/passwd#/x'
+
+components:
+  securitySchemes:
+    adminTokenQuery:
+      $ref: 'shared.yaml#/components/securitySchemes/adminTokenQuery'
+    basicAuth:
+      type: http
+      scheme: basic
+    oauth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://api.acme.test/oauth/token
+          scopes: {}
+
+  schemas:
+    Alpha:
+      type: object
+      required: [a]
+      properties:
+        a:
+          type: string
+
+    Beta:
+      type: object
+      required: [b]
+      properties:
+        b:
+          type: string
+
+    ConflictingScalar:
+      allOf:
+        - type: object
+          required: [value]
+          properties:
+            value:
+              type: string
+        - type: object
+          properties:
+            value:
+              type: number
+
+    ConflictingCollection:
+      allOf:
+        - type: object
+          required: [rows]
+          properties:
+            rows:
+              type: array
+              items:
+                $ref: '#/components/schemas/Alpha'
+        - type: object
+          properties:
+            rows:
+              type: string
+
+    ContradictoryKind:
+      allOf:
+        - type: array
+          items:
+            $ref: '#/components/schemas/Alpha'
+        - type: object
+          properties:
+            a:
+              type: string
+
+    AgreeingCollections:
+      allOf:
+        - type: object
+          required: [results]
+          properties:
+            results:
+              type: array
+              items:
+                $ref: '#/components/schemas/Alpha'
+        - type: object
+          properties:
+            results:
+              type: array
+              items:
+                $ref: '#/components/schemas/Beta'
+
+    Cycle:
+      type: object
+      properties:
+        next:
+          $ref: '#/components/schemas/Cycle'

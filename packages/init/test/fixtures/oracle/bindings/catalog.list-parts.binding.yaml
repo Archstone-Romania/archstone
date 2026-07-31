@@ -1,0 +1,19 @@
+binding:
+  capabilityId: catalog.list-parts
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${ACME_API_URL}"
+      method: GET
+      path: /api/v1/parts
+
+  response:
+    collection: "$.items[*]"
+    resource: catalog.Part
+    map:
+      id: "$.id"
+      name: "$.name"
+      material: "$.material"
+      description: "$.description"
+      widthMm: "$.widthMm"
+      pricePerUnit: "$.pricePerUnit"

@@ -5,6 +5,97 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.0]
+
+Minor release. New user-facing functionality, no breaking change: every export, schema and
+artifact shipped by 0.9.0 behaves identically. One new published package, `@archstone/init`,
+joins the eight that now ship in lockstep; `@archstone/cli` depends on it, so upgrade the CLI
+rather than pinning packages individually.
+
+### Added
+
+- **`archstone init` — turn an API you already have into a CDL manifest that compiles (#37,
+  ADD-37 with Amendments 1–3).** New public package `@archstone/init` plus a thin `init` verb
+  on the CLI: `archstone init <spec-file> --out <dir>`. Point it at an OpenAPI 3.x document
+  and it writes `capabilities.yaml`, `*.capability.yaml`, `*.resource.yaml` and
+  `bindings/*.binding.yaml` — and an `INIT-REPORT.md` beside them. **No LLM is involved, on
+  any path.**
+
+  What makes it worth upgrading for is not the file generation. It is what the tool refuses
+  to do:
+
+  - **It is a loop, not a generator.** Before anything is written to your directory, `init`
+    materializes the candidate manifest in a temp directory and runs the *real* shipped
+    pipeline over it — `load` → `validateSemantics` → `compile` → `new Registry()`. The
+    terminal states are "a manifest that compiles was written" or "nothing was written, and
+    here is why" (D-7). A compile failure, a tool-name collision, or an empty confirmed set
+    writes **zero files**. You never get a half-scaffold to clean up by hand.
+  - **It asks instead of guessing.** `effect` is never inferred — a `POST /search` is a
+    `read`, and no method-to-effect heuristic survives contact with a real API — so a
+    confirmed `effect` exists only in a **Decision Record**, and the pure emitter takes the
+    Decision Record rather than any adapter hint (D-3/D-4). Same for a response that can
+    honestly be read two ways: an object carrying a scalar payload *and* one incidental array
+    is structurally identical to a paginated list wrapper, so `init` enumerates the candidate
+    loci and asks which one is the payload rather than picking (D-9/D-14). Genuinely
+    unsupported constructs are skipped per-candidate with a named reason code and nothing
+    emitted for them — never silently approximated.
+  - **It calls your backend only with explicit, per-capability consent, and only to record a
+    real fixture.** `--probe` is opt-in and off by default; consent is asked per capability;
+    a request is never issued for a capability whose confirmed `effect` is not `read`; a
+    non-`GET`/`HEAD` method needs a second, separate confirmation and is refused outright
+    when there is no terminal. The recorded golden fixture is written by `recordContract()`
+    in `@archstone/runtime` — the *same module*, over the *same* `invokeRest` call, as
+    `verifyTool` — so the fixture `init` writes is by construction the artifact
+    `archstone verify` later replays (D-6), not a lookalike.
+  - **It tells you what it did not understand.** A coverage guard over the OpenAPI reader
+    inverts the usual default: each object type declares the keys it *reads* and the keys it
+    argues are *inert*, and everything else — including keys from a future OpenAPI revision,
+    and keys a contributor forgets to declare — falls through to a note in the report rather
+    than being dropped in silence (D-18). Every fact in the intermediate Draft Model carries
+    its derivation (`declared` from a spec, `observed` from a real response, or `absent`), and
+    the report and the emitted comments are rendered from that provenance, so a
+    classification made from N observed items says so instead of claiming to be a
+    measurement.
+  - **The required/optional rule, stated once and gotten right.** CDL `required: true` only on
+    positive evidence of non-nullability — declared-required **and** non-nullable **and** (if
+    probed) present and non-null on every recorded item (D-12). The shipped response mapper
+    treats `null` identically to `undefined`, so the inverse ships a manifest that goes
+    VIOLATION on the first real null.
+
+  The input format is an adapter over the Draft Model, not the architecture (D-1): OpenAPI
+  3.x is the first adapter, `$ref`/`allOf` closure and the `oneOf` nullability idiom included;
+  adding another touches no file outside `adapters/`. The package root export is pure — no
+  fs, no HTTP, no prompts, no clock — with orchestration in `@archstone/init/loop` and the
+  terminal in the CLI, so a hosted flow can reuse the core verbatim. Ships with an IR-level
+  diff harness that compares a generated manifest against a hand-written one by compiled IR
+  joined on connector, which is how the increment measures itself against two independent
+  oracles rather than against its own output.
+
+- **`recordContract()` and the `@archstone/runtime/verify` subpath export.** `recordContract`
+  sits beside `verifyTool` in the same module and records a golden fixture for a tool that
+  does not have a contract yet (`verifyTool` returns `red` before doing anything when
+  `!tool.contract`, which is exactly the artifact being created). The new
+  `@archstone/runtime/verify` subpath exposes `runVerify` / `verifyTool` / `recordContract` /
+  `HealthStatus` without pulling the MCP SDK in through the root index's `serveStdio`
+  re-export. Both are additive; the root export is unchanged.
+
+### Changed
+
+- **The README leads with proof rather than with claims**, and a new `CASE-STUDY.md` documents
+  the ArtVinci integration end to end. `docs/ONBOARDING.md` gains the `init` path — "start
+  here if you have no manifest yet". New `examples/demo/stays-openapi.yaml` (an OpenAPI
+  description of the demo's own mock stays backend, in-tree) and `docs/init.gif`, generated
+  reproducibly from `examples/demo/init.tape`.
+- **Every published package now carries a human description and `keywords`**, replacing
+  issue-number shorthand like "CLI (#1): archstone apply". This changes only npm registry
+  metadata.
+
+### Fixed
+
+- **The remote-MCP demo Worker hung on a non-`POST` to `/mcp` instead of refusing it (#58).**
+  It now answers with an explicit refusal. Demo/example code only — no published package is
+  affected.
+
 ## [0.9.0]
 
 Minor release, never a patch: `denialReason`'s enum gains a sixth, additive member and

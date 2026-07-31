@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { IRResourceRegistry, IRTool } from "@archstone/compiler";
 import { fingerprintShape } from "@archstone/compiler";
 import type { FetchLike } from "@archstone/provider-rest";
-import { verifyTool, runVerify } from "../src/verify";
+import { verifyTool, runVerify, recordContract } from "../src/verify";
 
 const resources: IRResourceRegistry = {
   Stay: [
@@ -176,4 +176,96 @@ describe("runVerify — filters to contract-bearing tools", () => {
       expect(reports).toHaveLength(1);
       expect(reports[0].capabilityId).toBe("tourism.search");
     }));
+});
+
+// ---------------------------------------------------------------------------------------
+// recordContract (ADD-37 D-6 / R-1) — the sibling of verifyTool, not a flag on it.
+// ---------------------------------------------------------------------------------------
+
+/** The same tool, minus the one thing `recordContract` exists to create. */
+function unrecorded(): IRTool {
+  const { contract: _contract, ...rest } = tool(goldenFingerprint);
+  return rest;
+}
+
+describe("recordContract (ADD-37 D-6)", () => {
+  it("records a fingerprint and a fixture for a tool that has NO contract yet", async () => {
+    // Why a sibling and not a flag: `verifyTool` returns `red` on `!tool.contract` before
+    // doing anything, and the contract is precisely what this creates. The chicken-and-egg is
+    // structural, not stylistic.
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+    const r = await recordContract(unrecorded(), { where: "Nice" }, resources, { fetchImpl, now: new Date("2026-07-31T00:00:00Z") });
+    expect(r.outcome).toBe("green");
+    expect(r.fingerprint).toBe(goldenFingerprint);
+    expect(r.fixture).toEqual({ capabilityId: "tourism.search", recordedAt: "2026-07-31T00:00:00.000Z", request: { where: "Nice" } });
+  });
+
+  it("the fingerprint it records is byte-identical to the one `verifyTool` compares against", async () => {
+    // R-1 in one assertion: one `fingerprintShape` call over one `invokeRest` result, in one
+    // module. A second orchestration of this in `init` could drift from the replay silently,
+    // and the manifest would carry a safety net that had quietly become a liability.
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+    const recorded = await recordContract(unrecorded(), {}, resources, { fetchImpl });
+    await withFixture(async (dir) => {
+      const verified = await verifyTool(tool(recorded.fingerprint!), dir, resources, { fetchImpl });
+      expect(verified.status).toBe("green");
+    });
+  });
+
+  it("yellow on a degraded mapping — and it keeps the fixture, because degradation is evidence", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ name: "Hotel A", location: "Nice", price: 100 }] }), { status: 200 });
+    const r = await recordContract(unrecorded(), {}, resources, { fetchImpl });
+    expect(r.outcome).toBe("yellow");
+    expect(r.degraded).toContain("rating");
+    expect(r.fixture).toBeDefined();
+  });
+
+  it("red on a VIOLATION, and keeps NOTHING", async () => {
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ stays: [{ name: null, location: "Nice", price: 100 }] }), { status: 200 });
+    const r = await recordContract(unrecorded(), {}, resources, { fetchImpl });
+    expect(r.outcome).toBe("red");
+    expect(r.missing).toContain("name");
+    expect(r.fingerprint).toBeUndefined();
+    expect(r.fixture).toBeUndefined();
+  });
+
+  it("`not-attempted` when an env var is unset — no request was sent, so nothing was learned", async () => {
+    // The fourth outcome (ADD-37 Amendment 1 §A-5). Reporting this as `red` asserts the
+    // backend disagreed with the manifest, which is false; false reds are how people learn to
+    // ignore reds.
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return new Response("{}", { status: 200 });
+    };
+    const envTool: IRTool = { ...unrecorded(), connector: { type: "rest", rest: { baseUrl: "${NOPE_API_URL}", method: "POST", path: "/search" } } };
+    const r = await recordContract(envTool, {}, resources, { fetchImpl, env: {} });
+    expect(r.outcome).toBe("not-attempted");
+    expect(calls).toBe(0);
+    expect(r.fixture).toBeUndefined();
+  });
+
+  it("a genuine network failure is `red`, not `not-attempted`", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    const r = await recordContract(unrecorded(), {}, resources, { fetchImpl });
+    expect(r.outcome).toBe("red");
+  });
+
+  it("a policy denial is `not-attempted` — the probe observed nothing about the backend", async () => {
+    // `init` never emits `policies:`, so this cannot fire on a generated manifest. It is here
+    // so that RE-recording an existing hand-written one cannot route around the gate
+    // `verifyTool` already routes through (#43 / ADD-43 D-6).
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return new Response("{}", { status: 200 });
+    };
+    const gated: IRTool = { ...unrecorded(), policies: ["authenticated"] };
+    const r = await recordContract(gated, {}, resources, { fetchImpl });
+    expect(r.outcome).toBe("not-attempted");
+    expect(calls).toBe(0);
+  });
 });

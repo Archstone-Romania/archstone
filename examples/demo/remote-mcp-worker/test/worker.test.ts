@@ -64,4 +64,37 @@ describe("worker /mcp", () => {
     const res = await worker.fetch(new Request(`${ORIGIN}/nope`));
     expect(res.status).toBe(404);
   });
+
+  it("refuses GET /mcp with 405 and an Allow header instead of opening a dead SSE stream", async () => {
+    const res = await worker.fetch(
+      new Request(`${ORIGIN}/mcp`, { method: "GET", headers: { accept: "text/event-stream" } }),
+    );
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST");
+  });
+
+  it("refuses DELETE /mcp with 405 — no session to tear down on a stateless server", async () => {
+    const res = await worker.fetch(new Request(`${ORIGIN}/mcp`, { method: "DELETE" }));
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST");
+  });
+
+  it("still answers POST /mcp initialize correctly (method check doesn't swallow POST)", async () => {
+    const res = await worker.fetch(
+      mcpRequest({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "vitest", version: "0" },
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as { result?: { serverInfo?: { name: string } } };
+    expect(body.result?.serverInfo?.name).toBeDefined();
+  });
 });

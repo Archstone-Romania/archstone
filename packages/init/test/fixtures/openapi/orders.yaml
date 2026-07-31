@@ -1,0 +1,395 @@
+openapi: 3.1.0
+
+# THE SHAPE THE ORACLE COULD NOT TEST.
+#
+# `catalog.yaml` is six GETs. Every one of its inputs is a path or query parameter, so nothing
+# in it could ever exercise `requestBody` — and `requestBody` was read by nothing in the adapter,
+# so an operation whose input lives in a JSON body emitted a capability with NO `input:` at all,
+# silently. 847 tests, three review rounds and a real-spec oracle all passed over it, because the
+# shape an oracle lacks is the shape it cannot test.
+#
+# This document is that shape, deliberately, in every variant the adapter has to have an answer
+# for: the plain object body, a `$ref`'d body, `allOf` composition inside a body, a non-JSON
+# body, a body with no named fields, a body property that collides with a path parameter, a
+# query parameter on a method that cannot send one, and a `GET` carrying a body the connector
+# can never put on the wire.
+#
+# SYNTHETIC. "Acme Orders" is invented, and shares Acme's house style with `catalog.yaml` on
+# purpose — same server layout, same `security: []` discipline — so a diff between the two reads
+# as "one has bodies" rather than as "two unrelated documents".
+
+info:
+  title: Acme Orders API
+  version: 1.0.0
+  description: Placing orders against the Acme parts catalog.
+
+servers:
+  - url: https://api.acme.test/api/v2
+    description: Production
+
+paths:
+  # THE HEADLINE CASE, and the one the defect was reported against: input lives entirely in a
+  # required JSON body, and there is not a single parameter to hide behind.
+  /orders/search:
+    post:
+      summary: Search orders
+      operationId: searchOrders
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination:
+                  type: string
+                  description: Where the order ships to.
+                  example: Cluj-Napoca
+                budget:
+                  type: [number, 'null']
+                  description: Cap on the total, in RON.
+      responses:
+        '200':
+          description: Matching orders.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrderSummary'
+        '400':
+          description: Malformed search.
+
+  # A body reached by `$ref` into `components/requestBodies` — the sub-map nothing in the adapter
+  # could previously reach, since no code path ever held a request-body node.
+  /orders:
+    post:
+      summary: Place an order
+      operationId: placeOrder
+      security: []
+      requestBody:
+        $ref: '#/components/requestBodies/NewOrder'
+      responses:
+        '201':
+          description: The order as accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderSummary'
+
+  # A path parameter AND a body, which is the ordinary shape and the one where the two input
+  # locations have to coexist without either overwriting the other.
+  /orders/{orderId}/notes:
+    post:
+      summary: Attach a note to an order
+      operationId: addOrderNote
+      security: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: ORD-1042
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, pinnedUntil]
+              properties:
+                body:
+                  type: string
+                  description: The note text.
+                visibility:
+                  type: string
+                  enum: [internal, customer]
+                # D-12's case, on the input side: declared REQUIRED and simultaneously nullable.
+                # There is no positive evidence the agent must supply a value, and CDL cannot say
+                # "required, but null is a value" — so it lowers to optional.
+                pinnedUntil:
+                  type: [string, 'null']
+                  format: date-time
+                  description: Keep the note pinned until this moment.
+      responses:
+        '200':
+          description: The stored note.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, body]
+                properties:
+                  id:
+                    type: string
+                  body:
+                    type: string
+
+  # COMPOSITION INSIDE A BODY. `allOf` is a merge, not a choice (D-10), and a body schema has no
+  # business getting a second, weaker merge implementation of its own.
+  /orders/drafts:
+    post:
+      summary: Save an order draft
+      operationId: saveOrderDraft
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/OrderCore'
+                - type: object
+                  required: [draftName]
+                  properties:
+                    draftName:
+                      type: string
+                      description: What to call this draft.
+      responses:
+        '200':
+          description: The saved draft.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderSummary'
+
+  # NON-JSON. §4 already excludes XML/multipart on the response side; a body is the same rule
+  # read from the other direction, and it must stay a refusal.
+  /orders/attachments:
+    post:
+      summary: Upload an attachment
+      operationId: uploadAttachment
+      security: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '204':
+          description: Stored.
+
+  # A BODY WITH NO NAMED FIELDS. A bare array has nothing that could become a capability input,
+  # and there is no connector construct that could place one if it did.
+  /orders/bulk:
+    post:
+      summary: Place several orders at once
+      operationId: placeOrdersBulk
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/OrderCore'
+      responses:
+        '200':
+          description: The accepted orders.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrderSummary'
+
+  # A COLLISION: the body declares a property spelled exactly like the path placeholder. One CDL
+  # input field cannot be two wire values, and `rest` has no per-field body remap to separate
+  # them.
+  /orders/{orderId}/transfer:
+    post:
+      summary: Transfer an order to another account
+      operationId: transferOrder
+      security: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, targetAccount]
+              properties:
+                orderId:
+                  type: string
+                  description: The order id AS THE BODY SPELLS IT — same name, different place.
+                targetAccount:
+                  type: string
+      responses:
+        '200':
+          description: Transferred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderSummary'
+
+  # A QUERY PARAMETER ON A METHOD THAT CANNOT SEND ONE. `invokeRest` appends a query string only
+  # when there is no body, so for POST/PUT/PATCH/DELETE a `query` field is folded into the JSON
+  # body instead — silently, and at the wrong place on the wire.
+  /orders/quote:
+    post:
+      summary: Quote an order
+      operationId: quoteOrder
+      security: []
+      parameters:
+        - name: currency
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [RON, EUR]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [partId]
+              properties:
+                partId:
+                  type: string
+      responses:
+        '200':
+          description: The quote.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, currency]
+                properties:
+                  total:
+                    type: number
+                  currency:
+                    type: string
+
+  # A `GET` CARRYING A BODY. Legal to write, and unsendable: `invokeRest` never gives a GET a
+  # body, so every field here would vanish between the manifest and the wire.
+  /orders/legacy-search:
+    get:
+      summary: Legacy search
+      operationId: legacySearchOrders
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination:
+                  type: string
+      responses:
+        '200':
+          description: Matching orders.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrderSummary'
+
+  # NEGATIVE CONTROL: no body at all. Whatever the body work does, this operation must keep
+  # behaving exactly as it did before it — the shape that was never broken must not start paying
+  # for the shape that was.
+  /orders/{orderId}:
+    get:
+      summary: One order
+      operationId: getOrder
+      security: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+        # D-12 on the PARAMETER side. `classifyInputRequired` is shared with body properties, so
+        # this must classify optional for the same reason `pinnedUntil` does — declared required
+        # and simultaneously nullable is not positive evidence that the agent must supply a
+        # value. Before this fixture only the body case was covered, so the shared rule was
+        # exercised on one of its two callers.
+        - name: asOf
+          in: query
+          required: true
+          description: Point in time to read the order as of.
+          schema:
+            type: [string, 'null']
+            format: date-time
+      responses:
+        '200':
+          description: The order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderSummary'
+
+components:
+  requestBodies:
+    NewOrder:
+      required: true
+      description: The order to place.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OrderCore'
+
+  schemas:
+    OrderCore:
+      type: object
+      required: [partId, quantity]
+      properties:
+        partId:
+          type: string
+          description: Which part to order.
+          example: P-1
+        quantity:
+          type: integer
+          description: How many.
+          example: 4
+        note:
+          type: [string, 'null']
+          description: Anything the buyer wants recorded.
+
+    OrderSummary:
+      type: object
+      required: [id, partId, quantity, status]
+      properties:
+        id:
+          type: string
+          description: Stable identifier for this order.
+        partId:
+          type: string
+        quantity:
+          type: integer
+        status:
+          type: string
+          enum: [pending, shipped, cancelled]
+        placedAt:
+          type: [string, 'null']
+          format: date-time

@@ -18,6 +18,10 @@
 //        (D-8 — the fingerprint/golden-fixture path is meaningless once the fixture
 //        file isn't shipping), and write the IR as a standalone JSON artifact —
 //        the substrate `@archstone/agent`'s `fromIR()` will consume (RFC-0008).
+// init: read an existing API description, ask the human the questions no tool can answer
+//        (is this a capability? is it `read`? what is it called?), and write a CDL manifest
+//        the real compiler has already compiled (ADD-37). Thin by design — argv, the terminal
+//        gate and report rendering only; everything of substance is in @archstone/init.
 
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -26,6 +30,7 @@ import { load } from "@archstone/schema";
 import { validateSemantics, compile, type IR } from "@archstone/compiler";
 import { Registry, buildRegistry, serveStdio, runVerify, type HealthStatus } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
+import { INIT_USAGE, runInitCmd } from "./init";
 
 function runApply(dir: string): void {
   const res = load(dir);
@@ -434,11 +439,23 @@ async function main(): Promise<void> {
     runBuild(dir, out.value);
     return;
   }
+  if (cmd === "init") {
+    // Everything `init` needs is in its own argv parser: it has more flags than the other four
+    // verbs put together, and threading them through this function's positional logic would
+    // make both harder to read.
+    process.exit(await runInitCmd(argv));
+  }
 
   console.error(
-    "usage: archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
+    // `init` is named HERE, in the verb list, and not only in the block below it. It takes a
+    // spec file rather than a manifest directory, so it cannot share the first line's shape —
+    // which is exactly how it came to be missing from the one line a user actually scans.
+    "usage: archstone <apply|serve|verify|build|init>\n\n" +
+      "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
       "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
-      "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)",
+      "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
+      "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n\n" +
+      INIT_USAGE,
   );
   process.exit(2);
 }

@@ -27,7 +27,12 @@ describe("archstone CLI — no audit sink surface anywhere (BR-25, D-8, S-US7.4)
 
   it("its usage text advertises no --audit/--audit-log/--sink flag", () => {
     expect(cliSource).not.toMatch(/--audit|--sink|--log-?file/i);
-    expect(cliSource).toMatch(/usage: archstone <apply\|serve\|verify\|build>/);
+    // The second assertion is a CANARY: it proves the usage text still exists and still
+    // enumerates the verbs, so the first assertion is checking something real rather than a
+    // string that quietly disappeared. It deliberately does NOT pin the exact verb list —
+    // `init` joining it is a normal event, and a test that fails on a new verb teaches people
+    // to loosen the audit assertion next to it.
+    expect(cliSource).toMatch(/usage: archstone <apply\|serve\|verify\|build/);
   });
 
   it("serve, serve --http and verify still pass no invoke options of any kind", () => {

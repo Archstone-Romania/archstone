@@ -34,6 +34,22 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
+      // POST-only, on purpose. `enableJsonResponse: true` below only governs how the transport
+      // answers a POST — it does NOT stop `handleGetRequest` from opening a standalone SSE
+      // stream on GET. This server is stateless (no sessionIdGenerator), so nothing is ever
+      // scheduled to write to or close that stream: the request hangs until the Workers runtime
+      // kills it. Refuse non-POST before we ever reach the transport, so "stateless" is honoured
+      // end to end instead of just at construction time.
+      //
+      // DELETE is spec'd as session teardown. This server has no session to tear down, so it's
+      // refused the same way as GET — a deliberate choice, not a side effect of `!== "POST"`.
+      if (request.method !== "POST") {
+        return new Response(
+          "archstone demo: this endpoint is POST-only (stateless MCP, no SSE stream, no sessions)",
+          { status: 405, headers: { Allow: "POST" } },
+        );
+      }
+
       // Resolve STAYS_API_URL per-request to this Worker's own origin — no deployment-time
       // config needed, and it survives moving between workers.dev and the custom domain.
       const server = createMcpServer(registry, {

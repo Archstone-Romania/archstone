@@ -1,9 +1,21 @@
 {
   "name": "@archstone/runtime",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": false,
   "type": "module",
-  "description": "Runtime (#5 Registry, #7 MCP emitter): list/resolve tools over IR, serve over stdio.",
+  "description": "Archstone runtime — a capability registry over compiled IR, and the MCP emitter that serves it as agent-callable tools over stdio or HTTP.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "llm",
+    "archstone",
+    "cdl",
+    "mcp-server",
+    "stdio",
+    "streamable-http",
+    "runtime"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://archstone.dev",
   "repository": {
@@ -21,6 +33,10 @@
     "./http": {
       "types": "./dist/http.d.ts",
       "default": "./dist/http.js"
+    },
+    "./verify": {
+      "types": "./dist/verify.d.ts",
+      "default": "./dist/verify.js"
     }
   },
   "files": [

@@ -1,0 +1,19 @@
+# THE ORACLE — a hand-written manifest, standing in for a company's real, in-production one.
+#
+# It exists so the diff harness has something to measure against that was NOT produced by the
+# generator: two capabilities, one returning a collection and one returning a single object,
+# one `ref:` identity input, and one wire-name remap. That is the full set of shapes ADD-37's
+# DoD-3 items exercise. A real design partner's manifest lives in that partner's own repository
+# (#34/#35) and is deliberately not vendored here.
+
+company:
+  id: acme
+  name: Acme Parts
+  description: A parts supplier exposing its catalog and pricing to AI agents.
+
+capabilities:
+  - catalog.list-parts
+  - catalog.estimate-part-price
+
+providers:
+  - acme-api

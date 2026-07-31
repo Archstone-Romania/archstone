@@ -7,8 +7,11 @@
       "@archstone/compiler": ["packages/compiler/src/index.ts"],
       "@archstone/emitter-support": ["packages/emitter-support/src/index.ts"],
       "@archstone/agent": ["packages/agent/src/index.ts"],
+      "@archstone/init": ["packages/init/src/index.ts"],
+      "@archstone/init/loop": ["packages/init/src/loop.ts"],
       "@archstone/runtime": ["packages/runtime/src/index.ts"],
       "@archstone/runtime/http": ["packages/runtime/src/http.ts"],
+      "@archstone/runtime/verify": ["packages/runtime/src/verify.ts"],
       "@archstone/provider-rest": ["providers/rest/src/index.ts"]
     }
   },

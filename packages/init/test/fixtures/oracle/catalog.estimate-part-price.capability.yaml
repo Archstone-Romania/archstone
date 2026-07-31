@@ -1,0 +1,21 @@
+capability:
+  id: catalog.estimate-part-price
+  description: Estimate the price of one part at a given size.
+  effect: read
+
+  input:
+    partId:
+      ref: catalog.Part
+      description: The id of a part, as returned by catalog.list-parts.
+    widthCm:
+      type: quantity
+      description: Width, in centimeters.
+    heightCm:
+      type: quantity
+      description: Height, in centimeters.
+
+  output:
+    estimate:
+      type: catalog.PartPriceEstimate
+
+  provider: acme-api

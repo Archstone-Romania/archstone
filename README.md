@@ -1,18 +1,90 @@
-# Archstone — Capability Platform
+# Archstone — connect your business to every AI
 
-> ## Zero manual integration.
-> A company describes what it can do. AI agents can execute it. Nobody hand-writes integration code.
+**A compiler for AI capabilities.** You describe what your business can do, once, in
+business terms. Archstone compiles that into tools an AI agent can discover and call —
+MCP today, other protocols as they arrive. Nobody hand-writes integration code.
 
-That sentence — **zero manual integration** — is the product. Not MCP, not YAML, not AI, not
-the runtime. Those are *how*; *zero manual integration* is *what*.
+Open source, Apache-2.0.
+
+---
+
+## See it work — 60 seconds, nothing to install
+
+A capability compiled by Archstone is running live. Point Claude at it:
+
+```
+https://demo.archstone.dev/mcp
+```
+
+Open Claude (web, desktop or mobile) → **Settings** (or **Customize**) → **Connectors** →
+**Add custom connector** → paste the URL. Then ask about a trip — a destination, dates, a
+budget. Works on Free too (one custom connector is all this needs).
+
+Prefer a terminal:
+
+```bash
+claude mcp add --transport http archstone-tourism https://demo.archstone.dev/mcp
+```
+
+The backend behind it is a plain HTTP service, and you can curl it directly — the same data
+the agent sees, deterministic so the shape is obvious:
+
+```bash
+curl -s -X POST https://demo.archstone.dev/v1/search \
+  -H "content-type: application/json" -d '{"destination":"Rome"}'
+```
+
+The entire integration that made this callable by an agent is
+[12 lines of business YAML](examples/manifests/tourism/tourism.search.capability.yaml) — no
+HTTP, no JSON Schema, no MCP SDK. Everything else was generated.
+
+## Start from an API you already have
+
+Point `archstone init` at an OpenAPI document. It reads the spec, asks you the questions no
+document can answer, runs the real compiler over what it drafted, and writes nothing at all if
+that does not compile.
+
+![archstone init reading an OpenAPI document and writing a compiling CDL manifest](docs/init.gif)
+
+```bash
+archstone init openapi.yaml --out manifest --company acme --domain catalog
+```
+
+The one answer it never guesses is `effect` — `read`, `write` or `irreversible` is the
+difference between looking up a price and charging a card, and no spec says which. Where a
+response could honestly be read two ways, it asks rather than picking. With `--probe` it will
+also make one read-only call to your real backend and record a genuine fixture, so
+`archstone verify` has something true to replay later.
+
+The spec in that recording is
+[`examples/demo/stays-openapi.yaml`](examples/demo/stays-openapi.yaml), describing the demo
+backend in this repository — you can run it yourself.
+
+## Who is running it
+
+**[ArtVinci](https://artvinci.ro)** — a custom-framing business — answers customer questions
+today through a capability compiled by Archstone. Real catalog, real prices computed live by
+their own backend. See the [case study](CASE-STUDY.md).
+
+---
+
+## Why a compiler, and not just an MCP server
+
+Writing your first MCP server is not the hard part — it is a few hundred lines, and you can
+do it in an afternoon.
+
+The work is the fifth one. ChatGPT, Gemini and whatever ships next each want the same
+capability shaped slightly differently, every one of them is a separate integration project,
+and your API keeps changing underneath all of them at once.
 
 > **Archstone is not an MCP server. It is a compiler that, in its first release, generates one.**
 
-This is not a semantic distinction. It is the difference between a point product and a
-platform: the compiler takes one capability definition (CDL) and emits MCP today, and
-REST · GraphQL · SDK · CLI tomorrow — the product survives when the protocol changes.
+One capability definition (CDL) lowers to a target-agnostic **IR**; emitters consume the IR.
+MCP today; REST · GraphQL · SDK tomorrow. Change the protocol and you regenerate — you do not
+rewrite. Change the backend and the CDL and the generated tool do not move at all.
 
-Open-source **Capability Platform**, Apache-2.0.
+That is what *zero manual integration* means: not that the first server is easy, but that the
+maintenance disappears instead of multiplying.
 
 ---
 
@@ -48,6 +120,9 @@ binding, so contract drift shows up before an agent hits it.
 ```bash
 pnpm install
 
+# Scaffold a manifest from an API you already have (opt-in, read-only, no LLM)
+pnpm exec tsx packages/cli/src/index.ts init path/to/openapi.yaml --out my-manifest --domain catalog
+
 # Compile a manifest: validate + lower to IR
 pnpm apply examples/manifests/booking
 
@@ -76,6 +151,7 @@ npm install -g @archstone/cli
 npx @archstone/cli apply <manifest-dir>
 
 # Then run the same commands:
+archstone init path/to/openapi.yaml --out my-manifest --domain catalog
 archstone apply examples/manifests/booking
 archstone build examples/manifests/tourism
 archstone serve examples/manifests/tourism
@@ -149,6 +225,7 @@ See [`packages/agent`](packages/agent/) for full API docs and examples.
 | Read first | Path |
 |---|---|
 | **Onboarding** | [`docs/ONBOARDING.md`](docs/ONBOARDING.md) |
+| **A business running on it** | [`CASE-STUDY.md`](CASE-STUDY.md) |
 | **CDL by example** | [`examples/manifests/booking/`](examples/manifests/booking/) |
 | **The schemas (wire format)** | [`packages/schema/schemas/`](packages/schema/schemas/) |
 | **End-to-end demo (Claude)** | [`examples/demo/README.md`](examples/demo/README.md) |

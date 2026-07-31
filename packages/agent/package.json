@@ -1,9 +1,23 @@
 {
   "name": "@archstone/agent",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": false,
   "type": "module",
-  "description": "Embedded agent SDK (RFC-0008/ADD-0008): tool definitions (Anthropic/OpenAI/Gemini/JSON-Schema) + fail-closed execute() over compiled IR. Root entry — zero MCP SDK reachability; /mcp subpath — mountable Streamable-HTTP handler.",
+  "description": "Embed Archstone capabilities directly in your own agent loop: typed tool definitions for Anthropic, OpenAI, Gemini and plain JSON Schema, plus fail-closed execution over a compiled IR — no MCP server process required.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "llm",
+    "archstone",
+    "cdl",
+    "agent-sdk",
+    "tool-use",
+    "function-calling",
+    "anthropic",
+    "openai",
+    "gemini"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://archstone.dev",
   "repository": {

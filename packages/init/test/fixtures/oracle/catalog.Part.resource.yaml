@@ -1,0 +1,26 @@
+resource:
+  name: catalog.Part
+  description: A part Acme can supply.
+  fields:
+    id:
+      type: identifier
+      description: Stable identifier for this part.
+    name:
+      type: text
+      description: Display name of the part.
+    material:
+      type: enum
+      values: [steel, aluminium, composite]
+      description: The part's material.
+    description:
+      type: text
+      required: false
+      description: Longer description, when available.
+    widthMm:
+      type: quantity
+      required: false
+      description: Part width, in millimeters, when specified.
+    pricePerUnit:
+      type: quantity
+      required: false
+      description: Unit price, when priced.

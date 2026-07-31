@@ -1,0 +1,71 @@
+openapi: 3.1.0
+
+# A component library with no `paths` — the multi-file shape D-11 exists for. Both documents
+# in this directory `$ref` it, and an adapter that cannot see it must fail closed rather than
+# guess at what `Pagination` contributes.
+#
+# SYNTHETIC. "Acme Parts" is invented. No real company's API contract is vendored into this
+# repository (see issue #35).
+
+info:
+  title: Acme Parts — shared components
+  version: 1.0.0
+
+paths: {}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+    adminTokenQuery:
+      type: apiKey
+      in: query
+      name: token
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    CodedError:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+
+    Pagination:
+      type: object
+      required: [total, page, limit]
+      properties:
+        total:
+          type: integer
+        page:
+          type: [integer, 'null']
+        limit:
+          type: [integer, 'null']
+
+  responses:
+    InternalError:
+      description: Something went wrong.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Forbidden:
+      description: Genuine polymorphism — two unrelated error shapes, never reducible.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/Error'
+              - $ref: '#/components/schemas/CodedError'

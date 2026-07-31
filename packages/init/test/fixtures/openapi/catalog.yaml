@@ -1,0 +1,343 @@
+openapi: 3.1.0
+
+# The GOOD PATH: everything D-10/D-12/D-13 must handle, in one document, in the shapes they
+# occur in real specs.
+#
+# SYNTHETIC. "Acme Parts" is invented — a parts supplier with a public catalog and a price
+# calculator. It deliberately mirrors the STRUCTURE of a real multi-file 3.1 spec (allOf
+# composition three levels deep, a cross-file pagination mixin, 3.1 type unions, an enum
+# carrying null, a `const`, per-operation `security`) without vendoring anyone's contract:
+# committing a real business's API into this public tree is exactly the mistake #35 undid.
+
+info:
+  title: Acme Parts API
+  version: 2.1.0
+  description: |
+    The catalog a buyer chooses from, and what it costs.
+
+    Everything after this first line is prose an agent should never have to read on a
+    `tools/list`, which is why `summary` wins over `description` for a capability's own text.
+
+servers:
+  - url: https://api.acme.test/api/v2
+    description: Production
+
+paths:
+  /parts:
+    get:
+      summary: List the parts Acme can supply
+      operationId: listParts
+      security: []
+      description: A paginated list. `items` may be empty; that is not an error.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartList'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /parts/{id}:
+    get:
+      summary: One part
+      operationId: getPart
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PartId'
+      responses:
+        '200':
+          description: The part.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartDetail'
+        '404':
+          description: No such part.
+          content:
+            application/json:
+              schema:
+                $ref: 'shared.yaml#/components/schemas/Error'
+
+  /parts/{id}/price:
+    get:
+      summary: Estimate the price of one part at one size
+      operationId: estimatePartPrice
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PartId'
+        - name: width_cm
+          in: query
+          required: true
+          description: Width in cm. Strictly positive.
+          schema:
+            type: number
+            exclusiveMinimum: 0
+          example: 50
+        - name: height_cm
+          in: query
+          required: true
+          schema:
+            type: number
+          example: 70
+      responses:
+        '200':
+          description: The estimate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceEstimate'
+
+  /parts/{id}/quote:
+    get:
+      # THE SHAPE THAT FALSIFIES ADD-37 §1.1's OWN WORKED EXAMPLE. See openapi.test.ts's
+      # "a payload whose only collection is an advisory side-channel" test. Kept as a fixture
+      # so the behaviour is pinned rather than rediscovered.
+      summary: A quote, plus advisory warnings
+      operationId: quotePart
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PartId'
+      responses:
+        '200':
+          description: Two root scalars and one array of objects.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartQuote'
+
+  /parts/{id}/report:
+    get:
+      # THREE candidate loci: the root (`generatedAt`), `$.defects[*]`, `$.substitutes[*]`.
+      # Deliberately composition-free, so it reaches `locusCandidates` rather than being
+      # refused upstream by D-10.4 — which is exactly what silently voided the fixture
+      # Amendment 2 §B-5 had designated for this path.
+      summary: A part report — a timestamp, plus two independent lists
+      operationId: reportPart
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PartId'
+      responses:
+        '200':
+          description: Two lists and a root scalar; nothing distinguishes them mechanically.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartReport'
+
+  /admin/parts:
+    get:
+      summary: The admin working list, including inactive parts
+      operationId: adminListParts
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartList'
+        '403':
+          $ref: 'shared.yaml#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      $ref: 'shared.yaml#/components/securitySchemes/bearerAuth'
+
+  parameters:
+    PartId:
+      name: id
+      in: path
+      required: true
+      description: The commercial part code (`AC45`) — not a UUID.
+      schema:
+        type: string
+      example: AC45
+
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 20
+
+  responses:
+    InternalError:
+      $ref: 'shared.yaml#/components/responses/InternalError'
+
+  schemas:
+    Pagination:
+      $ref: 'shared.yaml#/components/schemas/Pagination'
+
+    PartMaterial:
+      type: string
+      enum: [steel, aluminium, composite]
+
+    PartFinish:
+      # A-3 source 4: nullable AND the `null` member must be dropped from CDL `values`, or the
+      # emitted file is shape-invalid (`values.items: {type: string}`, `minItems: 1`).
+      type: [string, 'null']
+      enum: [matte, brushed, anodised, null]
+
+    # Level 3 of the allOf chain: PartListItem → PartBase → PartGeometryFields.
+    PartGeometryFields:
+      type: object
+      description: Cross-section, in mm.
+      required: [profileType, webThicknessMm]
+      properties:
+        profileType:
+          type: string
+          enum: [flat, angle, channel]
+        webThicknessMm:
+          type: [number, 'null']
+
+    PartBase:
+      type: object
+      required: [id, name, description, material, widthMm, finish, pricePerUnit]
+      properties:
+        id:
+          type: string
+          description: The commercial part code.
+        name:
+          type: string
+        description:
+          type: [string, 'null']
+        material:
+          $ref: '#/components/schemas/PartMaterial'
+        widthMm:
+          type: [number, 'null']
+        finish:
+          $ref: '#/components/schemas/PartFinish'
+        pricePerUnit:
+          type: [number, 'null']
+      allOf:
+        - $ref: '#/components/schemas/PartGeometryFields'
+
+    Photo:
+      type: object
+      required: [id, imageUrl]
+      properties:
+        id:
+          type: string
+        imageUrl:
+          type: string
+          format: uri
+
+    PartListItem:
+      allOf:
+        - $ref: '#/components/schemas/PartBase'
+        - type: object
+          required: [photos]
+          properties:
+            photos:
+              type: array
+              items:
+                $ref: '#/components/schemas/Photo'
+        # D-10.3's easily-missed member: description only. A no-op merge, NEVER an
+        # empty-object contradiction — an implementation that reads "an object schema with no
+        # properties" as a constraint empties the whole shape.
+        - type: object
+          description: In the public listing, `widthMm` and `pricePerUnit` are never null.
+
+    PartDetail:
+      allOf:
+        - $ref: '#/components/schemas/PartBase'
+        - type: object
+          required: [photos]
+          properties:
+            photos:
+              type: array
+              items:
+                $ref: '#/components/schemas/Photo'
+
+    # D-10.1 — sibling keywords compose: `properties.items` sits BESIDE `allOf`. An
+    # implementation that reads `allOf` as "the schema IS its members" loses `items`, and with
+    # it the entire list capability.
+    PartList:
+      type: object
+      required: [items, total, page, limit]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartListItem'
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+
+    PartGeometry:
+      type: object
+      required: [outerW, outerH]
+      properties:
+        outerW:
+          type: number
+        outerH:
+          type: number
+
+    QuoteWarning:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+    PartQuote:
+      type: object
+      required: [quotedPrice, currency, warnings]
+      properties:
+        quotedPrice:
+          type: [number, 'null']
+        currency:
+          const: EUR
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuoteWarning'
+
+    PartReport:
+      type: object
+      required: [generatedAt, defects, substitutes]
+      properties:
+        generatedAt:
+          type: string
+        defects:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuoteWarning'
+        substitutes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Photo'
+
+    PriceEstimate:
+      type: object
+      required: [estimatedPrice, currency, geometry]
+      properties:
+        estimatedPrice:
+          type: [number, 'null']
+          description: Null when the part has no configured rate.
+        currency:
+          # A-3: `const` with no `type`. Without a rule the field simply VANISHES from the map.
+          const: EUR
+        geometry:
+          # D-10.6 — the nullability idiom, and the only `oneOf` that reduces.
+          oneOf:
+            - $ref: '#/components/schemas/PartGeometry'
+            - type: 'null'

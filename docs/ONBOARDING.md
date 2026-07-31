@@ -31,6 +31,41 @@ Pick your path. They don't overlap much.
 - An HTTP API behind your capability (a REST endpoint the binding points at). For a demo
   you can point at a mock; in production you point at a real backend.
 
+### Already have an OpenAPI document? Start with `archstone init`
+
+Steps 1–6 below are the authoritative model, and reading them is how you will understand what
+your manifest means. But if your API already has an OpenAPI 3.0/3.1 description, you do not
+have to type the first draft:
+
+```bash
+archstone init path/to/openapi.yaml --out my-manifest --domain catalog
+```
+
+`init` reads the document, proposes one candidate per operation, and asks you the questions no
+tool can answer for you — *is this a capability? is it `read`? what is it called?* Then it
+writes the manifest **only if the real compiler compiles it**. There are exactly two outcomes:
+a compiling manifest, or nothing written and a report saying why.
+
+What it deliberately does **not** do, and why each one matters:
+
+| It never… | Because |
+|---|---|
+| uses an LLM, on any path | the same input must produce the same output on every run, so you can put it in CI and diff the result |
+| guesses an `effect` | you run `init`; your business pays for a wrong `effect` months later, through an agent, in front of a customer |
+| invents a capability id, a domain or a resource name | those are your product's vocabulary, and a name Archstone made up is a name nobody agreed to |
+| write anything to your backend | probes are opt-in (`--probe`), read-only, gated on a confirmed `effect: read` **and** the HTTP method, and refused outright without a terminal for anything but `GET`/`HEAD` |
+| emit a `contract:` it did not record | a fingerprint without a real response makes `archstone verify` green against a fiction |
+
+Anything it cannot express faithfully is **skipped with a named reason and emitted as nothing**
+— never half-written. The report lists every one, plus the per-field things only you can
+decide: which `string` is really a `money`, and which `identifier` is really a `ref:` to a
+resource another capability returns.
+
+Read the report before you commit. `init` gets you a compiling draft; it does not get you a
+good one, and the difference is entirely in the names and descriptions an agent will read.
+
+Then continue with Steps 1–6 to understand and refine what it wrote.
+
 ### Try it now (no writing required)
 
 Before writing a line of CDL, run the shipped example and watch the whole pipeline work

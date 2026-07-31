@@ -1,0 +1,58 @@
+{
+  "name": "@archstone/init",
+  "version": "0.10.0",
+  "private": false,
+  "type": "module",
+  "description": "Turn an existing API into a compiling Archstone CDL manifest: a provenance-carrying draft model, pure YAML emission, a closed compile loop, and an IR-level diff harness. No LLM, on any path.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "llm",
+    "archstone",
+    "cdl",
+    "openapi",
+    "scaffolding",
+    "code-generation",
+    "api-integration"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://archstone.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Archstone-Romania/archstone.git",
+    "directory": "packages/init"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./loop": {
+      "types": "./dist/loop.d.ts",
+      "default": "./dist/loop.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@archstone/compiler": "workspace:*",
+    "@archstone/emitter-support": "workspace:*",
+    "@archstone/runtime": "workspace:*",
+    "@archstone/schema": "workspace:*",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
+  }
+}

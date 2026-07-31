@@ -1,0 +1,11 @@
+resource:
+  name: catalog.PartPriceEstimate
+  description: An estimated price for one part at one size.
+  fields:
+    estimatedPrice:
+      type: quantity
+      required: false
+      description: Estimated total cost. Absent when the part has no price data configured.
+    currency:
+      type: string
+      description: ISO currency code for the estimate.

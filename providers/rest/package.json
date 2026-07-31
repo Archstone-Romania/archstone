@@ -1,9 +1,21 @@
 {
   "name": "@archstone/provider-rest",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": false,
   "type": "module",
-  "description": "REST provider (#6): map capability input -> HTTP request, HTTP response -> result.",
+  "description": "REST provider for Archstone — maps capability input to an HTTP request and maps the response back to a typed, validated result.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "llm",
+    "archstone",
+    "cdl",
+    "rest",
+    "http",
+    "provider",
+    "api-integration"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://archstone.dev",
   "repository": {

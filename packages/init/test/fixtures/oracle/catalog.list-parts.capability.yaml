@@ -1,0 +1,10 @@
+capability:
+  id: catalog.list-parts
+  description: List the parts Acme can supply, including each part's unit price.
+  effect: read
+
+  output:
+    parts:
+      collection: catalog.Part
+
+  provider: acme-api

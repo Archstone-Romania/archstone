@@ -155,3 +155,156 @@ export async function runVerify(
   const contractBearing = tools.filter((t) => t.contract);
   return Promise.all(contractBearing.map((t) => verifyTool(t, dir, resources, opts)));
 }
+
+// ---------------------------------------------------------------------------------------
+// Recording a contract (ADD-37 D-6 / R-1)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * How a probe ended.
+ *
+ * `green` / `yellow` / `red` mirror `HealthStatus` deliberately — this is the same question
+ * `verifyTool` answers, asked one moment earlier. `not-attempted` is the fourth outcome
+ * ADD-37 Amendment 1 §A-5 adds, and it is not a nicety:
+ *
+ * `invokeRest` returns `{ok: false, status: 0, error: "missing env var(s): …"}` BEFORE it
+ * sends anything. Reporting that as `red` asserts that the backend disagreed with the
+ * manifest, which is false — nothing was asked of the backend at all. False reds are how
+ * people learn to ignore reds, and this one would fire on the very first run of every
+ * generated manifest whose credential variable is not set yet.
+ *
+ * Same disposition as `red` for the CONTRACT (write nothing); the opposite disposition in the
+ * report.
+ */
+export type ProbeOutcome = "green" | "yellow" | "red" | "not-attempted";
+
+/**
+ * The result of one recording attempt.
+ *
+ * `fingerprint` and `fixture` are present together or not at all — the schema requires
+ * `source` + `fingerprint` + `probe.fixture`, so a half-recording is not a thing a caller
+ * could write down even if it wanted to.
+ */
+export interface ContractRecording {
+  capabilityId: string;
+  outcome: ProbeOutcome;
+  detail: string;
+  fingerprint?: string;
+  fixture?: GoldenFixture;
+  /** Optional fields that came back absent or null. Real required/optional evidence — the
+   *  caller may offer a loosening at the gate, and must never apply one silently: n=1 is not
+   *  a classification. */
+  degraded?: string[];
+  /** Required fields that came back absent or null. A VIOLATION, and the reason nothing is
+   *  written: a manifest that violates on its own recording is not a manifest. */
+  missing?: string[];
+}
+
+export interface RecordContractOptions extends InvokeOptions {
+  /** Injected so a test can pin the recorded timestamp. Defaults to the wall clock — this
+   *  module is the runtime, not the pure core, and recording is inherently a moment in time. */
+  now?: Date;
+}
+
+/** Errors `invokeRest` returns WITHOUT sending a request. Matched on the message because that
+ *  is the only signal in the shipped return shape — `status: 0` alone also covers a network
+ *  failure, which is a genuine red. */
+const NOT_ATTEMPTED_RE = /^missing (?:env var|caller credential)\(s\):/;
+
+/**
+ * Record a contract for a tool that does not have one yet (ADD-37 D-6).
+ *
+ * A SIBLING of `verifyTool`, not a flag on it, and the reason is structural rather than
+ * stylistic: `verifyTool` returns `red` on `!tool.contract` before doing anything, and the
+ * contract is precisely what this function exists to create. The chicken-and-egg is real.
+ *
+ * What makes this the right place for it (R-1): it is the SAME module, over the SAME
+ * `invokeRest` call, with the same policy evaluation and the same `fingerprintShape` and
+ * `applyResponseMapping`, as the replay that will later be asked to trust the artifact. A
+ * second orchestration of "call the backend, hash the shape, run the mapper" living in
+ * `init` would look green at record time and be unreplayable afterwards — silently, for the
+ * manifest's lifetime.
+ *
+ * It reads no filesystem: there is no fixture to find yet. That is the one deliberate
+ * departure from ADD-37 §6 step 6's sketched `(tool, input, dir, resources, opts)` signature —
+ * carrying a `dir` this function cannot use would suggest it does something with it.
+ *
+ * NOTE it never decides WHETHER to probe. Consent, the confirmed `effect: read` and the method
+ * rule (R-8) are the caller's gate, upstream, where the human is.
+ */
+export async function recordContract(
+  tool: IRTool,
+  input: Record<string, unknown>,
+  resources: IRResourceRegistry,
+  opts?: RecordContractOptions,
+): Promise<ContractRecording> {
+  const base = { capabilityId: tool.id };
+
+  // Same evaluation point as `verifyTool` (#43 / ADD-43 D-6), for the same reason: a probe
+  // makes a real call with real credentials. `init` never emits `policies:`, so this cannot
+  // fire on a freshly generated manifest — it is here so that re-recording an EXISTING
+  // hand-written manifest cannot route around the gate.
+  const decision = evaluatePolicy(tool, {
+    principal: opts?.caller?.principal,
+    credentialPresent: opts?.caller?.accessToken !== undefined,
+  });
+  if (!decision.allowed) {
+    // `not-attempted`, not `red`.
+    //
+    // DELIBERATELY DIVERGENT FROM `verifyTool`, which answers `red` + `policyDenied` for this
+    // identical condition — recorded here so nobody "fixes" the two into agreement. They are
+    // answering different questions. `verifyTool` answers an OPERATOR's "is this binding
+    // healthy?", and "I could not establish that" is honestly red (ADD-43 D-7); its
+    // `policyDenied` flag then exists to stop that red travelling onward into an agent-facing
+    // surface. `recordContract` answers "did I learn anything worth writing down?", and the
+    // answer is simply no — nothing was asked of the backend. Both refuse to write a contract;
+    // only the report wording differs, which is the whole point of the fourth outcome.
+    return { ...base, outcome: "not-attempted", detail: `policy denied before any request was made: ${decision.denial.message}` };
+  }
+
+  const result = await invokeRest(tool, input, opts);
+  if (!result.ok) {
+    const error = result.error ?? `status ${result.status}`;
+    if (result.status === 0 && NOT_ATTEMPTED_RE.test(error)) {
+      return { ...base, outcome: "not-attempted", detail: `no request was sent — ${error}` };
+    }
+    return { ...base, outcome: "red", detail: `live request failed: ${error}` };
+  }
+
+  const fingerprint = fingerprintShape(result.data);
+  const fixture: GoldenFixture = {
+    capabilityId: tool.id,
+    recordedAt: (opts?.now ?? new Date()).toISOString(),
+    request: input,
+  };
+
+  if (!tool.response) {
+    // Nothing to validate against; the fingerprint is still a real, replayable fact.
+    return { ...base, outcome: "green", detail: "recorded — no response mapping to validate", fingerprint, fixture };
+  }
+
+  const mapped = applyResponseMapping(tool, result.data, resources);
+  if (mapped.status === "violation") {
+    // KEEP NOTHING. A field the manifest marks required came back null or absent on the very
+    // response we are recording, so the contract would be green against a fiction and red
+    // against reality. The loosening belongs at the gate, offered to a human, never applied
+    // here: n=1 is not a classification.
+    return {
+      ...base,
+      outcome: "red",
+      detail: `contract violation on the recorded response: missing required field(s) ${(mapped.missing ?? []).join(", ")}`,
+      ...(mapped.missing ? { missing: mapped.missing } : {}),
+    };
+  }
+  if (mapped.status === "degraded") {
+    return {
+      ...base,
+      outcome: "yellow",
+      detail: `recorded, degraded: optional field(s) absent — ${(mapped.degraded ?? []).join(", ")}`,
+      fingerprint,
+      fixture,
+      ...(mapped.degraded ? { degraded: mapped.degraded } : {}),
+    };
+  }
+  return { ...base, outcome: "green", detail: "recorded — mapping OK", fingerprint, fixture };
+}
