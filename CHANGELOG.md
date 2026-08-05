@@ -5,6 +5,16 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.1]
+
+Patch release. Packaging metadata only — no source, schema or behavior change.
+
+### Fixed
+
+- **`@archstone/init` now ships a README.** The package's npm page had been blank since it
+  first published at 0.10.0 — every other publishable package carries one, `init` alone was
+  missing it. No code, schema or CHANGELOG-worthy behavior changed.
+
 ## [0.10.0]
 
 Minor release. New user-facing functionality, no breaking change: every export, schema and
