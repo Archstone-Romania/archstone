@@ -1,0 +1,22 @@
+# Doc fixture (#57) — the surrounding company contract for the tourism.search snippet
+# shown in docs/ONBOARDING.md's "Provider onboarding" walkthrough (Steps 1-4) and referenced
+# from README.md's "12 lines of business YAML" example. NOT itself shown in any doc — it
+# exists only so scripts/verify-doc-snippets.mjs can assemble the *published* capability
+# snippet into something `archstone apply` can actually load, without the doc having to show
+# the boilerplate it is specifically trying not to show.
+#
+# Deliberately lists only `tourism.search` (the doc's own Step 1 example lists tourism.search
+# AND tourism.book side by side for narrative purposes, but only tourism.search has a
+# matching *.capability.yaml on disk anywhere — a fixture that mirrored the narrative verbatim
+# would fail to load with "capabilities.yaml declares 'tourism.book' but no *.capability.yaml
+# defines it", a false failure that has nothing to do with the snippet under test).
+company:
+  id: onboarding-demo
+  name: Onboarding Demo Co.
+  description: Fixture company for verifying doc-published CDL snippets compile (#57).
+
+capabilities:
+  - tourism.search
+
+providers:
+  - booking-api

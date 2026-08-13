@@ -1,0 +1,21 @@
+# Doc fixture (#57) — matches docs/ONBOARDING.md Step 4's `bindings/tourism.search.binding.yaml`
+# verbatim. Gives the assembled manifest a bound, invocable capability, so the doc's own
+# tourism.search snippet compiles clean rather than merely passing on the
+# no-binding-is-still-a-pass warning path.
+binding:
+  capabilityId: tourism.search
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${BOOKING_API_URL}"
+      method: POST
+      path: /api/v1/hotels/search
+
+  response:
+    collection: "$.results[*]"
+    resource: Accommodation
+    map:
+      name: "$.name"
+      location: "$.location"
+      pricePerNight: "$.pricePerNight"
+      rating: "$.rating"

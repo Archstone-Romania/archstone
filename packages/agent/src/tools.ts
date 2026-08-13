@@ -104,17 +104,31 @@ export function sanitizeGeminiSchema(schema: JsonSchema): JsonSchema {
 
 /** Lower every invocable capability to `format`'s tool-definition envelope. Reads the
  *  (name, tool) pairs Registry already derived (ADD-30 D-3) instead of re-deriving the
- *  invocable filter or re-running `toolName()` here. */
+ *  invocable filter or re-running `toolName()` here.
+ *
+ *  ADD-24 (#55): mirrors `@archstone/runtime`'s `toolDefinitions()` (server.ts) — the shared
+ *  `registry.getExposure` (ADD-24 D-6/R-5) is consulted here too, so this, the OTHER surface
+ *  that tells a host what capabilities exist, is no longer lifecycle-blind. A bound tool whose
+ *  exposure is `listed:false` (lifecycle `experimental`/`retired`) is dropped from the returned
+ *  list entirely, exactly as the MCP path drops it. A tool carrying a `hint` (beta/deprecated,
+ *  or a yellow/red health reading) has its text appended to `description` — the only
+ *  per-format-envelope rendering of the neutral exposure emitter-support computed. */
 export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[] {
   const resources = registry.ir.resources;
-  const tools = registry.invocableTools();
+  const tools = registry
+    .invocableTools()
+    .filter(({ tool: t }) => registry.getExposure(t.id).listed);
+  const describe = (t: (typeof tools)[number]["tool"]): string => {
+    const hint = registry.getExposure(t.id).hint;
+    return hint ? `${t.description} (${hint.text})` : t.description;
+  };
 
   switch (format) {
     case "anthropic":
       return tools.map(
         ({ name, tool: t }): AnthropicToolDef => ({
           name,
-          description: t.description,
+          description: describe(t),
           input_schema: inputJsonSchema(t.input, resources),
         }),
       );
@@ -124,7 +138,7 @@ export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[]
           type: "function",
           function: {
             name,
-            description: t.description,
+            description: describe(t),
             parameters: inputJsonSchema(t.input, resources),
           },
         }),
@@ -133,7 +147,7 @@ export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[]
       return tools.map(
         ({ name, tool: t }): GeminiToolDef => ({
           name,
-          description: t.description,
+          description: describe(t),
           parameters: sanitizeGeminiSchema(inputJsonSchema(t.input, resources)),
         }),
       );
@@ -141,7 +155,7 @@ export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[]
       return tools.map(
         ({ name, tool: t }): JsonSchemaToolDef => ({
           name,
-          description: t.description,
+          description: describe(t),
           schema: inputJsonSchema(t.input, resources),
         }),
       );

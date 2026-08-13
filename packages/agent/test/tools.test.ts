@@ -1,12 +1,66 @@
-import { describe, it, expect } from "vitest";
-import { dirname, resolve } from "node:path";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { buildRegistry } from "@archstone/runtime";
 import { fromIR, sanitizeGeminiSchema } from "../src/index";
 import type { AnthropicToolDef, OpenAIToolDef, GeminiToolDef, JsonSchemaToolDef } from "../src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tourism = resolve(here, "../../../examples/manifests/tourism");
+
+/** One capability per lifecycle state, all bound to the same (unreachable — never invoked in
+ *  these tests) backend — mirrors packages/runtime/test/lifecycle.integration.test.ts's fixture
+ *  so `buildToolDefs`'s exposure filtering is exercised the same way `toolDefinitions()`'s is. */
+const LIFECYCLES = ["stable", "beta", "deprecated", "experimental", "retired"] as const;
+
+function writeLifecycleManifest(dir: string): void {
+  writeFileSync(
+    join(dir, "capabilities.yaml"),
+    [
+      "company:",
+      "  id: demo",
+      "capabilities:",
+      ...LIFECYCLES.map((l) => `  - demo.${l}`),
+      "providers:",
+      "  - acme",
+      "",
+    ].join("\n"),
+  );
+  mkdirSync(join(dir, "bindings"));
+  for (const l of LIFECYCLES) {
+    writeFileSync(
+      join(dir, `demo.${l}.capability.yaml`),
+      [
+        "capability:",
+        `  id: demo.${l}`,
+        `  description: A ${l} capability.`,
+        "  effect: read",
+        "  provider: acme",
+        `  lifecycle: ${l}`,
+        "  output:",
+        "    value:",
+        "      type: string",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "bindings", `demo.${l}.binding.yaml`),
+      [
+        "binding:",
+        `  capabilityId: demo.${l}`,
+        "  connector:",
+        "    type: rest",
+        "    rest:",
+        '      baseUrl: "${DEMO_API_URL}"',
+        "      method: GET",
+        "      path: /x",
+        "",
+      ].join("\n"),
+    );
+  }
+}
 
 type JsonSchema = { type?: string; properties?: Record<string, unknown>; required?: string[] };
 
@@ -97,5 +151,48 @@ describe("sanitizeGeminiSchema — Gemini function-calling dialect subset", () =
     const [search] = archstone.tools("json-schema") as JsonSchemaToolDef[];
     const already = sanitizeGeminiSchema(search.schema as Record<string, unknown>);
     expect(already).toEqual(search.schema);
+  });
+});
+
+describe("#55: tools()/buildToolDefs honour capability exposure/lifecycle (ADD-24 D-6/R-5)", () => {
+  let dir: string;
+  let archstone: ReturnType<typeof fromIR>;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "archstone-agent-lifecycle-"));
+    writeLifecycleManifest(dir);
+    const built = buildRegistry(dir);
+    if (!built.ok || !built.registry) {
+      throw new Error(`fixture manifest failed to build: ${JSON.stringify(built.diagnostics)}`);
+    }
+    archstone = fromIR(JSON.parse(JSON.stringify(built.registry.ir)));
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("lists exactly stable, beta, deprecated — retired and experimental are unlisted (D-10), across every format", () => {
+    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+      const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
+      const names = defs.map((d) => d.name ?? d.function?.name).sort();
+      expect(names).toEqual(["demo_beta", "demo_deprecated", "demo_stable"]);
+    }
+  });
+
+  it("stable has no hint; beta/deprecated carry their lifecycle hint text in the description", () => {
+    const defs = archstone.tools("anthropic") as AnthropicToolDef[];
+    const byName = new Map(defs.map((d) => [d.name, d.description]));
+    expect(byName.get("demo_stable")).toBe("A stable capability.");
+    expect(byName.get("demo_beta")).toContain("beta");
+    expect(byName.get("demo_deprecated")).toContain("deprecated");
+  });
+
+  it("a retired capability never reaches any format's tool list", () => {
+    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+      const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
+      const names = defs.map((d) => d.name ?? d.function?.name);
+      expect(names).not.toContain("demo_retired");
+    }
   });
 });

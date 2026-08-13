@@ -151,7 +151,7 @@ understand, independent of how (or whether) it ends up wired to a real backend.
 
 One file per capability. **No URLs, no auth headers, no HTTP** — just the business shape.
 
-```yaml
+```yaml archstone-fixture=tourism as=tourism.search.capability.yaml
 # tourism.search.capability.yaml   (CDL 0.2)
 capability:
   id: tourism.search

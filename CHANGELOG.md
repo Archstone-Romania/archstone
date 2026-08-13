@@ -5,6 +5,22 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.2]
+
+Patch release. One behavior fix; no schema or breaking change.
+
+### Fixed
+
+- **`@archstone/agent`'s `tools()`/`buildToolDefs()` now honour capability lifecycle (#55).**
+  A capability declared `lifecycle: retired` (or `experimental`) was handed to a host's LLM
+  identically to a `stable` one — no filtering, no hint text — on the embedded-SDK path only
+  (`@archstone/runtime`'s MCP paths, `mcpHandler`/`serveStdio`, already filtered correctly).
+  `buildToolDefs()` now consults the same shared `registry.getExposure()` `runtime/server.ts`
+  uses: an unlisted capability is dropped from every emitted format (anthropic/openai/gemini/
+  json-schema), and a capability carrying a lifecycle hint (`beta`/`deprecated`) has it appended
+  to the tool description. No new mechanism — this is the second emitter wiring into the shared
+  exposure function ADD-24 built for exactly this reuse.
+
 ## [0.10.1]
 
 Patch release. Packaging metadata only — no source, schema or behavior change.
