@@ -254,6 +254,28 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
     if (targets.length !== 1) {
       const detail = targets.length === 0 ? `no output field references resource '${canonical}'` : `${targets.length} output fields reference resource '${canonical}' (need exactly one)`;
       diags.push({ severity: "error", code: "response-output-mismatch", message: `${at}: ${detail}` });
+    } else {
+      // #61 (ADD-19's underlying cause, Option B — stop the crash, don't lift the cap): D-7
+      // above only checks that exactly one output field references THIS resource; it says
+      // nothing about other, unrelated output fields declared alongside it. `applyResponseMapping`
+      // (`@archstone/emitter-support/mapping.ts`) always returns `{ [mapping.field]: value }` —
+      // exactly one key — while `objectJsonSchema` builds `outputSchema` from EVERY declared
+      // `output:` field. A capability with two or more output fields (even with exactly one
+      // correctly bound here) ships an `outputSchema` naming N properties against a
+      // `structuredContent` carrying one, N-1 of them silently missing — the reference MCP SDK
+      // client validates `structuredContent` against `outputSchema` unconditionally and crashes
+      // (ADD-19 Rev 2 D-3'/D-6's own precedent, hit again one level up). Refused here, loudly,
+      // at authoring time, rather than shipping a capability that crashes its first real caller.
+      // Not a lift of the one-resource cap (#61 tracks that as a separate, larger decision) —
+      // only a fail-closed stop on the silent version of the same defect.
+      const outputFieldCount = Object.keys((cap.capability.output ?? {}) as Record<string, unknown>).length;
+      if (outputFieldCount > 1) {
+        diags.push({
+          severity: "error",
+          code: "response-output-extra-fields",
+          message: `${at}: capability '${cid}' declares ${outputFieldCount} output fields but this response: block binds only one resource ('${canonical}') — outputSchema would advertise every declared field while structuredContent carries only the mapped one, which crashes the reference MCP client (ADD-19). A response: binding is capped at one resource per capability until #61 decides how to lift it; split into separate capabilities, or remove the extra output field(s), for now.`,
+        });
+      }
     }
   }
 

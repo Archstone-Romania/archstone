@@ -5,6 +5,24 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.1]
+
+Patch release. One behavior fix; no schema change (a new authoring-time refusal, not a new
+primitive).
+
+### Fixed
+
+- **A `response:`-bound capability with more than one `output:` field is now refused at
+  `archstone apply`, not left to crash the reference MCP client at invocation time (#61,
+  Option B).** `applyResponseMapping` always returns `structuredContent` with exactly one key
+  (the field bound to the mapped resource), while `outputSchema` was built from every declared
+  `output:` field — a capability correctly binding one output field to its response (satisfying
+  the existing D-7 check) could still declare a second, unrelated field and ship an
+  `outputSchema` naming two properties against a `structuredContent` carrying one (the ADD-19
+  crash, one level up). New diagnostic `response-output-extra-fields` catches this at authoring
+  time. This does **not** lift the underlying one-resource-per-capability cap — #61 remains open
+  for that larger decision — it only closes the silent version of the same defect.
+
 ## [0.11.0]
 
 Minor release. Behaviour change under 0.x: a manifest that previously failed `apply` solely

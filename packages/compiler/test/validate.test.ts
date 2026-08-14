@@ -334,4 +334,35 @@ describe("validateSemantics — response mapping (ADD-12)", () => {
     expect(codes(errors(validateSemantics(load(dir))))).toContain("response-output-mismatch");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  // #61 (Option B — stop the ADD-19 crash, don't lift the one-resource cap): a capability can
+  // correctly bind exactly one output field to the mapped resource (D-7 above) and STILL ship
+  // the outputSchema/structuredContent mismatch that crashes the reference MCP client, if it
+  // declares any OTHER output field alongside it — applyResponseMapping's structuredContent
+  // always carries exactly one key, but objectJsonSchema's outputSchema is built from every
+  // declared output field.
+  it("flags a second, unrelated output field alongside a correctly-bound one (response-output-extra-fields)", () => {
+    const dir = withResponse("  response:\n    collection: \"$.results[*]\"\n    resource: Widget\n    map:\n      name: \"$.n\"\n      price: \"$.p\"\n", {
+      // `items` correctly references Widget (D-7 is satisfied); `count` does not reference
+      // anything and would still land in outputSchema with nothing to populate it in
+      // structuredContent.
+      output: "  output:\n    items:\n      collection: Widget\n    count:\n      type: quantity\n",
+    });
+    const d = validateSemantics(load(dir));
+    // D-7's own check must NOT also fire — `items` still uniquely references Widget; this is a
+    // distinct diagnostic for a distinct problem (extra fields), not a re-triggering of D-7.
+    expect(codes(errors(d))).not.toContain("response-output-mismatch");
+    const e = errors(d).find((x) => x.code === "response-output-extra-fields");
+    expect(e).toBeDefined();
+    expect(e!.message).toMatch(/2 output fields/);
+    expect(e!.message).toMatch(/#61/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("real fixtures (booking/tourism/bank): no response-bound capability declares more than one output field — no false positives", () => {
+    for (const m of ["booking", "tourism", "bank"]) {
+      const d = validateSemantics(load(join(manifests, m)));
+      expect(codes(errors(d))).not.toContain("response-output-extra-fields");
+    }
+  });
 });
