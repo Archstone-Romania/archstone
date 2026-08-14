@@ -144,11 +144,15 @@ export function policyScopesCapability(
 /**
  * Lower every policy document scoped onto one capability into neutral `IRPolicyRule`s.
  *
- * Copies `allow`/`deny` VERBATIM and evaluates nothing (BR-7). `rateLimit` and `constraints`
- * are not copied — by explicit field selection rather than by a delete, the same "no unchecked
- * cast" discipline `lowerConnector` uses. That is ADD-43 D-3's strip: an empty `constraints: {}`
- * is legal to author and simply never reaches the IR, so the evaluator's fail-closed
- * unknown-key branch needs no exception for it (a non-empty one never compiles at all, D-2).
+ * Copies `allow`/`deny` VERBATIM and evaluates nothing (BR-7). `constraints` is not copied — by
+ * explicit field selection rather than by a delete, the same "no unchecked cast" discipline
+ * `lowerConnector` uses. That is ADD-43 D-3's strip: an empty `constraints: {}` is legal to
+ * author and simply never reaches the IR, so the evaluator's fail-closed unknown-key branch
+ * needs no exception for it (a non-empty one never compiles at all, D-2).
+ *
+ * `rateLimit` (#45 / ADD-45 D-1) IS copied — verbatim, `{ maxInvocations, windowSeconds }` —
+ * once validate.ts's `policy-ratelimit-invalid` check has already refused anything incomplete,
+ * so lowering never has to guess a default for a missing half of the pair.
  */
 function lowerPolicyRules(docs: PolicyDoc[], capabilityId: string, provider: string): IRPolicyRule[] | undefined {
   const rules: IRPolicyRule[] = [];
@@ -157,6 +161,18 @@ function lowerPolicyRules(docs: PolicyDoc[], capabilityId: string, provider: str
     const rule: IRPolicyRule = { id: p.metadata.id };
     if (Array.isArray(p.spec?.allow)) rule.allow = [...p.spec.allow];
     if (Array.isArray(p.spec?.deny)) rule.deny = [...p.spec.deny];
+    const rl = p.spec?.rateLimit as { maxInvocations?: unknown; windowSeconds?: unknown } | undefined;
+    if (
+      rl &&
+      typeof rl.maxInvocations === "number" &&
+      Number.isInteger(rl.maxInvocations) &&
+      rl.maxInvocations >= 1 &&
+      typeof rl.windowSeconds === "number" &&
+      Number.isInteger(rl.windowSeconds) &&
+      rl.windowSeconds >= 1
+    ) {
+      rule.rateLimit = { maxInvocations: rl.maxInvocations, windowSeconds: rl.windowSeconds };
+    }
     rules.push(rule);
   }
   return rules.length > 0 ? rules : undefined;

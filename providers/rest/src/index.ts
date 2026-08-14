@@ -11,7 +11,7 @@ import type { IRTool } from "@archstone/compiler";
 // below. The type is owned by the layer that acts on it (beside the policy evaluator and the
 // record builder), and this package merely carries the field so a deployer keeps ONE options
 // bag. Same shape of dependency as @archstone/agent type-importing `CallerContext` from here.
-import type { AuditSink } from "@archstone/emitter-support";
+import type { AuditSink, RateLimitCounter } from "@archstone/emitter-support";
 
 export interface InvokeResult {
   ok: boolean;
@@ -194,6 +194,22 @@ export interface InvokeOptions {
    * the caller as merely anonymous.
    */
   callerResolutionFailed?: boolean;
+  /**
+   * #45 / ADD-45: TYPE-ONLY, exactly like `auditSink` above. `invokeRest` never reads, calls, or
+   * branches on this field — it rides the shared options bag so a deployer wires ONE options
+   * object and every shipped pass-through forwards it with zero new plumbing. The state-owning
+   * counter/store implementation itself must never live in this package (layer purity, ADD-45)
+   * — this is only the deployer-supplied hook, threaded through by the two consumers that call
+   * the rate-limit evaluation step (`@archstone/runtime`'s `callTool`, `@archstone/agent`'s
+   * `executeCapability` — the same two sites that call the policy evaluator). `verifyTool`
+   * deliberately does NOT read this field: rate-limiting `archstone verify` probes is
+   * out-of-scope for #45.
+   *
+   * No-store default: a capability declaring `spec.rateLimit` with this field absent DENIES
+   * (fails closed) rather than silently proceeding unlimited — see `evaluateRateLimit` in
+   * `@archstone/emitter-support` for the full reasoning.
+   */
+  rateLimitCounter?: RateLimitCounter;
 }
 
 // Issue #39 (OQ-1/OQ-2/BR-6): fire onResponse synchronously but never await it. A thrown

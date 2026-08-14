@@ -164,9 +164,12 @@ describe("evaluatePolicy — composition across policies (BR-6 / ADD-43 D-13)", 
 });
 
 describe("evaluatePolicy — fail-closed on anything unevaluatable (BR-24)", () => {
-  // Unreachable from `archstone apply` (rateLimit/non-empty constraints are authoring errors and
-  // an empty constraints is stripped at lowering) — this is defence in depth for the paths that
-  // bypass apply entirely: a hand-written archstone.ir.json, or a forward-versioned artifact.
+  // Unreachable from `archstone apply` (non-empty constraints is an authoring error, an empty
+  // one is stripped at lowering, and an INCOMPLETE rateLimit — missing maxInvocations or
+  // windowSeconds — is likewise refused at authoring time, #45/ADD-45) — this is defence in
+  // depth for the paths that bypass apply entirely: a hand-written archstone.ir.json, or a
+  // forward-versioned artifact. A COMPLETE, well-formed `rateLimit` is a KNOWN key (ADD-45 D-1)
+  // and does NOT hit this branch — see `evaluateRateLimit`'s own test file for its enforcement.
   const withUnknownKey = (extra: Record<string, unknown>): IRTool =>
     tool({ policyRules: [{ id: "p", allow: ["user:alice"], ...extra } as unknown as IRPolicyRule] });
 
@@ -179,13 +182,23 @@ describe("evaluatePolicy — fail-closed on anything unevaluatable (BR-24)", () 
   });
 
   it("is NEVER partially applied — a satisfied allow does not carry the decision (S-US4.5)", () => {
-    // The principal is on the allow list and would otherwise proceed. It still denies.
+    // The principal is on the allow list and would otherwise proceed. It still denies: the
+    // rateLimit object here is INCOMPLETE (missing windowSeconds), which is unevaluatable, not
+    // merely unenforced.
     const d = evaluatePolicy(withUnknownKey({ rateLimit: { maxInvocations: 5 } }), {
       credentialPresent: true,
       principal: "user:alice",
     });
     expect(d.allowed).toBe(false);
     expect(reasonOf(d)).toBe("policy_unevaluatable");
+  });
+
+  it("a COMPLETE, well-formed rateLimit does not itself make evaluatePolicy deny (#45)", () => {
+    const d = evaluatePolicy(withUnknownKey({ rateLimit: { maxInvocations: 5, windowSeconds: 60 } }), {
+      credentialPresent: true,
+      principal: "user:alice",
+    });
+    expect(d.allowed).toBe(true);
   });
 
   it("runs FIRST — before the authenticated branch (BR-15 step 0 ordering)", () => {

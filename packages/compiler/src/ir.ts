@@ -124,6 +124,13 @@ export interface IRPolicyRule {
   id: string; // the policy document's metadata.id
   allow?: string[]; // principals permitted to invoke — exact, byte-for-byte matches (BR-9)
   deny?: string[]; // principals refused outright; deny always wins over allow (BR-15)
+  /** #45 (ADD-45 D-1): the resolved `spec.rateLimit`, verbatim, once the compiler has already
+   *  refused anything with a missing or invalid `maxInvocations`/`windowSeconds` (both required
+   *  together — `policy-ratelimit-invalid`). Shape only, same discipline as `allow`/`deny`: the
+   *  IR carries no counter, no clock, no store — evaluating it needs state, which is why it is a
+   *  separate evaluation step (`evaluateRateLimit`, `@archstone/emitter-support`) from the pure
+   *  `evaluatePolicy`, not a branch inside it. */
+  rateLimit?: { maxInvocations: number; windowSeconds: number };
 }
 
 export interface IRTool {

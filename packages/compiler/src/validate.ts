@@ -364,16 +364,25 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
       }
     }
 
-    // BR-22 — `rateLimit` needs a counter and therefore state, which would break the
-    // evaluator's purity. "Excluded from this slice" must mean REFUSED, not ignored: silently
-    // accepting the document would ship the very defect #43 opens with, a manifest advertising
-    // a control that does not exist.
+    // #45 (ADD-45 D-2) — `rateLimit` is now enforced by the same evaluation point as
+    // `allow`/`deny` (the state lives outside the pure evaluator, behind a deployer-supplied
+    // `RateLimitCounter` — see ADD-45). Both `maxInvocations` and `windowSeconds` are required
+    // together: `policy.schema.json` makes neither required on its own, so a document declaring
+    // only one is shape-valid but semantically unusable — refusing here, at authoring time, is
+    // strictly better than lowering a half-formed rule and denying every call at runtime with a
+    // message nobody can act on.
     if (spec.rateLimit !== undefined) {
-      diags.push({
-        severity: "error",
-        code: "policy-ratelimit-unsupported",
-        message: `${at} declares spec.rateLimit, which is not enforced in this version — rate limiting needs invocation state and is tracked as issue #45; remove it or the manifest advertises a control that does not exist`,
-      });
+      const maxInvocations = (spec.rateLimit as Record<string, unknown>).maxInvocations;
+      const windowSeconds = (spec.rateLimit as Record<string, unknown>).windowSeconds;
+      const validMax = typeof maxInvocations === "number" && Number.isInteger(maxInvocations) && maxInvocations >= 1;
+      const validWindow = typeof windowSeconds === "number" && Number.isInteger(windowSeconds) && windowSeconds >= 1;
+      if (!validMax || !validWindow) {
+        diags.push({
+          severity: "error",
+          code: "policy-ratelimit-invalid",
+          message: `${at} declares spec.rateLimit but is missing (or has an invalid) maxInvocations/windowSeconds — both are required, positive integers`,
+        });
+      }
     }
 
     // BR-23 — a NON-EMPTY `constraints` is refused. `policy.schema.json` declares it

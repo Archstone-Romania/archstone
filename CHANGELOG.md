@@ -5,6 +5,43 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.0]
+
+Minor release. Behaviour change under 0.x: a manifest that previously failed `apply` solely
+because it declared a *complete* `spec.rateLimit` now succeeds and is enforced.
+
+### Added
+
+- **`spec.rateLimit` is now enforced (#45, ADD-45).** Previously `policy.schema.json` declared
+  `spec.rateLimit` (`maxInvocations`/`windowSeconds`) but nothing read it — `archstone apply`
+  refused it outright (ADD-43 D-2) so a manifest could not silently advertise a control that
+  didn't exist. It is now evaluated at the SAME evaluation point as `allow`/`deny` (ADD-43) —
+  immediately after that pure check allows, strictly before the backend is ever called — via a
+  new pluggable `RateLimitCounter` interface (`increment(key, windowSeconds): number |
+  Promise<number>`), threaded through as a new optional, type-only `rateLimitCounter` field on
+  `InvokeOptions`/`ExecuteOptions` (same pattern as `auditSink`). An `InMemoryRateLimitCounter`
+  reference implementation ships in `@archstone/emitter-support` for dev/tests/single-process
+  deployments — **it is not safe on a Workers/edge or multi-instance deployment** (per-isolate
+  memory resets); a production deployment supplies its own store-backed implementation (Durable
+  Object, Redis, Upstash, …), which stays entirely outside this repo's public core packages.
+  Exceeding the limit denies with the identical `policy_denied` shape ADD-43 already ships, under
+  a new reason code, `rate_limit_exceeded`.
+  - **`spec.rateLimit` now requires BOTH `maxInvocations` and `windowSeconds` together** — a
+    document declaring only one is refused at `archstone apply` (`policy-ratelimit-invalid`),
+    replacing the old blanket `policy-ratelimit-unsupported` refusal. **Behaviour change under
+    0.x, minor bump:** a manifest that previously failed `apply` solely because it declared a
+    *complete* `rateLimit` now succeeds and is enforced.
+  - **No-store default is FAIL-CLOSED, not degrade-with-a-warning.** A capability declaring
+    `rateLimit`, invoked with no `rateLimitCounter` configured, denies every call (reason:
+    `policy_unevaluatable`, reused rather than a new code — see ADD-45 §3 for why). A capability
+    that never declares `rateLimit` is entirely unaffected and needs no counter.
+  - **Key derivation: per capability AND per principal, when a principal is present; per
+    capability alone (one shared bucket) when it is not.** There is no per-IP/per-connection
+    seam on the invocation path to distinguish anonymous callers further, and Archstone does not
+    invent one (out of scope) — see ADD-45 §4.
+  - `docs/ONBOARDING.md` gains a "Rate limiting" section documenting how to supply a production
+    store.
+
 ## [0.10.3]
 
 Patch release. Two behavior fixes; no schema or breaking change.

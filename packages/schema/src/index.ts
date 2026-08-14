@@ -151,7 +151,8 @@ export interface ResourceDoc {
  *
  * NOT the same vocabulary as a capability's `policies: [authenticated, …]` CDL token list
  * (AC §0.1 / BR-38): a policy document cannot express `authenticated`, and `spec.rateLimit`
- * is not the `rate-limited` token.
+ * is not the `rate-limited` token — the token is an authoring-time hint on the capability;
+ * `spec.rateLimit` here is the document that is actually enforced (#45 / ADD-45).
  */
 export interface PolicyDoc {
   file: string;
@@ -168,7 +169,11 @@ export interface PolicyDoc {
   spec: {
     allow?: string[];
     deny?: string[];
-    rateLimit?: Record<string, unknown>; // refused at authoring time (BR-22 → #45)
+    // #45 / ADD-45 D-1: enforced. `maxInvocations`/`windowSeconds` are required TOGETHER by the
+    // compiler's semantic pass (`policy-ratelimit-invalid`) — `policy.schema.json` itself makes
+    // neither required on its own, so this type stays permissive at the shape layer and the
+    // stricter rule lives where the rest of this file's cross-field rules do.
+    rateLimit?: { maxInvocations?: unknown; windowSeconds?: unknown };
     constraints?: Record<string, unknown>; // non-empty refused (BR-23); empty stripped (D-3)
   };
 }

@@ -385,7 +385,10 @@ service account. Wire it up like this:
      requests from two different end users each get their own token. This is orthogonal to
      `bearerToken`: `bearerToken` gates who may reach the MCP endpoint *at all*;
      `resolveCaller` decides whose backend data a given, already-authorized call acts on. Set
-     both — one doesn't substitute for the other.
+     both — one doesn't substitute for the other. `invoke: { caller }` is **not** an
+     alternative on this path: the HTTP handler recomputes the caller for every request, so a
+     static one set there is overwritten and never reaches your backend. Use `resolveCaller`
+     or nothing.
    - `@archstone/agent/mcp`'s `mcpHandler()` — takes the **same** `resolveCaller` hook, with the
      same per-request semantics: it is a thin wrapper over `createHttpHandler` and forwards its
      options unchanged. This is the seam to use when you mount Archstone inside your own app's
@@ -471,16 +474,19 @@ spec:
   of them have no principal in common the capability is invocable by nobody, and `apply` warns.
 - **A `deny`-only policy does not stop an anonymous caller** — an absent principal matches no
   entry at all. To require an identified caller, write an `allow`. `apply` warns about this too.
-- **Not evaluated in this version:** `spec.rateLimit` and `spec.constraints` are **rejected at
-  `archstone apply`**, naming the file, rather than silently accepted. A manifest never
-  advertises a control that does not exist.
+- **`spec.constraints` remains rejected at `archstone apply`**, naming the file, rather than
+  silently accepted — there is no grammar for it yet, and a manifest never advertises a control
+  that does not exist.
+- **`spec.rateLimit` is enforced (#45).** `maxInvocations` and `windowSeconds` are required
+  **together** — a document declaring only one is refused at `archstone apply`, same discipline
+  as everything else on this page. See "Rate limiting" below for how to wire it up.
 
 A refused call returns a structured refusal before any request reaches your backend, carrying
-one of four reason codes — `authenticated_no_credential`, `principal_not_allowed`,
-`principal_denied`, `policy_unevaluatable` — on `_meta["dev.archstone/policy_denied"]` over MCP,
-and on `ExecuteResult.denial` from `execute()`. It deliberately does **not** tell the caller
-which policy refused them or who *is* allowed: that would let anyone vary the principal and
-enumerate your identifiers one refused call at a time.
+one of five reason codes — `authenticated_no_credential`, `principal_not_allowed`,
+`principal_denied`, `policy_unevaluatable`, `rate_limit_exceeded` — on
+`_meta["dev.archstone/policy_denied"]` over MCP, and on `ExecuteResult.denial` from `execute()`.
+It deliberately does **not** tell the caller which policy refused them or who *is* allowed: that
+would let anyone vary the principal and enumerate your identifiers one refused call at a time.
 
 Two operational notes:
 
@@ -495,9 +501,63 @@ Two operational notes:
   `serveStdio`, `execute()`).
 
 `archstone apply` also now warns on every declared CDL policy token Archstone does not yet
-enforce — `rate-limited`, `tenant-scoped`, `human-approval`, `consent-required` — naming the
-token and the capability. The warnings never block anything. They exist so a `policies:` list is
+enforce — `tenant-scoped`, `human-approval`, `consent-required` — naming the token and the
+capability. (The `rate-limited` CDL *token* is a separate vocabulary from the `spec.rateLimit`
+*document* above — see the next section — and stays on this unenforced list; declaring the token
+alone still does nothing.) The warnings never block anything. They exist so a `policies:` list is
 never mistaken for a list of shipped guarantees by someone reading your manifest as evidence.
+
+#### Rate limiting (`spec.rateLimit`, #45)
+
+Rate limiting needs to count prior invocations, which is **state** — and Archstone's evaluation
+point is otherwise a pure function (ADD-43). So it is a *deliberate* second, sibling step,
+`evaluateRateLimit`, called right after the pure evaluator allows and strictly before your
+backend is ever reached — same "deny before any connector work" guarantee as everything else on
+this page.
+
+**You must supply a counter.** The interface is one method:
+
+```ts
+interface RateLimitCounter {
+  increment(key: string, windowSeconds: number): number | Promise<number>;
+}
+```
+
+Wire it in wherever you already pass `caller`/`auditSink` — `rateLimitCounter` on the same
+options bag (`InvokeOptions` for `callTool`/`mcpHandler`/`createHttpHandler`/`serveStdio`,
+`ExecuteOptions` for `execute()`):
+
+```ts
+import { InMemoryRateLimitCounter } from "@archstone/emitter-support";
+
+const counter = new InMemoryRateLimitCounter(); // dev/single-process reference implementation
+
+await archstone.execute("bank.transfer", input, {
+  caller: { principal: "user:alice", accessToken },
+  rateLimitCounter: counter,
+});
+```
+
+**`InMemoryRateLimitCounter` is for local development and tests only.** It is a plain `Map` held
+in process memory — on a single long-lived Node process that is a real limit, but on a
+Workers/edge deployment (see `examples/demo/remote-mcp-worker`) a new isolate can spin up per
+request and silently reset every counter to zero. There, an in-process counter is not a rate
+limit at all — it is a coin flip. **Production/edge deployments must supply their own
+`RateLimitCounter`** backed by a shared store — a Durable Object, Redis, Upstash, or similar.
+Archstone deliberately does not ship one: which store fits your deployment is your call, not
+ours, and none of Archstone's public core packages take on a Cloudflare-specific (or any
+vendor-specific) binding to build one.
+
+**No counter supplied, but a capability declares `spec.rateLimit`? The call is DENIED**
+(`reason: "policy_unevaluatable"`) — Archstone never silently proceeds unlimited. A declared
+control that quietly does nothing is exactly the false-control problem this feature exists to
+close; see ADD-45 for the full reasoning. If you never use `rateLimit` in any policy document,
+you never need to supply a counter at all — the check is a no-op for every other capability.
+
+**Key derivation:** a bucket is keyed by **capability + principal**, when a principal is present.
+With no principal (anonymous), every anonymous caller of that capability shares **one** bucket —
+there is no per-IP/per-connection seam on the invocation path to distinguish them, and treating
+"no principal" as "no limit" would be the opposite of fail-closed.
 
 ---
 

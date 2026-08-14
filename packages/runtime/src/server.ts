@@ -19,6 +19,7 @@ import {
   applyResponseMapping,
   contractViolationMessage,
   evaluatePolicy,
+  evaluateRateLimit,
   auditNow,
   buildExecutionRecord,
   emitExecutionRecord,
@@ -240,6 +241,26 @@ export async function callTool(
           // lookup key (BR-28, mirroring ADD-19 and ADD-30 BR-7).
           capability: tool.id,
           reason: decision.denial.reason,
+        },
+      },
+      isError: true,
+    };
+  }
+
+  // #45 (ADD-45 D-2/D-3): the rate-limit evaluation step, called at the SAME point as the policy
+  // evaluator above — immediately after it allows, strictly before `invokeRest` — so a
+  // rate-limited call does exactly as much connector work as a policy-denied one: none. Reuses
+  // the identical `policy_denied` `_meta` shape and audit wiring; only the reason code differs.
+  const rateDecision = await evaluateRateLimit(tool, { principal: opts?.caller?.principal }, opts?.rateLimitCounter);
+  if (!rateDecision.allowed) {
+    audit({ phase: "denied", message: rateDecision.denial.message, denialReason: rateDecision.denial.reason });
+    return {
+      content: [{ type: "text", text: rateDecision.denial.message }],
+      _meta: {
+        [POLICY_DENIED_META_KEY]: {
+          error: "policy_denied",
+          capability: tool.id,
+          reason: rateDecision.denial.reason,
         },
       },
       isError: true,

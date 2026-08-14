@@ -10,4 +10,5 @@ export * from "./lowering";
 export * from "./mapping";
 export * from "./exposure";
 export * from "./policy";
+export * from "./ratelimit";
 export * from "./audit";

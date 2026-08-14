@@ -174,12 +174,36 @@ describe("pattern grammar refusals (BR-10/BR-11, S-US6.3/6.4/6.5)", () => {
 describe("fail-closed at authoring time (BR-22/BR-23, S-US4.1/4.2/4.3)", () => {
   const cap = "  scope: capability\n  capabilityId: bank.list\n";
 
-  it("refuses spec.rateLimit, naming the file and pointing at #45 (S-US4.1)", () => {
-    const d = diagnose({ "p.policy.yaml": policy("rl", cap, "  rateLimit:\n    maxInvocations: 5\n    windowSeconds: 60\n") });
-    const err = errors(d).find((e) => e.code === "policy-ratelimit-unsupported");
-    expect(err?.message).toContain("p.policy.yaml");
-    expect(err?.message).toContain("#45");
+  // #45 / ADD-45 D-1: rateLimit is now ENFORCED (the evaluation-point half lives in
+  // emitter-support's evaluateRateLimit; the compiler's job is shape+resolution only, same as
+  // allow/deny). A complete `{ maxInvocations, windowSeconds }` compiles cleanly and is lowered
+  // into `policyRules` verbatim.
+  it("accepts a complete spec.rateLimit and lowers it verbatim (#45)", () => {
+    const files = {
+      "p.policy.yaml": policy("rl", cap, "  rateLimit:\n    maxInvocations: 5\n    windowSeconds: 60\n"),
+    };
+    expect(errors(diagnose(files))).toHaveLength(0);
+    const rules = compiled(files).tools.find((t) => t.id === "bank.list")?.policyRules;
+    expect(rules).toEqual([{ id: "rl", rateLimit: { maxInvocations: 5, windowSeconds: 60 } }]);
   });
+
+  it("refuses spec.rateLimit missing windowSeconds, naming the file (S-US4.1)", () => {
+    const d = diagnose({ "p.policy.yaml": policy("rl", cap, "  rateLimit:\n    maxInvocations: 5\n") });
+    const err = errors(d).find((e) => e.code === "policy-ratelimit-invalid");
+    expect(err?.message).toContain("p.policy.yaml");
+  });
+
+  it("refuses spec.rateLimit missing maxInvocations, naming the file (S-US4.1)", () => {
+    const d = diagnose({ "p.policy.yaml": policy("rl", cap, "  rateLimit:\n    windowSeconds: 60\n") });
+    const err = errors(d).find((e) => e.code === "policy-ratelimit-invalid");
+    expect(err?.message).toContain("p.policy.yaml");
+  });
+
+  // A non-positive maxInvocations/windowSeconds is refused at the SHAPE layer
+  // (`policy.schema.json`'s `minimum: 1`) before this semantic pass ever runs — `load()`
+  // rejects the document outright, so `validateSemantics` never sees it as a `PolicyDoc` at
+  // all. `policy-ratelimit-invalid` exists for the case shape validation permits (neither key
+  // is individually required) but this increment does not: one of the pair missing.
 
   it("refuses a non-empty spec.constraints, naming the file (S-US4.2)", () => {
     const d = diagnose({ "p.policy.yaml": policy("c", cap, "  constraints:\n    maxRefundAmount: 500\n") });
@@ -203,8 +227,8 @@ describe("fail-closed at authoring time (BR-22/BR-23, S-US4.1/4.2/4.3)", () => {
       "shop.browse.capability.yaml":
         "capability:\n  id: shop.browse\n  description: browse\n  effect: read\n  provider: store\n  policies:\n    - rate-limited\n",
     });
-    // The token warns; it never triggers BR-22's document-level refusal.
-    expect(codes(errors(d))).not.toContain("policy-ratelimit-unsupported");
+    // The token warns; it never triggers the document-level `spec.rateLimit` shape refusal.
+    expect(codes(errors(d))).not.toContain("policy-ratelimit-invalid");
     expect(codes(warnings(d))).toContain("unenforced-policy-token");
   });
 });

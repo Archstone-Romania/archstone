@@ -65,9 +65,10 @@ export interface PolicyDenial {
 
 export type PolicyDecision = { allowed: true } | { allowed: false; denial: PolicyDenial };
 
-/** The only keys `IRPolicyRule` defines (ADD-43 D-1). Anything else on a rule means the artifact
- *  was hand-written or produced by a newer compiler, and is refused — see `unevaluatable`. */
-const KNOWN_RULE_KEYS: ReadonlySet<string> = new Set(["id", "allow", "deny"]);
+/** The only keys `IRPolicyRule` defines (ADD-43 D-1, widened by ADD-45 D-1 to add `rateLimit`).
+ *  Anything else on a rule means the artifact was hand-written or produced by a newer compiler,
+ *  and is refused — see `unevaluatable`. */
+const KNOWN_RULE_KEYS: ReadonlySet<string> = new Set(["id", "allow", "deny", "rateLimit"]);
 
 const ALLOWED: PolicyDecision = { allowed: true };
 
@@ -97,6 +98,16 @@ function unevaluatable(rule: IRPolicyRule): boolean {
   if (typeof rule.id !== "string") return true;
   if (rule.allow !== undefined && !isStringArray(rule.allow)) return true;
   if (rule.deny !== undefined && !isStringArray(rule.deny)) return true;
+  // #45 (ADD-45 D-1): a well-formed `rateLimit` is a KNOWN key, not an unevaluatable one — its
+  // presence must never fail this pure evaluator closed. `evaluateRateLimit`
+  // (`ratelimit.ts`) is the function that actually enforces it, at the same call sites,
+  // immediately after this one allows. A malformed `rateLimit` (wrong types, or a shape
+  // `archstone apply` would have refused — defence in depth for a hand-written/forward-versioned
+  // artifact) DOES fail this rule closed, same as a malformed `allow`/`deny` above.
+  if (rule.rateLimit !== undefined) {
+    const rl = rule.rateLimit as { maxInvocations?: unknown; windowSeconds?: unknown };
+    if (typeof rl.maxInvocations !== "number" || typeof rl.windowSeconds !== "number") return true;
+  }
   return false;
 }
 

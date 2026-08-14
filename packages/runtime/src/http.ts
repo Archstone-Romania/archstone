@@ -20,8 +20,18 @@ export interface CreateHttpHandlerOptions {
    *  empty throws at construction time, not on the first request (Rule #7 — core never ships
    *  open by default; R-5). */
   bearerToken: string;
-  /** Forwarded to createMcpServer for REST-provider calls (env/fetchImpl). A `caller` set here
-   *  is a static, process-wide default — see `resolveCaller` below for the per-request case.
+  /** Forwarded to createMcpServer for REST-provider calls (env/fetchImpl).
+   *
+   *  **`caller` set here is ignored, not a default.** The per-request rebuild below
+   *  (`:66`) is `{ ...opts.invoke, caller: opts.resolveCaller?.(request) }` — `caller` is
+   *  unconditionally overwritten on every request, with `undefined` when no `resolveCaller`
+   *  is supplied. Per-request identity requires `resolveCaller` below; a static `caller` set
+   *  here never reaches the backend. This differs from `serveStdio` (`runtime/src/mcp.ts:38`),
+   *  where `invoke` — including `caller` — is forwarded verbatim to `createMcpServer` with no
+   *  such rebuild, so a static `caller` there is correct by design (one child process per
+   *  conversation). Do not "fix" this by making the rebuild below merge-if-absent — that would
+   *  convert a loud fail-closed outage into a silent wrong-principal authorization (ADD-42
+   *  D-13).
    *
    *  #44, and read this before setting a correlation id here: the per-request rebuild below
    *  overwrites exactly ONE key, `caller`. Everything else — including `auditSink`,

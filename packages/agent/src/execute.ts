@@ -15,6 +15,7 @@ import {
   applyResponseMapping,
   contractViolationMessage,
   evaluatePolicy,
+  evaluateRateLimit,
   auditNow,
   buildExecutionRecord,
   emitExecutionRecord,
@@ -55,6 +56,12 @@ export interface ExecuteOptions {
    *  Never synthesized or derived. */
   sessionId?: string;
   workflowId?: string;
+  /** #45 / ADD-45: pure pass-through to the rate-limit evaluation step, exactly like `caller`/
+   *  `allowedHosts`/`onResponse` above — `executeCapability` calls `evaluateRateLimit` itself
+   *  (mirroring how it already calls `evaluatePolicy`) rather than forwarding this into
+   *  `invokeRest`. No-store default: a capability declaring `spec.rateLimit` with this absent
+   *  DENIES rather than proceeding unlimited — see `evaluateRateLimit`'s doc comment. */
+  rateLimitCounter?: InvokeOptions["rateLimitCounter"];
 }
 
 /** #43 ADD-43 D-11: the embedded rendering of a policy refusal — the `ExecuteResult` sibling of
@@ -192,6 +199,19 @@ export async function executeCapability(
       status: "error",
       error: decision.denial.message,
       denial: { reason: decision.denial.reason, capability: tool.id },
+    };
+  }
+
+  // #45 (ADD-45 D-2/D-3): the SAME rate-limit evaluation step `callTool` calls, at the SAME
+  // point — immediately after `evaluatePolicy` allows, before any connector work. One shared
+  // function in @archstone/emitter-support, never a second copy here (the ADD-30 defect class).
+  const rateDecision = await evaluateRateLimit(tool, { principal: opts?.caller?.principal }, opts?.rateLimitCounter);
+  if (!rateDecision.allowed) {
+    audit({ phase: "denied", message: rateDecision.denial.message, denialReason: rateDecision.denial.reason });
+    return {
+      status: "error",
+      error: rateDecision.denial.message,
+      denial: { reason: rateDecision.denial.reason, capability: tool.id },
     };
   }
 

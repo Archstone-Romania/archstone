@@ -98,7 +98,10 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
     }
   });
 
-  it("exits 1 on spec.rateLimit and on non-empty spec.constraints (S-US4.1/S-US4.2)", async () => {
+  it("exits 1 on an incomplete spec.rateLimit and on non-empty spec.constraints (S-US4.1/S-US4.2)", async () => {
+    // #45: `spec.rateLimit` is enforced now, but `maxInvocations`/`windowSeconds` are still
+    // required TOGETHER — a document declaring only one is refused at authoring time exactly
+    // like an unsupported key would be. `constraints` remains refused outright (unchanged).
     for (const spec of ["  rateLimit:\n    maxInvocations: 5\n", "  constraints:\n    maxRefundAmount: 500\n"]) {
       const dir = manifest(policyDoc(spec));
       try {
@@ -106,6 +109,16 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  it("exits 0 on a COMPLETE spec.rateLimit (#45)", async () => {
+    const dir = manifest(policyDoc("  rateLimit:\n    maxInvocations: 5\n    windowSeconds: 60\n"));
+    try {
+      const r = await run(["apply", dir]);
+      expect(r.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -142,7 +155,7 @@ describe("archstone build — the strip rule (BR-8 / ADD-43 D-9)", () => {
     }
   });
 
-  it("refuses to build a manifest whose policy this version cannot enforce", async () => {
+  it("refuses to build a manifest whose spec.rateLimit is incomplete (#45)", async () => {
     const dir = manifest(policyDoc("  rateLimit:\n    maxInvocations: 5\n"));
     try {
       expect((await run(["build", dir, "--out", join(dir, "ir.json")])).code).toBe(1);

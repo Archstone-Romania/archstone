@@ -56,11 +56,15 @@ import type { PolicyDenialReason } from "./policy";
  * **Standing rule: every member has exactly one enumerated producer, and this set grows only by
  * an architecture decision naming the new producer.** Today: four from `evaluatePolicy`, two
  * from the exposure gate's two denying branches (ADD-24 D-10 named `lifecycle_blocked`'s
- * producer; ADD-56 D-1/D-3 names `lifecycle_unevaluatable`'s). Without that rule the enum is a
- * list; with it, it is a contract — and it is permanent the moment a customer filters on one of
- * these strings.
+ * producer; ADD-56 D-1/D-3 names `lifecycle_unevaluatable`'s), and one from `evaluateRateLimit`
+ * (ADD-45 D-2 names `rate_limit_exceeded`'s producer — the "counter would exceed maxInvocations"
+ * branch specifically; the *other* fail-closed branch of that same function, "rateLimit declared
+ * but no counter supplied", deliberately reuses `policy_unevaluatable` rather than adding a
+ * second new code — see `evaluateRateLimit`'s own doc comment for why that is the same meaning,
+ * not a different one wearing the same name). Without that rule the enum is a list; with it, it
+ * is a contract — and it is permanent the moment a customer filters on one of these strings.
  */
-export type ExecutionDenialReason = PolicyDenialReason | "lifecycle_blocked" | "lifecycle_unevaluatable";
+export type ExecutionDenialReason = PolicyDenialReason | "lifecycle_blocked" | "lifecycle_unevaluatable" | "rate_limit_exceeded";
 
 /** The non-policy refusal code for a `retired` capability. Spelled to match the agent-facing
  *  `LIFECYCLE_BLOCKED_META_KEY` the MCP surface already ships — one concept, one spelling,
