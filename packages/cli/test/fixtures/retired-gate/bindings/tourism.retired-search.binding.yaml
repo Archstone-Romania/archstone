@@ -1,0 +1,31 @@
+# Deliberately broken/drifted contract (#54 fixture): `pricePerNight` (a required Stay field)
+# is mapped to a JSONPath the mock backend never populates, so IF this binding were ever
+# probed by `archstone verify` it would report a contract VIOLATION — status: red — every
+# time, regardless of what the mock returns. This reproduces the bug: a business retired
+# `tourism.retired-search` without deleting its stale `contract:` block. After the #54 fix,
+# `runVerify` excludes this binding (lifecycle: retired) before it is ever probed, so this
+# broken mapping is never exercised and never turns the CI gate red.
+binding:
+  capabilityId: tourism.retired-search
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${STAYS_API_URL}"
+      method: POST
+      path: /v1/search
+
+  response:
+    collection: "$.stays[*]"
+    resource: Stay
+    map:
+      name: "$.name"
+      location: "$.location"
+      pricePerNight: "$.thisFieldWillNeverExist"
+      rating: "$.rating"
+
+  contract:
+    source: recorded
+    fingerprint: "sha256:cabe202bbd2f2d4c6aef739c652a1fba3de20333539a1df42ea5cc187dfb1273"
+    verifiedAt: "2026-07-16T00:00:00Z"
+    probe:
+      fixture: fixtures/tourism.retired-search.golden.json

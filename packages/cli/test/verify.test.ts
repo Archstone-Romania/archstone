@@ -15,6 +15,7 @@ const tsx = resolve(root, "node_modules/.bin/tsx");
 const cli = resolve(root, "packages/cli/src/index.ts");
 const tourism = resolve(root, "examples/manifests/tourism");
 const booking = resolve(root, "examples/manifests/booking");
+const retiredGate = resolve(root, "packages/cli/test/fixtures/retired-gate");
 
 function startMock(body: unknown): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((res) => {
@@ -55,6 +56,48 @@ describe("archstone verify (ADD-18)", () => {
       const e = err as { code: number; stdout: string };
       expect(e.code).toBe(1);
       expect(e.stdout).toMatch(/🔴 tourism\.search/);
+    } finally {
+      await mock.close();
+    }
+  }, 20000);
+});
+
+// #54 (ADD-51 D-6's named residual risk, R-2): the CI release gate must not go permanently red
+// because a manifest retired a `contract:`-bearing capability without also deleting its
+// contract block. `packages/cli/test/fixtures/retired-gate` carries `tourism.search` (stable,
+// contract matches the mock) alongside `tourism.retired-search` (lifecycle: retired, contract
+// deliberately mapped to a field the mock never returns — a guaranteed VIOLATION if ever
+// probed).
+describe("archstone verify — retired capability escapes the CI gate (#54)", () => {
+  it("exits 0: the stable capability is green, the retired one with a broken contract never appears", async () => {
+    const mock = await startMock({
+      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+    });
+    try {
+      const { stdout } = await execFileAsync(tsx, [cli, "verify", retiredGate, "--json"], {
+        cwd: root,
+        env: { ...process.env, STAYS_API_URL: mock.url },
+      });
+      const doc = JSON.parse(stdout);
+      expect(doc.results).toHaveLength(1);
+      expect(doc.results[0]).toMatchObject({ capabilityId: "tourism.search", status: "green" });
+      expect(doc.results.find((r: { capabilityId: string }) => r.capabilityId === "tourism.retired-search")).toBeUndefined();
+    } finally {
+      await mock.close();
+    }
+  }, 20000);
+
+  it("exits 0 on the human (non-json) path too, printing only the stable capability", async () => {
+    const mock = await startMock({
+      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+    });
+    try {
+      const { stdout } = await execFileAsync(tsx, [cli, "verify", retiredGate], {
+        cwd: root,
+        env: { ...process.env, STAYS_API_URL: mock.url },
+      });
+      expect(stdout).toMatch(/🟢 tourism\.search/);
+      expect(stdout).not.toMatch(/tourism\.retired-search/);
     } finally {
       await mock.close();
     }

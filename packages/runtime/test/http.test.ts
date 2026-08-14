@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { FetchLike, InvokeOptions } from "@archstone/provider-rest";
 import { buildRegistry } from "../src/registry";
 import { createHttpHandler } from "../src/http";
+import { POLICY_DENIED_META_KEY } from "../src/server";
 
 // createHttpHandler's own bearer-token gate (Rule #7, ADD-0008 R-5). The full Streamable-HTTP
 // round trip (initialize → tools/list → tools/call) is #29's DoD — a minimal initialize
@@ -77,6 +78,83 @@ describe("createHttpHandler — resolveCaller (ADD-32) — per-request caller, o
     const body = (await res.json()) as { result?: { isError?: boolean; content?: { text: string }[] } };
     expect(body.result?.isError).toBe(true);
     expect(body.result?.content?.[0]?.text).toMatch(/requires policies:\[authenticated\]/);
+  });
+});
+
+// #48: a resolveCaller that THROWS is unspecified before this fix — the exception escaped
+// http.ts's per-request closure (no try/catch anywhere in the file) as a rejection, surfacing
+// to the MCP client as an opaque 5xx rather than a fail-closed policy denial (ADD-42 R-11).
+describe("createHttpHandler — a throwing resolveCaller (#48)", () => {
+  it("denies fail-closed with policy_unevaluatable instead of rejecting/500ing, and logs once to stderr", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("must not be called — a throwing resolveCaller must deny before invokeRest");
+    };
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const handler = createHttpHandler(bankRegistry, {
+        bearerToken: "endpoint-secret",
+        invoke: { env: { CORE_BANKING_URL: "https://core.example" }, fetchImpl },
+        resolveCaller: () => {
+          throw new Error("session store unreachable");
+        },
+      });
+
+      const res = await handler(
+        mcpRequest(callToolRequest("banking_list-accounts"), { authorization: "Bearer endpoint-secret" }),
+      );
+
+      // The MCP transport itself succeeds (same posture as the no-resolveCaller case above) —
+      // the denial surfaces as a structured tool result, never as a raw 5xx/unhandled rejection.
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: { isError?: boolean; content?: { text: string }[]; _meta?: Record<string, unknown> };
+      };
+      expect(body.result?.isError).toBe(true);
+      expect(body.result?._meta?.[POLICY_DENIED_META_KEY]).toMatchObject({
+        error: "policy_denied",
+        reason: "policy_unevaluatable",
+      });
+      expect(body.result?.content?.[0]?.text).toMatch(/could not be established/);
+
+      // Visible, not silently swallowed (#39's onResponse convention: log once to stderr).
+      expect(stderr).toHaveBeenCalledTimes(1);
+      expect(stderr.mock.calls[0]?.[0]).toMatch(/resolveCaller threw/);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("does not crash or hang the server — a follow-up request still succeeds", async () => {
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ accounts: [] }), { status: 200 });
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    let shouldThrow = true;
+    try {
+      const handler = createHttpHandler(bankRegistry, {
+        bearerToken: "endpoint-secret",
+        invoke: { env: { CORE_BANKING_URL: "https://core.example" }, fetchImpl },
+        resolveCaller: () => {
+          if (shouldThrow) throw new Error("session store unreachable");
+          return { accessToken: "end-user-jwt" };
+        },
+      });
+
+      const res1 = await handler(
+        mcpRequest(callToolRequest("banking_list-accounts"), { authorization: "Bearer endpoint-secret" }),
+      );
+      expect(res1.status).toBe(200);
+      const body1 = (await res1.json()) as { result?: { isError?: boolean } };
+      expect(body1.result?.isError).toBe(true);
+
+      shouldThrow = false;
+      const res2 = await handler(
+        mcpRequest(callToolRequest("banking_list-accounts", {}, 2), { authorization: "Bearer endpoint-secret" }),
+      );
+      expect(res2.status).toBe(200);
+      const body2 = (await res2.json()) as { result?: { isError?: boolean } };
+      expect(body2.result?.isError).toBeFalsy();
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
 

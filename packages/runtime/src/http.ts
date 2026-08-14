@@ -70,7 +70,38 @@ export function createHttpHandler(
 
     // Per-request InvokeOptions: opts.invoke's env/fetchImpl carry over unchanged; `caller` is
     // resolved fresh for THIS request via resolveCaller (ADD-32) — never cached across requests.
-    const invoke: InvokeOptions = { ...opts.invoke, caller: opts.resolveCaller?.(request) };
+    //
+    // #48: `resolveCaller` is a host callback (a JWT parse, a session-store lookup) and is
+    // unspecified for the throwing case — there is no `try`/`catch` anywhere else in this file.
+    // A throw must NOT escape as a rejection (that would surface as an opaque 5xx to the MCP
+    // client, or worse — see #49 on the CLI adapter this handler is mounted behind); it also
+    // must not be silently treated as "no caller" (`undefined`), because a resolver that blew up
+    // is strictly less trustworthy than one that deliberately returned nothing (ADD-42 R-11).
+    // Caught here, once, and turned into `callerResolutionFailed`, which `callTool` (ADD-43's
+    // one policy evaluation point) turns into a `policy_unevaluatable` denial — the SAME
+    // structured, fail-closed shape every other unevaluatable-policy case already produces, not
+    // a parallel one invented for this seam. `resolveCaller` stays synchronous per ADD-42 D-1;
+    // this only contains what it might throw, it does not await it.
+    let caller: InvokeOptions["caller"];
+    let callerResolutionFailed: true | undefined;
+    try {
+      caller = opts.resolveCaller?.(request);
+    } catch (err) {
+      // Visible, not silently swallowed (a decision input failing is worse to hide than #39's
+      // onResponse observation hook, which is why that one gets to log-and-continue) — same
+      // "stdout is the MCP channel, human output goes to stderr" convention, logged once.
+      console.error("archstone: resolveCaller threw — denying fail-closed:", err);
+      callerResolutionFailed = true;
+    }
+    // Still exactly one overwritten key on the happy path (`caller`, per this option bag's own
+    // doc comment above `resolveCaller`): `callerResolutionFailed` is only ever present here at
+    // all when the resolver actually threw, so `opts.invoke.callerResolutionFailed` (there is no
+    // legitimate reason a host would set it) is never masked on a normal request.
+    const invoke: InvokeOptions = {
+      ...opts.invoke,
+      caller,
+      ...(callerResolutionFailed ? { callerResolutionFailed } : {}),
+    };
     const server = createMcpServer(registry, invoke);
     // Stateless: no sessionIdGenerator, no per-caller session/state at all. JSON responses
     // (not SSE) — a freshly-built server per request has nothing to stream anyway.

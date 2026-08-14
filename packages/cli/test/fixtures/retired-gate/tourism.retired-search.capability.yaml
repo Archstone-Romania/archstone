@@ -1,0 +1,22 @@
+capability:
+  id: tourism.retired-search
+  description: Formerly available search, withdrawn — kept in the manifest with a now-stale contract block to reproduce #54.
+  effect: read
+  lifecycle: retired
+
+  input:
+    destination:
+      type: location
+    dates:
+      type: date-range
+    travelers:
+      type: party
+    budget:
+      type: money
+      required: false
+
+  output:
+    stays:
+      collection: Stay
+
+  provider: booking-engine

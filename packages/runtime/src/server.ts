@@ -25,6 +25,7 @@ import {
   LIFECYCLE_BLOCKED_REASON,
   LIFECYCLE_UNEVALUATABLE_REASON,
   type ExecutionStatus,
+  type PolicyDecision,
 } from "@archstone/emitter-support";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 
@@ -206,10 +207,25 @@ export async function callTool(
   // a `retired` capability reports `lifecycle_blocked` and never `policy_denied` (BR-34), and
   // strictly BEFORE `invokeRest`, so a denial does zero connector work: no env/caller
   // resolution, no URL building, no fetch, and no `onResponse` firing (BR-25).
-  const decision = evaluatePolicy(tool, {
-    principal: opts?.caller?.principal,
-    credentialPresent: opts?.caller?.accessToken !== undefined,
-  });
+  // #48: a `resolveCaller` that THREW for this request (rather than returning, even
+  // `undefined`) short-circuits straight to a `policy_unevaluatable` denial for every
+  // capability, bypassing `evaluatePolicy` entirely — identity extraction itself failed here,
+  // which is strictly less trustworthy than "no credential offered" and must fail closed
+  // regardless of whether THIS capability happens to declare `policies:[authenticated]`
+  // (ADD-42 R-11). Reuses the evaluator's own reason code and this function's existing
+  // policy-denial response shaping verbatim — no parallel response path.
+  const decision: PolicyDecision = opts?.callerResolutionFailed
+    ? {
+        allowed: false,
+        denial: {
+          reason: "policy_unevaluatable",
+          message: `capability '${tool.id}' could not be evaluated — caller identity could not be established (resolveCaller failed) — refusing (fail-closed).`,
+        },
+      }
+    : evaluatePolicy(tool, {
+        principal: opts?.caller?.principal,
+        credentialPresent: opts?.caller?.accessToken !== undefined,
+      });
   if (!decision.allowed) {
     // #44: the evaluator's OWN reason code, copied verbatim — no re-spelling, no mapping table,
     // no superset for the policy case. The message is likewise the evaluator's, unaltered:

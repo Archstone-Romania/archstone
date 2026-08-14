@@ -177,6 +177,23 @@ export interface InvokeOptions {
    */
   sessionId?: string;
   workflowId?: string;
+  /**
+   * #48: set by `@archstone/runtime`'s `createHttpHandler` for ONE request, when that
+   * request's `resolveCaller` (ADD-32) threw instead of returning. `invokeRest` never reads
+   * this — like `auditSink`/`sessionId` above, it rides the shared options bag purely so the
+   * one caller that needs it (`callTool`, ADD-43's policy evaluation point) can see it without
+   * a second, parallel options type.
+   *
+   * A throwing resolver is strictly less trustworthy than one that returned `undefined`
+   * (identity extraction itself failed, not merely "no credential offered"), so this is
+   * deliberately NOT the same as an absent `caller`: an absent caller still lets an
+   * unauthenticated capability proceed and only fails closed via `policies:[authenticated]`
+   * (`authenticated_no_credential`). This flag instead short-circuits `callTool`'s policy step
+   * straight to a `policy_unevaluatable` denial for EVERY capability in the request, matching
+   * ADD-42 R-11 — an identity-extraction failure must resolve to fail-closed, never to treating
+   * the caller as merely anonymous.
+   */
+  callerResolutionFailed?: boolean;
 }
 
 // Issue #39 (OQ-1/OQ-2/BR-6): fire onResponse synchronously but never await it. A thrown

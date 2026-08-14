@@ -1,0 +1,19 @@
+# Fixture manifest for #54 (archstone verify's CI release gate has no escape hatch for a
+# retired contract-bearing capability) — packages/cli/test/verify.test.ts.
+#
+# Two capabilities: `tourism.search` (stable, contract matches the live mock) and
+# `tourism.retired-search` (lifecycle: retired, contract deliberately drifted/broken). Before
+# the #54 fix, the retired capability's broken contract would turn `archstone verify`'s CI
+# gate red forever. After the fix, `runVerify` excludes it before it is ever probed.
+
+company:
+  id: wanderlust-retired-gate-fixture
+  name: Wanderlust Travel (retired-gate fixture)
+  description: Fixture manifest proving a retired capability's broken contract cannot fail the CI release gate (#54).
+
+capabilities:
+  - tourism.search
+  - tourism.retired-search
+
+providers:
+  - booking-engine

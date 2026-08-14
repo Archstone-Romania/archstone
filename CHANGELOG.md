@@ -5,6 +5,33 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.3]
+
+Patch release. Two behavior fixes; no schema or breaking change.
+
+### Fixed
+
+- **`archstone verify`'s CI release gate no longer breaks permanently when a `contract:`-bearing
+  capability is retired (#54, ADD-51 D-6/R-2).** `runVerify` now excludes non-invocable
+  (`lifecycle: retired`) capabilities from its contract-bearing filter — a retired capability is
+  never probed and never enters the report, rather than being probed forever and turning
+  `reports.some(r => r.status === "red")` red the moment its now-stale contract drifts from the
+  live backend. Reuses the same lifecycle→exposure computation `Registry.getExposure` is built
+  from (`@archstone/emitter-support`'s `lifecycleExposure`) — no second lifecycle check invented.
+  `verifyTool` itself is unchanged (still deliberately ungated, per ADD-51 D-6, and still directly
+  reachable on a retired capability by a caller who wants one). `policyDenied` entries' gate
+  handling is unchanged and out of scope for this fix — a separate decision, deferred.
+
+- **A `resolveCaller` that throws now denies fail-closed instead of escaping as a raw error
+  (#48, ADD-42 R-11).** `createHttpHandler`'s per-request call to `resolveCaller` had no
+  `try`/`catch` anywhere in `http.ts` — an exception (a JWT parse failure, an unreachable
+  session store) propagated as a rejection, surfacing to the MCP client as an opaque 5xx rather
+  than a policy decision. It is now caught once, logged to stderr, and turned into a
+  `policy_unevaluatable` denial via `callTool` — the same structured, fail-closed shape every
+  other unevaluatable-policy case already produces, and deliberately *not* treated as an absent
+  (`undefined`) caller, since a resolver that blew up is strictly less trustworthy than one that
+  returned nothing. `resolveCaller` stays synchronous (ADD-42 D-1 unchanged).
+
 ## [0.10.2]
 
 Patch release. One behavior fix; no schema or breaking change.

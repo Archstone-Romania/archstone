@@ -178,6 +178,66 @@ describe("runVerify — filters to contract-bearing tools", () => {
     }));
 });
 
+// #54 (ADD-51 D-6's named residual risk, R-2): a retired capability whose binding still
+// carries a `contract:` block must never turn the CI release gate (`reports.some(r =>
+// r.status === "red")`, `cli/src/index.ts`) red — retiring a capability is a normal
+// operational event, not a misconfiguration. Direction 1 from the issue: exclude
+// non-invocable (`lifecycle: retired`) capabilities from `runVerify`'s contract-bearing
+// filter entirely, so a withdrawn capability is never probed and never enters the report —
+// not "verified, then ignored".
+describe("runVerify — excludes retired capabilities from the contract gate (#54)", () => {
+  it("a retired capability with a broken/drifted contract does not appear in the report at all — only the stable one does", () =>
+    withFixture(async (dir) => {
+      const stable = tool(goldenFingerprint); // id: tourism.search, matches the fixture's golden body
+      const retiredBroken: IRTool = {
+        ...tool(goldenFingerprint),
+        id: "tourism.retired-search",
+        lifecycle: "retired",
+        // Deliberately drifted: this fingerprint would never match a live fetch of `goldenBody`,
+        // so if `runVerify` still probed this tool the mock below would turn it red.
+        contract: { fingerprint: "sha256:does-not-match-anything", probeFixture: "fixture.json" },
+      };
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+      const reports = await runVerify([stable, retiredBroken], dir, resources, { fetchImpl });
+
+      expect(reports).toHaveLength(1);
+      expect(reports[0].capabilityId).toBe("tourism.search");
+      expect(reports.some((r) => r.status === "red")).toBe(false);
+      // The CLI's actual gate expression (cli/src/index.ts) — asserted directly here so this
+      // test fails if that expression's inputs ever regress.
+      expect(reports.some((r) => r.status === "red") ? 1 : 0).toBe(0);
+    }));
+
+  it("regression: a non-retired (stable) capability with a broken contract still fails the gate — this fix must not weaken it", () =>
+    withFixture(async (dir) => {
+      const brokenStable: IRTool = {
+        ...tool(goldenFingerprint),
+        id: "tourism.search",
+        lifecycle: "stable",
+        contract: { fingerprint: "sha256:does-not-match-anything", probeFixture: "fixture.json" },
+      };
+      // A response missing the required `price` field — a genuine contract VIOLATION, not
+      // merely a fingerprint mismatch — so a live, still-invocable capability's drift is
+      // caught exactly as before this fix.
+      const noPrice = { stays: [{ name: "Hotel A", location: "Nice" }] };
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(noPrice), { status: 200 });
+      const reports = await runVerify([brokenStable], dir, resources, { fetchImpl });
+
+      expect(reports).toHaveLength(1);
+      expect(reports[0].status).toBe("red");
+      expect(reports.some((r) => r.status === "red") ? 1 : 0).toBe(1);
+    }));
+
+  it("experimental (unlisted but invocable) capabilities are still verified — only `retired` is excluded", () =>
+    withFixture(async (dir) => {
+      const experimental: IRTool = { ...tool(goldenFingerprint), id: "tourism.search", lifecycle: "experimental" };
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+      const reports = await runVerify([experimental], dir, resources, { fetchImpl });
+      expect(reports).toHaveLength(1);
+      expect(reports[0].status).toBe("green");
+    }));
+});
+
 // ---------------------------------------------------------------------------------------
 // recordContract (ADD-37 D-6 / R-1) — the sibling of verifyTool, not a flag on it.
 // ---------------------------------------------------------------------------------------

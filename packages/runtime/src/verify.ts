@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fingerprintShape, type IRTool, type IRResourceRegistry } from "@archstone/compiler";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
-import { evaluatePolicy } from "@archstone/emitter-support";
+import { evaluatePolicy, lifecycleExposure } from "@archstone/emitter-support";
 import { applyResponseMapping } from "./mapping";
 // ADD-24: HealthStatus's canonical home moved to @archstone/emitter-support (registry.ts's
 // exposure composition needs it, and runtime depends on emitter-support, never the reverse) —
@@ -85,16 +85,20 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
   // "no contract" / "fixture not found" keep reporting themselves first.
   //
   // ADD-51 (#51) D-6, deliberately, do NOT "fix" this into a third exposure gate: unlike
-  // `callTool`/`executeCapability`, `verifyTool` does not read `registry.getExposure(tool.id)`
-  // and a `lifecycle: retired` capability is still probed here exactly like a `stable` one. Two
-  // reasons, both load-bearing. (1) `verifyTool` never emits an `Execution` audit record under
-  // any outcome, so the manufactured-evidence harm ADD-51 exists to close is structurally
-  // impossible on this path regardless of lifecycle wiring. (2) Gating it would make
-  // `archstone verify`'s CI release gate (`reports.some(r => r.status === "red")`,
-  // `cli/src/index.ts`, no escape hatch) fail permanently the day a manifest retires a
-  // `contract:`-bearing capability without also deleting its contract block — a real,
-  // permanent regression for a routine operational event. Named residual risk, filed as **#54**,
-  // not solved here.
+  // `callTool`/`executeCapability`, `verifyTool` itself does not read
+  // `registry.getExposure(tool.id)` and still probes a `lifecycle: retired` capability exactly
+  // like a `stable` one IF it is called directly on one. Two reasons, both load-bearing. (1)
+  // `verifyTool` never emits an `Execution` audit record under any outcome, so the
+  // manufactured-evidence harm ADD-51 exists to close is structurally impossible on this path
+  // regardless of lifecycle wiring. (2) Gating `verifyTool` itself would make it impossible to
+  // ever probe a retired capability on purpose (e.g. investigating one before un-retiring it).
+  //
+  // #54 (R-2's fix, once filed): the CI-release-gate regression this residual risk named — a
+  // retired-but-still-`contract:`-bearing capability turning `archstone verify`'s gate red
+  // forever — is fixed one level up, in `runVerify`'s contract-bearing filter (below), which
+  // now excludes a non-invocable (retired) tool before it ever reaches this function. See
+  // `runVerify`'s doc comment. This function is unchanged by that fix and remains reachable
+  // directly on a retired tool by a caller who wants to probe one deliberately.
   const decision = evaluatePolicy(tool, {
     principal: opts?.caller?.principal,
     credentialPresent: opts?.caller?.accessToken !== undefined,
@@ -145,14 +149,44 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
   return { ...base, status: "green", detail: "fingerprint unchanged, mapping OK" };
 }
 
-/** Verify every contract-bearing tool in a registry. */
+/**
+ * Verify every contract-bearing tool in a registry.
+ *
+ * #54 (fixing ADD-51 D-6's named residual risk, R-2): a `lifecycle: retired` capability is
+ * excluded from the contract-bearing filter here — never handed to `verifyTool` at all, so it
+ * never enters the returned report. This is deliberately NOT the same fix as `policyDenied`
+ * (ADD-43 D-14): a policy denial still enters the report (marked, then skipped only by the
+ * health-snapshot reader, `registry.ts`'s `readHealthSnapshot`) because a policy evaluation is
+ * itself a fact worth reporting. A retirement is not — a business withdrawing a capability is a
+ * normal operational event, not a thing `archstone verify` has anything to say about, so the
+ * capability is simply never probed and never appears, exactly as if its `contract:` block did
+ * not exist. That is what keeps `reports.some(r => r.status === "red")` (`cli/src/index.ts`,
+ * the CI release gate) from going permanently red the day a `contract:`-bearing capability is
+ * retired without also deleting its contract block.
+ *
+ * Invocability is read via `lifecycleExposure` — the exact pure lowering
+ * `Registry.getExposure` (`@archstone/emitter-support/registry.ts`) composes into its
+ * `exposureById` map, reused verbatim rather than re-deriving `lifecycle === "retired"` here
+ * (ADD-24 D-6/R-5: any future reader shares this one computation). `runVerify` receives raw
+ * `IRTool[]`, not a `Registry`, and health never affects `invocable` (ADD-24 D-9), so calling
+ * `lifecycleExposure` directly — the same function `getExposure` calls, with no health
+ * component to compose — yields an identical answer to `registry.getExposure(t.id).invocable`
+ * for every tool.
+ *
+ * This does NOT change `verifyTool` itself (still deliberately ungated per D-6, directly
+ * reachable and still probing a retired capability if called on one on purpose) — only this
+ * orchestrator, which is what `archstone verify`/the CLI gate actually walks.
+ *
+ * `policyDenied` entries' gate handling is unchanged and explicitly out of scope for this fix
+ * (see #54's PR description) — a separate decision, deferred.
+ */
 export async function runVerify(
   tools: IRTool[],
   dir: string,
   resources: IRResourceRegistry,
   opts?: InvokeOptions,
 ): Promise<ToolVerification[]> {
-  const contractBearing = tools.filter((t) => t.contract);
+  const contractBearing = tools.filter((t) => t.contract && lifecycleExposure(t.lifecycle).invocable);
   return Promise.all(contractBearing.map((t) => verifyTool(t, dir, resources, opts)));
 }
 

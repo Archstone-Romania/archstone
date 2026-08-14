@@ -1,0 +1,24 @@
+binding:
+  capabilityId: tourism.search
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${STAYS_API_URL}"
+      method: POST
+      path: /v1/search
+
+  response:
+    collection: "$.stays[*]"
+    resource: Stay
+    map:
+      name: "$.name"
+      location: "$.location"
+      pricePerNight: "$.pricePerNight"
+      rating: "$.rating"
+
+  contract:
+    source: recorded
+    fingerprint: "sha256:cabe202bbd2f2d4c6aef739c652a1fba3de20333539a1df42ea5cc187dfb1273"
+    verifiedAt: "2026-07-16T00:00:00Z"
+    probe:
+      fixture: fixtures/tourism.search.golden.json
