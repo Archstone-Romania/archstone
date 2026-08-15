@@ -5,6 +5,45 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.2]
+
+Patch. Four correctness fixes found during code review of the #45 (rate-limit) and #54
+(verify-gate) increments — no schema change, no new public surface.
+
+### Fixed
+
+- **A `scope: provider` `rateLimit` was not actually shared across the capabilities it governs
+  (found reviewing #45).** `rateLimitKey` folded `capabilityId` into the bucket key alongside the
+  rule's own (globally-unique, BR-4) `id`, so a provider-scoped policy — lowered onto every
+  capability under that provider with the SAME rule id — got N independent buckets instead of
+  one, silently multiplying a declared `100/min` provider limit into an effective `N×100/min`.
+  `rateLimitKey` is now `(ruleId, principal)` only; a capability-scoped rule's id is unique to
+  that one capability by construction, so it stays exactly as isolated as before.
+- **A malformed `rateLimit` (e.g. `windowSeconds: 0`) silently failed OPEN instead of closed
+  (found reviewing #45).** `policy.ts`'s `unevaluatable()` only checked `typeof === "number"` on
+  `maxInvocations`/`windowSeconds`, not integer-ness or positivity — unlike the compiler's own
+  `policy-ratelimit-invalid` check and `lowerPolicyRules`. A hand-written or forward-versioned IR
+  with `windowSeconds: 0` reached `InMemoryRateLimitCounter.increment`, where dividing by a
+  zero-length window produces `NaN`; since `NaN !== NaN`, every call looked like a fresh window
+  and the limit never triggered. `unevaluatable()` now requires a positive integer for both
+  fields, matching the compiler's own standard, so this shape now fails `evaluatePolicy` closed.
+- **`archstone verify`'s #54 fix hid more than just retired capabilities (found reviewing #54).**
+  `runVerify`'s contract-bearing filter excluded every `invocable:false` tool, which is true for
+  both `lifecycle: "retired"` (#54's actual target) AND an unrecognized `lifecycle` value on a
+  hand-written or forward-versioned IR (ADD-56's `blockedReason: "unevaluatable"`). A capability
+  with a corrupted lifecycle and a genuinely broken contract was silently dropped from the report
+  instead of being probed and flagged red — the opposite of ADD-56's "make incompatibility loud"
+  goal. The filter now excludes only `blockedReason === "retired"`; an unrecognized-lifecycle
+  tool is probed exactly as it was before the #54 fix shipped.
+- **Rate-limit metering was order-dependent across a tool's multiple `rateLimit`-bearing rules
+  (found reviewing #45).** `evaluateRateLimit` incremented one rule's counter at a time and
+  returned as soon as one rule's count was exceeded — rules listed after the denying one were
+  never incremented for that call, so which rule "saw" an attempt (and whether a shared/looser
+  rule's budget was consumed by a call a stricter rule denied) depended on `policyRules`'s array
+  order rather than declared semantics. Every governing rule is now incremented for every call
+  (via `Promise.all`) before any exceeded check runs, so the outcome is deterministic regardless
+  of rule order.
+
 ## [0.11.1]
 
 Patch release. One behavior fix; no schema change (a new authoring-time refusal, not a new

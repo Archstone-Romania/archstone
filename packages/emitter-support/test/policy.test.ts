@@ -193,6 +193,42 @@ describe("evaluatePolicy — fail-closed on anything unevaluatable (BR-24)", () 
     expect(reasonOf(d)).toBe("policy_unevaluatable");
   });
 
+  // Bug fix (found reviewing #45): `unevaluatable()` used to only check `typeof === "number"`
+  // on `maxInvocations`/`windowSeconds`, not integer-ness or positivity — unlike the compiler's
+  // own `policy-ratelimit-invalid` check (`validate.ts`) and `lowerPolicyRules` (`compile.ts`),
+  // both of which require `Number.isInteger(...) && >= 1`. A malformed IR (hand-written or
+  // forward-versioned, bypassing `archstone apply`) with `windowSeconds: 0` used to pass this
+  // loose check and reach `InMemoryRateLimitCounter.increment`, where `windowMs = 0` makes
+  // `windowStart` evaluate to `NaN` — and since `NaN !== NaN`, every call looks like a fresh
+  // window, so `count` is permanently `1` and the rate limit never triggers. This must instead
+  // fail `evaluatePolicy` closed, same as any other malformed rule shape.
+  it("denies with policy_unevaluatable on a rateLimit with windowSeconds: 0 (not a positive integer)", () => {
+    const d = evaluatePolicy(withUnknownKey({ rateLimit: { maxInvocations: 5, windowSeconds: 0 } }), {
+      credentialPresent: true,
+      principal: "user:alice",
+    });
+    expect(d.allowed).toBe(false);
+    expect(reasonOf(d)).toBe("policy_unevaluatable");
+  });
+
+  it("denies with policy_unevaluatable on a rateLimit with a non-integer maxInvocations", () => {
+    const d = evaluatePolicy(withUnknownKey({ rateLimit: { maxInvocations: 5.5, windowSeconds: 60 } }), {
+      credentialPresent: true,
+      principal: "user:alice",
+    });
+    expect(d.allowed).toBe(false);
+    expect(reasonOf(d)).toBe("policy_unevaluatable");
+  });
+
+  it("denies with policy_unevaluatable on a rateLimit with a negative windowSeconds", () => {
+    const d = evaluatePolicy(withUnknownKey({ rateLimit: { maxInvocations: 5, windowSeconds: -1 } }), {
+      credentialPresent: true,
+      principal: "user:alice",
+    });
+    expect(d.allowed).toBe(false);
+    expect(reasonOf(d)).toBe("policy_unevaluatable");
+  });
+
   it("a COMPLETE, well-formed rateLimit does not itself make evaluatePolicy deny (#45)", () => {
     const d = evaluatePolicy(withUnknownKey({ rateLimit: { maxInvocations: 5, windowSeconds: 60 } }), {
       credentialPresent: true,

@@ -101,26 +101,37 @@ function deny(reason: RateLimitDenialReason, message: string): RateLimitDecision
 }
 
 /**
- * #45 / ADD-45 D-3: key derivation. **Per capability AND per principal, when a principal is
- * present; per capability ALONE when it is not.**
+ * #45 / ADD-45 D-3, revised (bug fix found reviewing #45): key derivation is **per policy RULE
+ * and per principal, when a principal is present; per rule ALONE when it is not.**
+ * Deliberately NOT per capability — see below.
  *
  * Rationale, stated explicitly because the issue requires it to be (never left as undefined
  * behaviour): a rate limit exists to bound how much of a BACKEND's capacity one caller can
- * consume, so the natural key is "this caller, on this capability". When the caller is
- * anonymous there is no seam to distinguish one anonymous caller from another (rate-limiting by
- * IP/connection is explicitly out of scope for this increment — no such seam exists on the
- * invocation path today), so every anonymous caller of a given capability shares ONE bucket.
- * That is a deliberately more conservative posture than "anonymous is unlimited": an
+ * consume. `ruleId` is a policy document's `metadata.id`, which BR-4 guarantees is globally
+ * unique across the whole manifest — so it alone is already enough to identify which declared
+ * control governs a given attempt, without also folding in the capability being called.
+ *
+ * This matters because a `scope: provider` policy's rule is lowered (`lowerPolicyRules`,
+ * `compile.ts`) onto EVERY capability under that provider, all carrying the SAME `rule.id`. That
+ * is one control, meant to bound the provider's TOTAL capacity across every capability it backs
+ * — not N independent controls that happen to share a number. Folding `capabilityId` into the
+ * key (the original design) split that one shared budget into N independent ones, silently
+ * multiplying a provider limit of 100/min into an effective N×100/min. Keying by `ruleId` alone
+ * fixes that: a provider-scoped rule's bucket is now genuinely shared across every capability it
+ * governs, while a capability-scoped rule's id is unique to that one capability by construction
+ * (nothing else in the manifest ever resolves the same id onto another capability), so it stays
+ * exactly as isolated as before.
+ *
+ * When the caller is anonymous there is no seam to distinguish one anonymous caller from another
+ * (rate-limiting by IP/connection is explicitly out of scope for this increment — no such seam
+ * exists on the invocation path today), so every anonymous caller sharing a rule shares ONE
+ * bucket. That is a deliberately more conservative posture than "anonymous is unlimited": an
  * unauthenticated capability under load is throttled as a whole rather than not throttled at
  * all, which is the fail-closed-leaning choice consistent with ADD-42's "anonymous is not
  * denied, but never privileged" posture.
- *
- * The policy rule's own `id` is folded into the key too, so two DIFFERENT `rateLimit` rules that
- * happen to resolve onto the same tool (a provider-scoped and a capability-scoped policy, both
- * declaring `rateLimit`) get independent buckets rather than silently sharing one counter.
  */
-function rateLimitKey(ruleId: string, capabilityId: string, principal: string | undefined): string {
-  return `${ruleId}::${capabilityId}::${principal ?? "*anonymous*"}`;
+function rateLimitKey(ruleId: string, principal: string | undefined): string {
+  return `${ruleId}::${principal ?? "*anonymous*"}`;
 }
 
 /**
@@ -143,6 +154,22 @@ function rateLimitKey(ruleId: string, capabilityId: string, principal: string | 
  * Called unconditionally cheaply: a tool with no `rateLimit`-bearing rule returns `ALLOWED`
  * before touching `counter` at all — a deployer who never uses `rateLimit` pays zero cost and
  * needs no counter.
+ *
+ * Bug fix (found reviewing #45): every `rateLimit`-bearing rule on a tool sees every attempt,
+ * deterministically — NOT order-dependent. The original implementation was a `for` loop that
+ * incremented one rule at a time and returned (denied) as soon as one rule's count exceeded its
+ * max: rules AFTER the denying one were never touched for that call, while rules BEFORE it were
+ * already incremented even though the call was ultimately denied. That made metering depend on
+ * `tool.policyRules`'s array order rather than the manifest's declared semantics — a call denied
+ * by a strict rule could fail to consume a looser/shared rule's budget purely because the looser
+ * rule happened to be listed after the strict one. Now every governing rule is incremented via
+ * `Promise.all` FIRST (so every rule genuinely observes every attempt, matching "these are all
+ * independently-declared controls, all of which govern this call" — not "the first rule that
+ * happens to deny short-circuits metering for the rest"), and only THEN is the exceeded check
+ * applied. When more than one rule is exceeded, the FIRST one (by array order) is named in the
+ * denial message — an arbitrary but deterministic tie-break, consistent with this file's
+ * existing message conventions; the fail-closed "no counter supplied" check still runs once,
+ * up front, before any rule's counter is touched (unchanged behaviour).
  */
 export async function evaluateRateLimit(
   tool: IRTool,
@@ -152,19 +179,20 @@ export async function evaluateRateLimit(
   const rules = tool.policyRules?.filter((r) => r.rateLimit !== undefined);
   if (!rules || rules.length === 0) return ALLOWED;
 
-  for (const rule of rules) {
-    const { maxInvocations, windowSeconds } = rule.rateLimit!;
+  if (!counter) {
+    return deny(
+      "policy_unevaluatable",
+      `capability '${tool.id}' declares spec.rateLimit but no RateLimitCounter was supplied — refusing (fail-closed); see ADD-45's no-store-default decision`,
+    );
+  }
 
-    if (!counter) {
-      return deny(
-        "policy_unevaluatable",
-        `capability '${tool.id}' declares spec.rateLimit but no RateLimitCounter was supplied — refusing (fail-closed); see ADD-45's no-store-default decision`,
-      );
-    }
+  const counts = await Promise.all(
+    rules.map((rule) => counter.increment(rateLimitKey(rule.id, caller.principal), rule.rateLimit!.windowSeconds)),
+  );
 
-    const key = rateLimitKey(rule.id, tool.id, caller.principal);
-    const count = await counter.increment(key, windowSeconds);
-    if (count > maxInvocations) {
+  for (let i = 0; i < rules.length; i++) {
+    const { maxInvocations, windowSeconds } = rules[i].rateLimit!;
+    if (counts[i] > maxInvocations) {
       return deny(
         RATE_LIMIT_EXCEEDED_REASON,
         `capability '${tool.id}' exceeded its rate limit (${maxInvocations} per ${windowSeconds}s) for this caller.`,

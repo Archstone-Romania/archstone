@@ -156,6 +156,60 @@ describe("evaluateRateLimit — exceeding the limit (#45 DoD)", () => {
   });
 });
 
+// Bug fix (found reviewing #45): the original `for` loop called `counter.increment` per rule in
+// ARRAY order and returned (denied) as soon as one rule's count exceeded its max — rules AFTER
+// the denying one were never touched for that call, while rules BEFORE it were already
+// incremented even though the call was ultimately denied. That makes metering order-dependent:
+// which rule "sees" a given attempt depended on `tool.policyRules`'s array order, not on the
+// manifest's declared semantics, and a call denied by a strict rule could still fail to consume
+// a looser rule's shared budget purely because the looser rule was listed after it. The fix:
+// every rateLimit-bearing rule sees every attempt (increment ALL, via `Promise.all`), THEN check
+// whether ANY was exceeded — deterministic regardless of array order.
+describe("evaluateRateLimit — every governing rule sees every attempt, deterministically (bug fix, found reviewing #45)", () => {
+  function countingCounter(): { counter: RateLimitCounter; counts: Record<string, number> } {
+    const counts: Record<string, number> = {};
+    return {
+      counts,
+      counter: {
+        increment: (key: string) => {
+          counts[key] = (counts[key] ?? 0) + 1;
+          return counts[key];
+        },
+      },
+    };
+  }
+
+  it("denial outcome and the loose rule's resulting count are IDENTICAL regardless of rule array order", async () => {
+    const strictRule = { id: "strict", rateLimit: rl(1, 60) };
+    const looseRule = { id: "loose", rateLimit: rl(100, 60) };
+
+    const strictFirst = tool({ id: "t", policyRules: [strictRule, looseRule] });
+    const looseFirst = tool({ id: "t", policyRules: [looseRule, strictRule] });
+
+    const a = countingCounter();
+    const b = countingCounter();
+
+    // Two calls against each ordering — the second call exceeds the strict rule's limit (1).
+    await evaluateRateLimit(strictFirst, { principal: "user:alice" }, a.counter);
+    const dStrictFirst = await evaluateRateLimit(strictFirst, { principal: "user:alice" }, a.counter);
+
+    await evaluateRateLimit(looseFirst, { principal: "user:alice" }, b.counter);
+    const dLooseFirst = await evaluateRateLimit(looseFirst, { principal: "user:alice" }, b.counter);
+
+    // Same outcome regardless of order.
+    expect(dStrictFirst.allowed).toBe(false);
+    expect(dLooseFirst.allowed).toBe(false);
+    expect(reasonOf(dStrictFirst)).toBe("rate_limit_exceeded");
+    expect(reasonOf(dLooseFirst)).toBe("rate_limit_exceeded");
+
+    // The loose rule's counter was incremented on EVERY call, in both orderings — not skipped
+    // just because it came after (or before) the rule that ultimately denied.
+    expect(a.counts["loose::user:alice"]).toBe(2);
+    expect(b.counts["loose::user:alice"]).toBe(2);
+    expect(a.counts["loose::user:alice"]).toBe(b.counts["loose::user:alice"]);
+  });
+});
+
 describe("evaluateRateLimit — key derivation (#45 DoD)", () => {
   it("keys by capability AND principal — two different principals get independent buckets", async () => {
     const counter = new InMemoryRateLimitCounter(() => 0);
@@ -174,12 +228,36 @@ describe("evaluateRateLimit — key derivation (#45 DoD)", () => {
     expect((await evaluateRateLimit(t, {}, counter)).allowed).toBe(false);
   });
 
-  it("keys by capability — the same principal on a different tool gets an independent bucket", async () => {
+  // Bug fix (found reviewing #45): `rateLimitKey` no longer folds in `capabilityId`. A
+  // provider-scoped policy's rule carries the SAME `rule.id` (the policy's globally-unique
+  // `metadata.id`, BR-4) on every capability under that provider (`lowerPolicyRules`), so two
+  // DIFFERENT tools sharing a rule id are two capabilities governed by ONE provider-scoped
+  // policy and MUST share one bucket — keying by capabilityId as well used to split that one
+  // shared bucket into N independent ones, silently multiplying the effective limit by N.
+  it("keys by rule id ALONE (not capability) — two tools sharing a provider-scoped rule id share ONE bucket", async () => {
     const counter = new InMemoryRateLimitCounter(() => 0);
-    const a = tool({ id: "a", policyRules: [{ id: "p", rateLimit: rl(1, 60) }] });
-    const b = tool({ id: "b", policyRules: [{ id: "p", rateLimit: rl(1, 60) }] });
+    // Simulates a provider-scoped policy lowered onto two capabilities under the same provider —
+    // both carry the identical rule id, as `lowerPolicyRules` produces.
+    const a = tool({ id: "a", policyRules: [{ id: "provider-wide", rateLimit: rl(2, 60) }] });
+    const b = tool({ id: "b", policyRules: [{ id: "provider-wide", rateLimit: rl(2, 60) }] });
+    // Combined invocations across BOTH capabilities share the budget: 2 allowed total, not 2 each.
     expect((await evaluateRateLimit(a, { principal: "user:alice" }, counter)).allowed).toBe(true);
     expect((await evaluateRateLimit(b, { principal: "user:alice" }, counter)).allowed).toBe(true);
+    // The third invocation, regardless of which capability it's against, must now be denied —
+    // the combined count (3) exceeds maxInvocations (2).
+    expect((await evaluateRateLimit(a, { principal: "user:alice" }, counter)).allowed).toBe(false);
+  });
+
+  // A capability-scoped rule's id is unique to that one capability (no other tool's
+  // `policyRules` ever resolves the same rule id), so keying by rule id alone still isolates it
+  // — nothing else can collide with it.
+  it("a capability-scoped rule id (unique to one tool) remains isolated even without capabilityId in the key", async () => {
+    const counter = new InMemoryRateLimitCounter(() => 0);
+    const a = tool({ id: "a", policyRules: [{ id: "a-only-rule", rateLimit: rl(1, 60) }] });
+    const b = tool({ id: "b", policyRules: [{ id: "b-only-rule", rateLimit: rl(1, 60) }] });
+    expect((await evaluateRateLimit(a, { principal: "user:alice" }, counter)).allowed).toBe(true);
+    expect((await evaluateRateLimit(b, { principal: "user:alice" }, counter)).allowed).toBe(true);
+    expect((await evaluateRateLimit(a, { principal: "user:alice" }, counter)).allowed).toBe(false);
   });
 
   it("keys by policy rule id — two rateLimit rules on one tool get independent buckets", async () => {

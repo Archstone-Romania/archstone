@@ -179,6 +179,19 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
  *
  * `policyDenied` entries' gate handling is unchanged and explicitly out of scope for this fix
  * (see #54's PR description) — a separate decision, deferred.
+ *
+ * Bug fix (found reviewing #54): the original filter excluded every `invocable:false` tool —
+ * `lifecycleExposure(...).invocable` is `false` for BOTH `lifecycle: "retired"` (this fix's
+ * actual target) AND the `unevaluatable`/default branch (an unrecognized `lifecycle` value on a
+ * hand-written or forward-versioned IR, ADD-56). That conflated a governance refusal with a
+ * compatibility refusal: a capability with a corrupted/unrecognized lifecycle AND a genuinely
+ * broken `contract:` block was silently excluded from the report instead of being probed and
+ * flagged red — undermining ADD-56's "make incompatibility loud" goal on this one path. The
+ * filter now checks `blockedReason !== "retired"` specifically, so an unrecognized-lifecycle
+ * tool (`blockedReason: "unevaluatable"`) stays in `contractBearing` and is probed by
+ * `verifyTool` exactly as it was before this whole feature shipped. `Exposure.blockedReason` is
+ * always present when `invocable:false` and always absent when `invocable:true` (`exposure.ts`),
+ * so this substitution needs no separate `invocable` check.
  */
 export async function runVerify(
   tools: IRTool[],
@@ -186,7 +199,7 @@ export async function runVerify(
   resources: IRResourceRegistry,
   opts?: InvokeOptions,
 ): Promise<ToolVerification[]> {
-  const contractBearing = tools.filter((t) => t.contract && lifecycleExposure(t.lifecycle).invocable);
+  const contractBearing = tools.filter((t) => t.contract && lifecycleExposure(t.lifecycle).blockedReason !== "retired");
   return Promise.all(contractBearing.map((t) => verifyTool(t, dir, resources, opts)));
 }
 

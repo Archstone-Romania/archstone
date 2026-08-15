@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IRResourceRegistry, IRTool } from "@archstone/compiler";
+import type { IRResourceRegistry, IRTool, Lifecycle } from "@archstone/compiler";
 import { fingerprintShape } from "@archstone/compiler";
 import type { FetchLike } from "@archstone/provider-rest";
 import { verifyTool, runVerify, recordContract } from "../src/verify";
@@ -226,6 +226,32 @@ describe("runVerify — excludes retired capabilities from the contract gate (#5
       expect(reports).toHaveLength(1);
       expect(reports[0].status).toBe("red");
       expect(reports.some((r) => r.status === "red") ? 1 : 0).toBe(1);
+    }));
+
+  // Bug fix (found reviewing #54): the original fix filtered on `lifecycleExposure(...).invocable`,
+  // which is `false` for BOTH `retired` (the actual #54 target) AND an unrecognized `lifecycle`
+  // value (`blockedReason: "unevaluatable"`, ADD-56) — a hand-written or forward-versioned IR.
+  // That conflated the two: a capability with a corrupted/unrecognized lifecycle AND a broken
+  // contract was silently dropped from the report instead of being probed and flagged red,
+  // undermining ADD-56's "make incompatibility loud" goal on this one path. The filter must
+  // exclude only `blockedReason === "retired"`.
+  it("a contract-bearing tool with an UNRECOGNIZED lifecycle value is still probed and appears red — not silently dropped (bug fix, found reviewing #54)", () =>
+    withFixture(async (dir) => {
+      const unrecognizedLifecycle: IRTool = {
+        ...tool(goldenFingerprint),
+        id: "tourism.unrecognized-lifecycle",
+        lifecycle: "bogus-value" as Lifecycle,
+      };
+      // A genuine contract VIOLATION (required `price` missing) — if this tool is silently
+      // excluded (the bug), the mock below never turns it red and it simply vanishes from the
+      // report instead.
+      const noPrice = { stays: [{ name: "Hotel A", location: "Nice" }] };
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(noPrice), { status: 200 });
+      const reports = await runVerify([unrecognizedLifecycle], dir, resources, { fetchImpl });
+
+      expect(reports).toHaveLength(1);
+      expect(reports[0].capabilityId).toBe("tourism.unrecognized-lifecycle");
+      expect(reports[0].status).toBe("red");
     }));
 
   it("experimental (unlisted but invocable) capabilities are still verified — only `retired` is excluded", () =>

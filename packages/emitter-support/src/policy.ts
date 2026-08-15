@@ -106,7 +106,22 @@ function unevaluatable(rule: IRPolicyRule): boolean {
   // artifact) DOES fail this rule closed, same as a malformed `allow`/`deny` above.
   if (rule.rateLimit !== undefined) {
     const rl = rule.rateLimit as { maxInvocations?: unknown; windowSeconds?: unknown };
-    if (typeof rl.maxInvocations !== "number" || typeof rl.windowSeconds !== "number") return true;
+    // Bug fix (found reviewing #45): matches the compiler's own `policy-ratelimit-invalid`
+    // check (`validate.ts`) and `lowerPolicyRules` (`compile.ts`) — both require a positive
+    // INTEGER, not merely `typeof === "number"`. A shape like `windowSeconds: 0` used to pass
+    // this loose check and reach `InMemoryRateLimitCounter.increment`, where dividing by a
+    // zero-length window produces `NaN`, and `NaN !== NaN` makes every call look like a fresh
+    // window — the rate limit silently never triggers. Requiring integer >= 1 here closes that.
+    if (
+      typeof rl.maxInvocations !== "number" ||
+      !Number.isInteger(rl.maxInvocations) ||
+      rl.maxInvocations < 1 ||
+      typeof rl.windowSeconds !== "number" ||
+      !Number.isInteger(rl.windowSeconds) ||
+      rl.windowSeconds < 1
+    ) {
+      return true;
+    }
   }
   return false;
 }
