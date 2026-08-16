@@ -25,12 +25,50 @@
 
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createRequire } from "node:module";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { load } from "@archstone/schema";
 import { validateSemantics, compile, type IR } from "@archstone/compiler";
 import { Registry, buildRegistry, serveStdio, runVerify, type HealthStatus } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
 import { INIT_USAGE, runInitCmd } from "./init";
+
+/** `archstone --version` is the first thing a human types after installing, and until this
+ *  existed it printed the usage block and exited 2 — which reads as "broken install" at the
+ *  exact moment a new user is deciding whether this thing works.
+ *
+ *  `../package.json` resolves correctly from BOTH layouts without a build step knowing about
+ *  it: in dev the entry is `src/index.ts`, and when published it is `dist/index.js` — both sit
+ *  one level under the package root. npm always ships `package.json` regardless of the `files`
+ *  allowlist, so the published resolution cannot break. */
+function cliVersion(): string {
+  try {
+    return (createRequire(import.meta.url)("../package.json") as { version?: string }).version ?? "unknown";
+  } catch {
+    // Never let a version lookup be the thing that stops the CLI from running.
+    return "unknown";
+  }
+}
+
+/** One spelling of the usage block, shared by `--help` (stdout, exit 0 — the user asked) and by
+ *  the no-verb-matched fallthrough (stderr, exit 2 — the user got it wrong). Which stream and
+ *  which exit code is the ONLY difference between those two cases, and keeping the text in one
+ *  place is what stops them drifting. */
+function printUsage(opts?: { toStderr?: boolean }): void {
+  const write = opts?.toStderr ? console.error : console.log;
+  write(
+    // `init` is named HERE, in the verb list, and not only in the block below it. It takes a
+    // spec file rather than a manifest directory, so it cannot share the first line's shape —
+    // which is exactly how it came to be missing from the one line a user actually scans.
+    "usage: archstone <apply|serve|verify|build|init>\n\n" +
+      "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
+      "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
+      "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
+      "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n\n" +
+      "       archstone --version | --help\n\n" +
+      INIT_USAGE,
+  );
+}
 
 function runApply(dir: string): void {
   const res = load(dir);
@@ -401,6 +439,20 @@ function flagArg(argv: string[], name: string): { value?: string; idx: number } 
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+
+  // Before anything else: `--version`/`-V` and `--help`/`-h` are what a human types first, and
+  // both used to fall through to the usage block with exit 2 — a non-zero exit for a question
+  // that was answered correctly. Both now exit 0. `-V` is capitalised because `-v` is verbose
+  // by long convention and should stay free.
+  if (argv.includes("--version") || argv.includes("-V")) {
+    console.log(cliVersion());
+    return;
+  }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printUsage();
+    return;
+  }
+
   const json = argv.includes("--json");
   const http = argv.includes("--http");
   const out = flagArg(argv, "--out");
@@ -446,17 +498,7 @@ async function main(): Promise<void> {
     process.exit(await runInitCmd(argv));
   }
 
-  console.error(
-    // `init` is named HERE, in the verb list, and not only in the block below it. It takes a
-    // spec file rather than a manifest directory, so it cannot share the first line's shape —
-    // which is exactly how it came to be missing from the one line a user actually scans.
-    "usage: archstone <apply|serve|verify|build|init>\n\n" +
-      "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
-      "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
-      "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
-      "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n\n" +
-      INIT_USAGE,
-  );
+  printUsage({ toStderr: true });
   process.exit(2);
 }
 

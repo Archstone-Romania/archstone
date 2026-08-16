@@ -5,6 +5,22 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.3]
+
+Patch. One CLI usability fix; no library, schema or behaviour change.
+
+### Fixed
+
+- **`archstone --version` and `--help` now exit 0 instead of printing the usage block to stderr
+  and exiting 2.** Both matched no verb and fell through to the unrecognized-invocation branch —
+  a non-zero exit for a question the CLI had answered correctly, which reads as a broken install
+  at the moment a new user is deciding whether the tool works. `--version` (short form `-V`;
+  `-v` is left free for verbose) now prints the bare version on stdout, so it is pipeable;
+  `--help` (`-h`) prints usage on stdout. An unrecognized verb still prints usage to stderr and
+  still exits 2 — that distinction is now the *only* difference between the two paths, which
+  share one usage string. Found by installing the published 0.11.2 on a clean machine while
+  preparing the launch, i.e. by walking a new user's first two commands.
+
 ## [0.11.2]
 
 Patch. Four correctness fixes found during code review of the #45 (rate-limit) and #54
