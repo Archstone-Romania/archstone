@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.archstone-romania/archstone",
+  "description": "Compile your own business capabilities from declarative YAML and serve them as MCP tools.",
+  "version": "0.11.4",
+  "websiteUrl": "https://archstone.dev",
+  "repository": {
+    "url": "https://github.com/Archstone-Romania/archstone",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@archstone/cli",
+      "version": "0.11.4",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve",
+          "valueHint": "serve"
+        },
+        {
+          "type": "positional",
+          "valueHint": "manifest_dir",
+          "description": "Path to a directory containing your CDL manifest — capabilities.yaml, one or more *.capability.yaml, and bindings/. Run `archstone init <openapi.yaml> --out <dir>` first if you do not have one yet.",
+          "isRequired": true
+        }
+      ]
+    }
+  ]
+}

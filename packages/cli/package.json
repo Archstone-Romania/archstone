@@ -1,9 +1,10 @@
 {
   "name": "@archstone/cli",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "private": false,
   "type": "module",
   "description": "Archstone CLI — compile a business capability definition (CDL) into tools an AI agent can call: apply, build, serve over MCP, and verify against the live backend.",
+  "mcpName": "io.github.archstone-romania/archstone",
   "keywords": [
     "mcp",
     "model-context-protocol",

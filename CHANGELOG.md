@@ -5,6 +5,24 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.4]
+
+Patch. Distribution metadata only — no source, schema or behaviour change.
+
+### Added
+
+- **`server.json`, and an `mcpName` field on `@archstone/cli` — Archstone can now be published
+  to the official MCP Registry** (`registry.modelcontextprotocol.io`). The registry verifies
+  that a publisher actually owns the npm package by checking that `package.json`'s `mcpName`
+  matches the `name` in `server.json`; both are `io.github.archstone-romania/archstone`. The
+  manifest validates against the registry's published schema
+  (`2025-09-29/server.schema.json`).
+
+  Listed as **tooling, not as a hosted server**. The entry describes `archstone serve
+  <manifest-dir>` — a server for capabilities *you* define — and deliberately does **not**
+  list the tourism demo endpoint. The demo works end to end, but its inventory is synthetic;
+  publishing it to a registry of servers people install would misrepresent what a caller gets.
+
 ## [0.11.3]
 
 Patch. One CLI usability fix; no library, schema or behaviour change.
