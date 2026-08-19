@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
-  "name": "io.github.archstone-romania/archstone",
+  "name": "io.github.Archstone-Romania/archstone",
   "description": "Compile your own business capabilities from declarative YAML and serve them as MCP tools.",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "websiteUrl": "https://archstone.dev",
   "repository": {
     "url": "https://github.com/Archstone-Romania/archstone",
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@archstone/cli",
-      "version": "0.11.4",
+      "version": "0.11.5",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

@@ -5,6 +5,20 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.5]
+
+Patch. Distribution metadata only — no source, schema or behaviour change.
+
+### Fixed
+
+- **The MCP Registry namespace is case-sensitive, and ours was wrong.** `server.json`'s `name`
+  and `@archstone/cli`'s `mcpName` both read `io.github.archstone-romania/archstone`, while the
+  registry grants the namespace using GitHub's own casing — `io.github.Archstone-Romania/*`.
+  Publishing was refused with a 403 that named both strings side by side. Both are now
+  `io.github.Archstone-Romania/archstone`. This needed a release rather than a local edit
+  because the registry verifies ownership against the `mcpName` in the **published** npm
+  package, not the one in the working tree.
+
 ## [0.11.4]
 
 Patch. Distribution metadata only — no source, schema or behaviour change.
