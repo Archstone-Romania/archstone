@@ -32,6 +32,7 @@ import { validateSemantics, compile, type IR } from "@archstone/compiler";
 import { Registry, buildRegistry, serveStdio, runVerify, type HealthStatus } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
 import { INIT_USAGE, runInitCmd } from "./init";
+import { runAuditCmd } from "./audit-cmd";
 
 /** `archstone --version` is the first thing a human types after installing, and until this
  *  existed it printed the usage block and exited 2 — which reads as "broken install" at the
@@ -60,11 +61,13 @@ function printUsage(opts?: { toStderr?: boolean }): void {
     // `init` is named HERE, in the verb list, and not only in the block below it. It takes a
     // spec file rather than a manifest directory, so it cannot share the first line's shape —
     // which is exactly how it came to be missing from the one line a user actually scans.
-    "usage: archstone <apply|serve|verify|build|init>\n\n" +
+    "usage: archstone <apply|serve|verify|build|init|audit>\n\n" +
       "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
       "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
       "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
-      "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n\n" +
+      "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n" +
+      "       archstone audit <file...> [--since <date>] [--format summary|jsonl|csv]\n" +
+      "         read your own Execution audit records; nothing is uploaded (audit --help for filters)\n\n" +
       "       archstone --version | --help\n\n" +
       INIT_USAGE,
   );
@@ -490,6 +493,12 @@ async function main(): Promise<void> {
   if (cmd === "build" && dir) {
     runBuild(dir, out.value);
     return;
+  }
+  if (cmd === "audit") {
+    // Own parser, for the same reason `init` has one: this verb's flags outnumber the other
+    // verbs' put together, and threading them through the positional logic above would make
+    // both harder to read.
+    process.exit(runAuditCmd(argv));
   }
   if (cmd === "init") {
     // Everything `init` needs is in its own argv parser: it has more flags than the other four

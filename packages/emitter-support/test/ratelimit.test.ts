@@ -3,6 +3,8 @@ import type { IRTool } from "@archstone/compiler";
 import {
   evaluateRateLimit,
   InMemoryRateLimitCounter,
+  redisSharedCounterStore,
+  SharedWindowRateLimitCounter,
   type RateLimitCounter,
   type RateLimitDecision,
 } from "../src/ratelimit";
@@ -272,5 +274,130 @@ describe("evaluateRateLimit — key derivation (#45 DoD)", () => {
     // to the same tool) and allows too — but a second call must fail on the first rule.
     expect((await evaluateRateLimit(t, { principal: "user:alice" }, counter)).allowed).toBe(true);
     expect((await evaluateRateLimit(t, { principal: "user:alice" }, counter)).allowed).toBe(false);
+  });
+});
+
+// --- Distributed counting: SharedWindowRateLimitCounter + store failure posture ---------------
+//
+// The gap these cover is the one an enterprise hits first: `InMemoryRateLimitCounter` is
+// per-process, so on two instances a declared 100/min is really 200/min. Everything below pins
+// the shared-store replacement, including the failure mode a network-backed store introduces
+// and an in-memory one never could.
+
+describe("SharedWindowRateLimitCounter", () => {
+  /** Minimal atomic store — one Map, integer per key. Stands in for Redis/a Durable Object. */
+  function fakeStore() {
+    const values = new Map<string, number>();
+    const ttls = new Map<string, number>();
+    return {
+      values,
+      ttls,
+      store: {
+        async incrementWithTtl(key: string, ttlSeconds: number) {
+          const next = (values.get(key) ?? 0) + 1;
+          values.set(key, next);
+          if (next === 1) ttls.set(key, ttlSeconds);
+          return next;
+        },
+      },
+    };
+  }
+
+  it("counts across independent instances through one shared store", async () => {
+    const { store } = fakeStore();
+    const now = () => 1_000_000;
+    // Two counters = two processes. The point of the whole class.
+    const a = new SharedWindowRateLimitCounter(store, { now });
+    const b = new SharedWindowRateLimitCounter(store, { now });
+
+    expect(await a.increment("rule::alice", 60)).toBe(1);
+    expect(await b.increment("rule::alice", 60)).toBe(2);
+    expect(await a.increment("rule::alice", 60)).toBe(3);
+  });
+
+  it("starts a fresh count in the next fixed window, without reading or resetting anything", async () => {
+    const { store, values } = fakeStore();
+    let clock = 60_000;
+    const counter = new SharedWindowRateLimitCounter(store, { now: () => clock });
+
+    expect(await counter.increment("rule::alice", 60)).toBe(1);
+    clock = 119_999; // same 60s bucket
+    expect(await counter.increment("rule::alice", 60)).toBe(2);
+    clock = 120_000; // boundary instant belongs to the NEW window (Math.floor), as in-memory does
+    expect(await counter.increment("rule::alice", 60)).toBe(1);
+    // A new window is a new key — never a mutation of the old one.
+    expect(values.size).toBe(2);
+  });
+
+  it("sets a TTL once per window key, so a hot key cannot be kept alive forever", async () => {
+    const { store, ttls } = fakeStore();
+    const counter = new SharedWindowRateLimitCounter(store, { now: () => 0, graceSeconds: 5 });
+
+    await counter.increment("rule::alice", 60);
+    await counter.increment("rule::alice", 60);
+
+    expect([...ttls.values()]).toEqual([65]); // one TTL, window + grace, not one per call
+  });
+
+  it("namespaces keys by prefix so one store can serve several deployments", async () => {
+    const { store, values } = fakeStore();
+    await new SharedWindowRateLimitCounter(store, { now: () => 0, prefix: "tenant-a" }).increment("r::x", 60);
+    await new SharedWindowRateLimitCounter(store, { now: () => 0, prefix: "tenant-b" }).increment("r::x", 60);
+
+    expect([...values.keys()]).toEqual(["tenant-a:r::x:0", "tenant-b:r::x:0"]);
+    expect([...values.values()]).toEqual([1, 1]);
+  });
+});
+
+describe("redisSharedCounterStore", () => {
+  it("EXPIREs only on the first increment of a window", async () => {
+    const calls: string[] = [];
+    let n = 0;
+    const store = redisSharedCounterStore({
+      async incr(key) {
+        calls.push(`incr ${key}`);
+        return ++n;
+      },
+      async expire(key, seconds) {
+        calls.push(`expire ${key} ${seconds}`);
+        return 1;
+      },
+    });
+
+    await store.incrementWithTtl("k", 65);
+    await store.incrementWithTtl("k", 65);
+
+    // A second EXPIRE would slide the window's expiry forward on every hit — a hot key would
+    // then never expire, and the limit would apply to a window that never ends.
+    expect(calls).toEqual(["incr k", "expire k 65", "incr k"]);
+  });
+});
+
+describe("evaluateRateLimit — a store that cannot answer", () => {
+  it("denies fail-closed instead of throwing when the counter rejects", async () => {
+    const exploding: RateLimitCounter = {
+      increment: () => Promise.reject(new Error("ECONNREFUSED 10.0.0.7:6379")),
+    };
+
+    const decision = await evaluateRateLimit(tool({ policyRules: [{ id: "p", rateLimit: rl(5, 60) }] }), { principal: "alice" }, exploding);
+
+    // #48's defect class: an exception escaping the evaluation point instead of a denial. With a
+    // network-backed counter this is a routine transient, not an exotic case.
+    expect(decision.allowed).toBe(false);
+    if (decision.allowed) throw new Error("unreachable");
+    expect(decision.denial.reason).toBe("policy_unevaluatable");
+  });
+
+  it("does not leak the store's error text to the caller", async () => {
+    const exploding: RateLimitCounter = {
+      increment: () => Promise.reject(new Error("ECONNREFUSED 10.0.0.7:6379")),
+    };
+
+    const decision = await evaluateRateLimit(tool({ policyRules: [{ id: "p", rateLimit: rl(5, 60) }] }), { principal: "alice" }, exploding);
+
+    if (decision.allowed) throw new Error("unreachable");
+    // BR-30: an agent must not learn our store topology from a denial message.
+    expect(decision.denial.message).not.toContain("ECONNREFUSED");
+    expect(decision.denial.message).not.toContain("6379");
   });
 });

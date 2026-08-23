@@ -575,14 +575,53 @@ await archstone.execute("bank.transfer", input, {
 ```
 
 **`InMemoryRateLimitCounter` is for local development and tests only.** It is a plain `Map` held
-in process memory — on a single long-lived Node process that is a real limit, but on a
-Workers/edge deployment (see `examples/demo/remote-mcp-worker`) a new isolate can spin up per
-request and silently reset every counter to zero. There, an in-process counter is not a rate
-limit at all — it is a coin flip. **Production/edge deployments must supply their own
-`RateLimitCounter`** backed by a shared store — a Durable Object, Redis, Upstash, or similar.
-Archstone deliberately does not ship one: which store fits your deployment is your call, not
-ours, and none of Archstone's public core packages take on a Cloudflare-specific (or any
-vendor-specific) binding to build one.
+in process memory — on a single long-lived Node process that is a real limit, but on two
+instances behind a load balancer a declared `100/min` is really `200/min`, and on a Workers/edge
+deployment (see `examples/demo/remote-mcp-worker`) a new isolate can spin up per request and
+silently reset every counter to zero. There, an in-process counter is not a rate limit at all —
+it is a coin flip.
+
+### Multi-instance and edge: `SharedWindowRateLimitCounter`
+
+For anything past a single process, use the shared-store counter. Archstone ships the windowing
+logic; **you supply the store**, because which store fits your deployment is your call and no
+core package takes a vendor-specific binding:
+
+```ts
+import {
+  SharedWindowRateLimitCounter,
+  redisSharedCounterStore,
+} from "@archstone/emitter-support";
+
+// Any Redis-compatible client you already have — ioredis, node-redis, Upstash. Duck-typed:
+// Archstone depends on none of them.
+const counter = new SharedWindowRateLimitCounter(redisSharedCounterStore(redis), {
+  prefix: "archstone:prod",
+});
+
+await archstone.execute("bank.transfer", input, { caller, rateLimitCounter: counter });
+```
+
+Any store works if it can do one thing **atomically**: increment an integer and return the value
+after the increment. Implement `SharedCounterStore` directly for a Durable Object, a SQL row
+updated with `RETURNING`, or anything else with that property:
+
+```ts
+const store = { async incrementWithTtl(key: string, ttlSeconds: number): Promise<number> { /* … */ } };
+```
+
+An eventually-consistent KV (Cloudflare KV, S3) **does not** satisfy this — a read-modify-write
+there loses concurrent increments, which turns the limit back into "N per instance" while
+looking like it works.
+
+Windowing is fixed and epoch-aligned, matching the in-memory implementation, and the window
+start is folded into the store key — so a new window is a new key, and the store never needs a
+transaction or a reset. Fixed windows admit up to `2N` across an unlucky boundary pair; if that
+is unacceptable, implement `SharedCounterStore` with sliding-window keys of your own.
+
+**If the store cannot be reached, the call is denied**, not allowed — `policy_unevaluatable`,
+the same fail-closed posture as declaring `rateLimit` with no counter at all. A declared control
+that cannot be evaluated is not a control.
 
 **No counter supplied, but a capability declares `spec.rateLimit`? The call is DENIED**
 (`reason: "policy_unevaluatable"`) — Archstone never silently proceeds unlimited. A declared
@@ -686,6 +725,60 @@ A record looks like this — and this is the whole of it:
   the sink accordingly. A silent cap would be a lossy transformation of evidence.
 - **Never point the JSON Lines sink at stdout.** On the stdio transport stdout *is* the MCP
   protocol channel; `jsonLinesAuditSink` refuses `process.stdout` outright for that reason.
+
+### Keeping the trail: `rotatingFileAuditSink`
+
+`jsonLinesAuditSink` writes; it does not *keep*. For a deployment that has to retain an audit
+trail — which is the whole point of an evidentiary log — `@archstone/runtime` ships a sink that
+rotates by size and bounds its own disk use:
+
+```ts
+import { rotatingFileAuditSink } from "@archstone/runtime";
+
+const auditSink = rotatingFileAuditSink({
+  path: "/var/log/archstone/audit.log",
+  maxBytes: 64 * 1024 * 1024,   // rotate at 64 MiB
+  maxFiles: 10,                 // keep audit.log.1 … audit.log.10, then delete the oldest
+});
+```
+
+Total footprint is at most `maxBytes × (maxFiles + 1)` — computable before deployment, and
+independent of traffic. Rotation is by **size, not time**, deliberately: an audit stream grows
+with invocations, so hourly rotation gives a quiet deployment a directory of empty files and a
+busy one a file that outgrows the disk between rotations.
+
+Writes are **synchronous**. A buffered writer would be faster and would lose the last records
+exactly when they matter most — a crash, an OOM kill, a `SIGKILL` during an incident. A record
+still in a buffer when the process dies is a record that never existed.
+
+Give each instance its own path: the live file's size is tracked in memory, so two processes
+appending to one path rotate on each other's estimates. Separate paths also keep records
+attributable to an instance, which is what you want during an investigation anyway.
+
+### Reading it back: `archstone audit`
+
+The records are yours, on your disk — Archstone never receives them — so the reader is a local
+CLI over local files, with no service, index or daemon behind it:
+
+```bash
+# What happened, to what, and what was refused
+archstone audit /var/log/archstone/audit.log
+
+# An auditor's export, including rotated generations
+archstone audit audit.log audit.log.1 --since 2026-07-01 --until 2026-10-01 --format csv > q3.csv
+
+# Everything one principal was refused, in full
+archstone audit audit.log --principal user:alice --phase denied --format jsonl
+```
+
+`--since` is inclusive and `--until` exclusive, so adjacent ranges tile without counting a
+boundary record twice. `--principal ''` selects anonymous invocations — the absence of the field
+is a real distinction (ADD-42 D-4), not a missing value. Unreadable lines are reported, never
+skipped silently: in an audit trail that is either corruption or a record from a newer writer,
+and both are your business.
+
+The CSV omits `spec.input` on purpose — payloads do not belong in a file that gets emailed
+around; `--format jsonl` keeps the complete record for anyone who needs it.
 
 ---
 

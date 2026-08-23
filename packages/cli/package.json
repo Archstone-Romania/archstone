@@ -1,6 +1,6 @@
 {
   "name": "@archstone/cli",
-  "version": "0.11.7",
+  "version": "0.12.0",
   "private": false,
   "type": "module",
   "description": "Archstone CLI — compile a business capability definition (CDL) into tools an AI agent can call: apply, build, serve over MCP, and verify against the live backend.",
@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@archstone/compiler": "workspace:*",
+    "@archstone/emitter-support": "workspace:*",
     "@archstone/init": "workspace:*",
     "@archstone/runtime": "workspace:*",
     "@archstone/schema": "workspace:*"

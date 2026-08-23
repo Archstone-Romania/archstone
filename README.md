@@ -284,6 +284,22 @@ every tier.
 
 ---
 
+## Identity
+
+Archstone never resolves identity — your host does, and hands over an opaque principal. What to
+wire, what is guaranteed about it, and why there is no SSO/SCIM feature to look for:
+[`docs/IDENTITY.md`](docs/IDENTITY.md).
+
+---
+
+## Support and versions
+
+Which versions receive fixes, what gets backported, and what stays stable while the packages are
+pre-1.0 (short answer: CDL and your compiled IR) — see [`SUPPORT.md`](SUPPORT.md). Security
+reports go through [`SECURITY.md`](SECURITY.md), never a public issue.
+
+---
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the

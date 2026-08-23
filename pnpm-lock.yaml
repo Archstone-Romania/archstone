@@ -94,6 +94,9 @@ importers:
       '@archstone/compiler':
         specifier: workspace:*
         version: link:../compiler
+      '@archstone/emitter-support':
+        specifier: workspace:*
+        version: link:../emitter-support
       '@archstone/init':
         specifier: workspace:*
         version: link:../init

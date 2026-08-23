@@ -5,6 +5,96 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.12.0]
+
+Minor. Two gaps a self-hosted deployment hits first — a rate limiter that only worked in one
+process, and an audit trail nothing kept — plus the identity answer a security review asks for,
+and a release pipeline that can ship a backport. No breaking change; every addition is additive
+and nothing that was free became anything else.
+
+### Fixed (housekeeping)
+
+- **`server.json`'s version had drifted.** It still read `0.11.6` after the `0.11.7` release: the
+  release workflow stamps the nine `package.json` files and the MCP Registry manifest is not one
+  of them, so it only moves when a prepare commit remembers it. Both fields are now `0.12.0`.
+  Worth a tripwire — filed as a follow-up rather than fixed here, since the stamp loop is
+  set-checked against publishable packages by `scripts/release-gate.mjs` and `server.json` is not
+  a package.
+
+### Added
+
+- **`docs/IDENTITY.md` — who a call acts as, and why there is no SSO feature to look for.**
+  Archstone accepts an opaque principal from the host and never parses, decodes or verifies it
+  (ADD-42 D-1), which is the first question a regulated security review asks and the answer that
+  most surprises it. The guide covers the wiring on both surfaces, the orthogonality of
+  `bearerToken` (may this client reach the endpoint) and `resolveCaller` (whose data does this
+  call act on), the `invoke.caller`-is-overwritten trap on the HTTP path and why failing loudly
+  beats silently misattributing every user's actions to one service account, and the guarantees
+  worth quoting in a review: anonymous is not denied but never privileged, a throwing
+  `resolveCaller` denies fail-closed, principal and credential stay separate because the record
+  must always carry one and never the other.
+
+- **`rotatingFileAuditSink` and `archstone audit` — keeping an audit trail, and reading it
+  back.** `jsonLinesAuditSink` writes but does not retain, so every self-hosted deployment that
+  has to keep its trail had to solve rotation itself. The new sink (in `@archstone/runtime`,
+  where fs already lives) rotates by **size, not time** — an audit stream grows with invocations,
+  so hourly rotation gives a quiet deployment empty files and a busy one a file that outgrows
+  the disk — which bounds total footprint at `maxBytes × (maxFiles + 1)`, computable before
+  deployment. Writes are synchronous on purpose: a record still in a buffer when the process
+  dies is a record that never existed, and a crash is exactly when the trail matters.
+  `archstone audit <file…>` reads the records back with `--since`/`--until` (inclusive/exclusive,
+  so adjacent ranges tile), `--capability`, `--principal` (`''` selects anonymous, which is a
+  real distinction), and `--phase`, rendering a summary, filtered JSON Lines, or CSV for whoever
+  asked for the export. Denials are reported separately from failures because they answer
+  different questions — one is the backend going wrong, the other is governance working. It is a
+  local reader over local files: no service, no index, no upload, since Archstone never receives
+  these records in the first place.
+
+- **`SharedWindowRateLimitCounter` — a rate limiter that survives more than one process.** The
+  only counter that shipped was `InMemoryRateLimitCounter`, a per-process `Map`: on two
+  instances behind a load balancer a declared `100/min` is really `200/min`, and on an edge
+  isolate it resets per request. Every deployment past a single process therefore had to write
+  its own — exactly the thing nobody should have to write twice. Archstone now ships the
+  windowing (fixed, epoch-aligned, with the window start folded into the store key, so a new
+  window is a new key and the store needs neither a transaction nor a reset) and the deployer
+  supplies the store through the one-method `SharedCounterStore` port: increment an integer
+  **atomically** and return the value after the increment. `redisSharedCounterStore` adapts any
+  Redis-compatible client — ioredis, node-redis, Upstash — duck-typed, so no core package takes
+  a dependency or a vendor binding. An eventually-consistent KV cannot satisfy the atomicity
+  requirement, and is documented as unsuitable rather than left to be discovered in production.
+
+- **`SUPPORT.md` — which versions are supported, and what gets backported to them.** Names the
+  Current / Maintenance / LTS / end-of-life lines with the versions currently in each, the
+  narrow list of what qualifies for a backport (security, fail-closed correctness, contract
+  integrity, data loss — not features), and the npm dist-tag rule: a backport is never published
+  as `latest`, so a patch on an older line cannot change what a default install resolves to.
+  Also states the two things that are stabler than a `0.x` version number suggests, because they
+  are the two you author against: CDL primitives are permanent, and your compiled IR is rebuilt
+  in your own CI where an upgrade surfaces as a diff before production rather than a surprise
+  after.
+
+### Fixed
+
+- **A rate-limit counter that failed took the whole call down instead of denying it.**
+  `evaluateRateLimit` awaited `counter.increment` unguarded — harmless while the only shipped
+  counter was an in-process `Map` that cannot reject, and the #48 defect class the moment a
+  counter performs I/O: a rejecting dependency escaping the evaluation point as an exception
+  rather than a fail-closed denial. A store that cannot answer is the same fact as no store at
+  all, so it is now `policy_unevaluatable` and denied — with the store's error text deliberately
+  not disclosed to the caller, which would otherwise leak deployment topology through a denial
+  message.
+
+- **The release pipeline could not ship a backport at all (#93).** `release.yml` checked out
+  `main` unconditionally and published a snapshot of it, so tagging `v0.11.7` after `0.12.0` had
+  landed would have published **main's** content under a patch of the older line — newer code,
+  possibly with breaking changes, delivered to whoever had pinned the older one. It now checks
+  out the tagged commit, classifies the tag as mainline or backport by whether it is reachable
+  from `main` or from its own `release/X.Y.x` branch (and refuses to publish a tag reachable from
+  neither), pushes the version stamp to that line rather than always to `main`, leaves public
+  `main` untouched for a backport while still tagging it, and publishes to npm under an explicit
+  dist-tag — `latest` for mainline, `lts-<major>.<minor>` for a backport, which is what stops a
+  backport from hijacking `latest` for every user.
+
 ## [0.11.7]
 
 Patch. Dependency remediation only — no source, schema or behaviour change. Released so the

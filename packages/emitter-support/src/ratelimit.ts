@@ -77,6 +77,109 @@ export class InMemoryRateLimitCounter implements RateLimitCounter {
   }
 }
 
+/**
+ * The store a distributed `SharedWindowRateLimitCounter` writes through. Deliberately ONE
+ * method, and deliberately the exact shape Redis's `INCR` + `EXPIRE` pair already has, because
+ * that is the shape almost every shared store can honour: **atomically increment the integer at
+ * `key`, ensure it expires in at most `ttlSeconds`, and return the value after the increment.**
+ *
+ * The atomicity requirement is not decorative. Two instances incrementing the same key
+ * concurrently must observe two different return values, or the limit silently becomes
+ * "N per window per instance" — which is exactly the defect `InMemoryRateLimitCounter` has by
+ * construction, moved to a shared store and made harder to see. A read-modify-write over an
+ * eventually-consistent KV (Cloudflare KV, S3) does **not** satisfy this; a Redis-compatible
+ * store, a Cloudflare Durable Object, or a single SQL row updated with `RETURNING` does.
+ */
+export interface SharedCounterStore {
+  incrementWithTtl(key: string, ttlSeconds: number): Promise<number>;
+}
+
+/**
+ * A `RateLimitCounter` for multi-instance and edge deployments — the production counterpart to
+ * `InMemoryRateLimitCounter`, which is per-process and therefore not a limit at all once more
+ * than one process serves traffic.
+ *
+ * Windowing is **fixed**, identical to `InMemoryRateLimitCounter`'s and for the same reason
+ * (the interface leaves it to the implementation, and two shipped implementations that disagree
+ * about what a window is would be a trap): time is sliced into non-overlapping
+ * `windowSeconds`-wide buckets aligned to the epoch, and the bucket start is folded into the
+ * store key. The counter therefore never has to read, compare or reset anything — a new window
+ * is simply a new key, which is why a store only needs `INCR`-with-TTL and never a transaction.
+ *
+ * TTL is `windowSeconds` plus a small grace, so a key outlives its own window slightly rather
+ * than expiring underneath a request that is still being counted, and no key survives longer
+ * than it can be useful. Nothing depends on the grace value for correctness — a key that
+ * expires early can only ever undercount toward zero, never over the limit.
+ *
+ * **Clock skew across instances is real and bounded here.** Two instances whose clocks differ
+ * by less than one window agree on the bucket for all but the instants near a boundary; at the
+ * boundary a request may land in the neighbouring bucket. That is the standard fixed-window
+ * trade and it is stated rather than hidden: a limit of N per window admits up to 2N across an
+ * unlucky boundary pair. Deployments that cannot accept that need a sliding-window store
+ * implementation, which this interface permits (the store may key however it likes) but this
+ * class does not attempt.
+ */
+export class SharedWindowRateLimitCounter implements RateLimitCounter {
+  private readonly store: SharedCounterStore;
+  private readonly now: () => number;
+  private readonly prefix: string;
+  private readonly graceSeconds: number;
+
+  constructor(
+    store: SharedCounterStore,
+    opts: {
+      /** Injectable for deterministic tests, exactly as `InMemoryRateLimitCounter` does. */
+      now?: () => number;
+      /** Namespace for the store keys, so one Redis/DO can serve several deployments. */
+      prefix?: string;
+      /** Extra seconds of key lifetime beyond the window. Correctness does not depend on it. */
+      graceSeconds?: number;
+    } = {},
+  ) {
+    this.store = store;
+    this.now = opts.now ?? (() => Date.now());
+    this.prefix = opts.prefix ?? "archstone:rl";
+    this.graceSeconds = opts.graceSeconds ?? 5;
+  }
+
+  async increment(key: string, windowSeconds: number): Promise<number> {
+    const windowMs = windowSeconds * 1000;
+    const windowStart = Math.floor(this.now() / windowMs) * windowMs;
+    return this.store.incrementWithTtl(
+      `${this.prefix}:${key}:${windowStart}`,
+      windowSeconds + this.graceSeconds,
+    );
+  }
+}
+
+/**
+ * Adapter for any Redis-compatible client — `ioredis`, `node-redis`, Upstash's REST client —
+ * **duck-typed on purpose**: this package takes no dependency on any of them, and the deployer
+ * passes the client they already have. The two methods used are the two every one of them
+ * exposes.
+ *
+ * `incr` then `expire` is two round-trips and is NOT a transaction. That is safe here for one
+ * specific reason worth stating: `incr` alone is the atomic part that decides the returned
+ * count, and `expire` only bounds the key's lifetime. A crash between them leaves a key with no
+ * TTL — it keeps counting for that window and is superseded by the next window's key, so the
+ * failure mode is a leaked key, never a missed limit. Deployers who mind the leak can pass a
+ * client whose `incr` is a Lua script or pipeline instead; the interface does not care.
+ */
+export function redisSharedCounterStore(client: {
+  incr(key: string): Promise<number>;
+  expire(key: string, seconds: number): Promise<unknown>;
+}): SharedCounterStore {
+  return {
+    async incrementWithTtl(key, ttlSeconds) {
+      const count = await client.incr(key);
+      // Only the first increment in a window needs the TTL set; setting it every time would
+      // slide the expiry forward and keep a hot key alive indefinitely across windows.
+      if (count === 1) await client.expire(key, ttlSeconds);
+      return count;
+    },
+  };
+}
+
 /** #45 / ADD-45 D-2: the one new reason code this increment adds. Distinct from every code
  *  `evaluatePolicy` returns (BR-29's closed four) and from the two lifecycle codes — a client or
  *  auditor filtering on `"rate_limit_exceeded"` must see ONLY "the counter said no", never a
@@ -186,9 +289,33 @@ export async function evaluateRateLimit(
     );
   }
 
-  const counts = await Promise.all(
-    rules.map((rule) => counter.increment(rateLimitKey(rule.id, caller.principal), rule.rateLimit!.windowSeconds)),
-  );
+  // A counter backed by a shared store performs I/O, and I/O fails. Before
+  // `SharedWindowRateLimitCounter` shipped, the only counter in the tree was an in-process Map
+  // that cannot reject, so a throwing counter was theoretical and this call was unguarded — a
+  // rejection would have escaped `evaluateRateLimit` as an exception, through `callTool` and
+  // `executeCapability`, both of which have no try/catch around this step. That is the #48
+  // defect class exactly (a throwing `resolveCaller` escaping instead of denying), and shipping
+  // a network-backed counter is what turns it from theoretical into the normal Tuesday of any
+  // multi-instance deployment.
+  //
+  // A store that cannot answer is the same fact as no store at all: a declared control that
+  // cannot be evaluated right now. Same `policy_unevaluatable` code, same fail-closed posture,
+  // for the same reason ADD-45 D-2 already gives — an inert rate limit is a false control. The
+  // underlying error text is deliberately NOT surfaced to the caller (BR-30 disclosure
+  // discipline: an agent must not learn our store topology from a denial message); the audit
+  // record at the call site carries the denial, and the deployer's own store client logs the
+  // cause.
+  let counts: number[];
+  try {
+    counts = await Promise.all(
+      rules.map((rule) => counter.increment(rateLimitKey(rule.id, caller.principal), rule.rateLimit!.windowSeconds)),
+    );
+  } catch {
+    return deny(
+      "policy_unevaluatable",
+      `capability '${tool.id}' declares spec.rateLimit but its RateLimitCounter could not be consulted — refusing (fail-closed)`,
+    );
+  }
 
   for (let i = 0; i < rules.length; i++) {
     const { maxInvocations, windowSeconds } = rules[i].rateLimit!;
