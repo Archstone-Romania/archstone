@@ -5,6 +5,27 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.6]
+
+Patch. Documentation and examples only — no source, schema or behaviour change. Released so
+the published README carries the open-core commitment, and so the deploy template ships with
+the docs that reference it.
+
+### Added
+
+- **A deployable example: the Cloudflare Worker template** (`examples/deploy/cloudflare-worker/`).
+  The gap it closes is the one between "the compiler works on my machine" and "an assistant can
+  call this" — a compiled `archstone.ir.json` served from a Worker, with the wrangler config,
+  tsconfig and README needed to deploy it as-is. The onboarding guide now hands you off to it
+  instead of stopping at `serve`.
+- **"What is free, and what we sell" in the README.** Everything that takes a CDL manifest to
+  something an agent can call is Apache-2.0 and stays that way, and **`archstone build` and
+  `archstone serve` never require a network call, an account or a key** — vendor a manifest, pin
+  a version, and it keeps compiling and serving with no relationship to us. No feature that is
+  free today becomes paid; commercial value is added alongside the open core or not at all.
+  This is stated before anything is sold, on purpose: the commitment is worth less arriving as
+  a reassurance after an invoice.
+
 ## [0.11.5]
 
 Patch. Distribution metadata only — no source, schema or behaviour change.

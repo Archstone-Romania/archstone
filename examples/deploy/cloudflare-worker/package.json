@@ -1,0 +1,19 @@
+{
+  "name": "archstone-mcp-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:ir": "archstone build ./manifest --out src/archstone.ir.json",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@archstone/agent": "^0.11.5",
+    "@archstone/compiler": "^0.11.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260815.1",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.0.0"
+  }
+}

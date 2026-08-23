@@ -315,6 +315,42 @@ bindings use in the `env` block, and restart — the tool (e.g. `tourism_search`
 the agent can call it. A complete, copy-pasteable Claude Desktop walkthrough lives in
 [`examples/demo/README.md`](../examples/demo/README.md).
 
+### Step 7 — Make it reachable (deploy)
+
+`archstone serve` runs on your machine, over stdio. That is the whole story for Claude Desktop
+and it is not enough for anything else: ChatGPT, Claude on the web or a phone, and your
+teammates all need a **public HTTPS endpoint**.
+
+Nothing about that is hosted by us — the compiled artifact is yours and so is the deployment.
+What the shape of it looks like is a copy-and-edit template:
+
+**[`examples/deploy/cloudflare-worker/`](../examples/deploy/cloudflare-worker/)**
+
+```bash
+cp -r examples/deploy/cloudflare-worker my-archstone-mcp
+cd my-archstone-mcp && npm install
+archstone build ../my-manifest-dir --out src/archstone.ir.json
+openssl rand -hex 32 | wrangler secret put ARCHSTONE_HTTP_TOKEN
+npm run deploy
+```
+
+The Worker itself is about twenty lines, because the work already happened at compile time:
+`archstone build` produced a portable artifact, and `mcpHandler` is a Web-standard
+`(Request) => Promise<Response>` — which is exactly a Worker's fetch handler.
+
+Two things worth internalising before you deploy anything:
+
+- **The endpoint is bearer-gated, and that token is not user authentication.** It decides who
+  may reach the endpoint at all; it says nothing about *whose data* a call acts on. Capabilities
+  that act per-user also need `resolveCaller` — see [Acting on behalf of the end
+  user](#acting-on-behalf-of-the-end-user-policies-authenticated).
+- **`archstone.ir.json` is a build output, not source.** Re-run `archstone build` and redeploy
+  after any manifest change, *including* a `*.policy.yaml` edit — a stale artifact enforces
+  stale policy, silently.
+
+Cloudflare is the worked example, not a requirement. The same handler runs on any runtime that
+speaks Web-standard `Request`/`Response`; on Node, `archstone serve --http` does it directly.
+
 ### Local models (Ollama, LM Studio, or any other MCP client)
 
 `archstone serve` is a standard stdio MCP server — it doesn't know or care whether the peer

@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Rename this — it becomes your workers.dev subdomain.
+  "name": "my-archstone-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-19",
+  // @archstone/runtime and the MCP SDK use node: builtins.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  }
+  // Secrets are NOT set here — `wrangler secret put ARCHSTONE_HTTP_TOKEN`. Anything in
+  // "vars" is plaintext in your dashboard and in `wrangler deploy` output.
+}

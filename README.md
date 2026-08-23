@@ -264,6 +264,26 @@ is to a stack: the one file that declares what a company offers. See the
 
 ---
 
+## What is free, and what we sell
+
+Everything needed to take a CDL manifest and turn it into something an agent can call is
+Apache-2.0 and stays that way: the language, the compiler, the IR, every emitter, the embedded
+SDK, and `init` / `apply` / `build` / `serve` / `verify`. **`archstone build` and `archstone
+serve` never require a network call, an account or a key** — vendor a manifest, pin a version,
+and you can keep compiling and serving it indefinitely with no relationship to us. ArtVinci
+runs entirely inside this and owes us nothing.
+
+**No feature that is free today becomes paid.** New commercial value is added alongside the
+open core, or it is not added.
+
+What we sell, when it exists, is the *operation* of these artifacts over time on our machines:
+hosted durable audit and retention, managed rate-limit counters, drift monitoring, and
+multi-tenant hosting for teams who would rather not run a node. The governance mechanisms
+themselves — policy evaluation, rate limiting, execution audit — ship here, in the open, at
+every tier.
+
+---
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the
