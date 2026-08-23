@@ -5,6 +5,31 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.7]
+
+Patch. Dependency remediation only — no source, schema or behaviour change. Released so the
+published snapshot carries a lockfile with no known advisories.
+
+### Security
+
+- **Every known advisory in `pnpm-lock.yaml` remediated.** All of them were transitive; no
+  direct dependency was affected, so the fix is a lockfile refresh rather than a dependency
+  bump. Two reached the shipped tree — `fast-uri` (via `ajv`, a direct dependency of
+  `@archstone/schema`) and `ip-address` (via `express-rate-limit` ← the MCP SDK ←
+  `@archstone/runtime`) — and are now at 3.1.5 and 10.5.0. The rest were confined to build
+  and demo tooling: `js-yaml` 4.3.1 (via ESLint), `undici` 7.29.0 and `sharp` 0.35.2 (via
+  Wrangler/Miniflare), `postcss` 8.5.26 and `esbuild` 0.28.1 (via tsup/vite). `hono` moved to
+  4.13.3 and `@hono/node-server` to 2.1.1, both internal to the MCP SDK's transport.
+
+  Note on reach: published `@archstone/*` packages declare semver ranges, not this lockfile,
+  so a consumer installing from npm already resolved the patched versions on their own. What
+  this release changes is the lockfile in the published source snapshot.
+
+- **One scoped override**, in `pnpm-workspace.yaml`: `esbuild@^0.27.0` → `^0.28.1`. The latest
+  published `tsup` pins `esbuild ^0.27.0`, so the patched line is unreachable by natural
+  resolution. It is limited to that range — every other consumer already resolved 0.28.x — and
+  esbuild never enters a published package.
+
 ## [0.11.6]
 
 Patch. Documentation and examples only — no source, schema or behaviour change. Released so

@@ -6,3 +6,11 @@ allowBuilds:
   esbuild: true
   sharp: false
   workerd: true
+
+# Security remediation (issue #92): tsup@8.5.1 — the latest release — pins
+# esbuild ^0.27.0, so esbuild >= 0.28.1 cannot be reached by natural resolution.
+# Scoped to the ^0.27.0 range only; every other esbuild consumer (tsx, vite,
+# wrangler) already resolves 0.28.x on its own. Dev-only: esbuild never enters a
+# published @archstone/* package.
+overrides:
+  esbuild@^0.27.0: ^0.28.1
