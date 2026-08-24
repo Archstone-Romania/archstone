@@ -6,6 +6,7 @@
 
 import type { LoadResult, CapabilityDoc, PolicyDoc } from "@archstone/schema";
 import { SEMANTIC_TYPES, LIFECYCLE_STATES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRFieldMapping, type IRContract, type IRPolicyRule, type Lifecycle, type SemanticType } from "./ir";
+import { JSON_TYPES, type JsonType, type ShapeMap } from "./fingerprint";
 import { domainOf, resolveResourceName, resourceIndex } from "./resolve";
 
 const CONNECTOR_TYPES = new Set<IRConnector["type"]>(["rest", "graphql", "grpc", "sql", "soap"]);
@@ -112,12 +113,31 @@ function lowerResponse(raw: Record<string, unknown>, canon: Canonicalize, output
   return mapping;
 }
 
+/**
+ * Lower a recorded `contract.shape` to a neutral `ShapeMap` (ADD-114). Returns undefined —
+ * meaning "this contract has no shape", i.e. pre-ADD-114 behaviour — rather than a partial map,
+ * because a shape missing entries produces a confidently wrong diff, which D-3 exists to
+ * prevent. All-or-nothing is the fail-safe reading.
+ */
+function lowerShape(raw: unknown): ShapeMap | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const out: ShapeMap = {};
+  for (const [path, type] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof type !== "string" || !JSON_TYPES.includes(type as JsonType)) return undefined;
+    out[path] = type as JsonType;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Lower a shape-valid binding `contract:` to a neutral IRContract (ADD-18). No fs, no hashing. */
 function lowerContract(raw: Record<string, unknown>): IRContract | undefined {
   if (typeof raw.fingerprint !== "string") return undefined;
   const probe = (raw.probe ?? {}) as Record<string, unknown>;
   if (typeof probe.fixture !== "string") return undefined;
-  return { fingerprint: raw.fingerprint, probeFixture: probe.fixture };
+  const contract: IRContract = { fingerprint: raw.fingerprint, probeFixture: probe.fixture };
+  const shape = lowerShape(raw.shape);
+  if (shape) contract.shape = shape;
+  return contract;
 }
 
 /**

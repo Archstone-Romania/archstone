@@ -115,3 +115,11 @@ export {
 // ---------------------------------------------------------------------------------------
 
 export { openApiAdapter } from "./adapters/openapi";
+
+// The YAML scalar/key quoting rules, shared rather than re-implemented.
+//
+// `archstone adopt` (ADD-117) appends to a manifest a human already owns, and it has to quote
+// what it writes by exactly the same conservative rules `init` uses — a second copy is how the
+// two drift, and an escaping bug on a review surface is the failure this package's `yaml.ts`
+// header exists to argue against. Exported as-is; no behaviour change.
+export { yamlKey, yamlScalar, type YamlScalar } from "./yaml";

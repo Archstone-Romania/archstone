@@ -2,5 +2,6 @@
 export * from "./registry";
 export * from "./mcp";
 export * from "./mapping";
+export * from "./adopt";
 export * from "./verify";
 export * from "./audit-file";

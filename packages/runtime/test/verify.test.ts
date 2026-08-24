@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IRResourceRegistry, IRTool, Lifecycle } from "@archstone/compiler";
-import { fingerprintShape } from "@archstone/compiler";
+import { describeShape, fingerprintShape } from "@archstone/compiler";
 import type { FetchLike } from "@archstone/provider-rest";
 import { verifyTool, runVerify, recordContract } from "../src/verify";
 
@@ -353,5 +353,112 @@ describe("recordContract (ADD-37 D-6)", () => {
     const r = await recordContract(gated, {}, resources, { fetchImpl });
     expect(r.outcome).toBe("not-attempted");
     expect(calls).toBe(0);
+  });
+});
+
+describe("verifyTool — naming what moved (ADD-114)", () => {
+  /** The same tool, plus the shape a real recording would have written beside the fingerprint. */
+  function toolWithShape(body: unknown, fingerprint = fingerprintShape(body)): IRTool {
+    const t = tool(fingerprint);
+    t.contract = { ...t.contract!, shape: describeShape(body) };
+    return t;
+  }
+
+  const respond = (body: unknown): FetchLike => async () => new Response(JSON.stringify(body), { status: 200 });
+
+  it("names a field the provider gained, and carries it structurally in drift", () =>
+    withFixture(async (dir) => {
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5, boardType: "BREAKFAST" }] };
+      const r = await verifyTool(toolWithShape(goldenBody), dir, resources, { fetchImpl: respond(live) });
+      expect(r.status).toBe("yellow");
+      expect(r.detail).toContain("gained 1 field(s): $.stays[].boardType (string)");
+      expect(r.drift).toEqual({
+        added: [{ path: "$.stays[].boardType", type: "string" }],
+        removed: [],
+        retyped: [],
+      });
+    }));
+
+  // The body a real provider returns: more fields than the manifest maps. `net` is the
+  // wholesale rate every accommodation API carries beside the public price, and nothing maps
+  // it — so it is exactly the kind of field whose disappearance only the shape can see.
+  const recordedBody = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5, net: 78 }] };
+
+  it("names an UNMAPPED field the provider lost", () =>
+    withFixture(async (dir) => {
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5 }] };
+      const r = await verifyTool(toolWithShape(recordedBody), dir, resources, { fetchImpl: respond(live) });
+      expect(r.status).toBe("yellow");
+      expect(r.drift?.removed).toEqual([{ path: "$.stays[].net", type: "number" }]);
+    }));
+
+  it("a MAPPED optional field going missing still reports DEGRADED, not drift — ADD-18's ordering, unchanged", () =>
+    withFixture(async (dir) => {
+      // Deliberate characterization: applyResponseMapping's degraded branch returns before the
+      // fingerprint check, and ADD-114 does not touch it. For a field the mapping names,
+      // "optional field absent — rating" is the more precise sentence anyway; drift naming
+      // earns its keep on the fields the mapping says nothing about.
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: 100, net: 78 }] };
+      const r = await verifyTool(toolWithShape(recordedBody), dir, resources, { fetchImpl: respond(live) });
+      expect(r.status).toBe("yellow");
+      expect(r.detail).toContain("degraded: optional field(s) absent — rating");
+      expect(r.drift).toBeUndefined();
+    }));
+
+  it("names a field that changed type, with both types", () =>
+    withFixture(async (dir) => {
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: "100", rating: 4.5 }] };
+      const r = await verifyTool(toolWithShape(goldenBody), dir, resources, { fetchImpl: respond(live) });
+      expect(r.detail).toContain("$.stays[].price (number → string)");
+      expect(r.drift?.retyped).toEqual([{ path: "$.stays[].price", from: "number", to: "string" }]);
+    }));
+
+  it("reports all three at once", () =>
+    withFixture(async (dir) => {
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: "100", rating: 4.5, boardType: "BREAKFAST" }] };
+      const r = await verifyTool(toolWithShape(recordedBody), dir, resources, { fetchImpl: respond(live) });
+      expect(r.drift?.added.map((e) => e.path)).toEqual(["$.stays[].boardType"]);
+      expect(r.drift?.removed.map((e) => e.path)).toEqual(["$.stays[].net"]);
+      expect(r.drift?.retyped.map((e) => e.path)).toEqual(["$.stays[].price"]);
+    }));
+
+  it("D-3: a shape that disagrees with its own fingerprint names nothing and says so", () =>
+    withFixture(async (dir) => {
+      // A hand-edit: the recorded shape describes a DIFFERENT response than the fingerprint does.
+      const t = tool(goldenFingerprint);
+      t.contract = { ...t.contract!, shape: describeShape({ totally: { different: "thing" } }) };
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5, boardType: "BREAKFAST" }] };
+      const r = await verifyTool(t, dir, resources, { fetchImpl: respond(live) });
+      expect(r.status).toBe("yellow");
+      expect(r.detail).toContain("recorded shape is stale and was not used");
+      expect(r.detail).not.toContain("gained");
+      expect(r.drift).toBeUndefined();
+    }));
+
+  it("a contract with no shape reports exactly what it reported before ADD-114", () =>
+    withFixture(async (dir) => {
+      const live = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5, boardType: "BREAKFAST" }] };
+      const r = await verifyTool(tool(goldenFingerprint), dir, resources, { fetchImpl: respond(live) });
+      expect(r.detail).toMatch(/^mapping still resolves; response shape changed \(fingerprint sha256:[0-9a-f]{64} → sha256:[0-9a-f]{64}\)$/);
+      expect(r.drift).toBeUndefined();
+    }));
+
+  it("stays green — and silent — when nothing moved", () =>
+    withFixture(async (dir) => {
+      const r = await verifyTool(toolWithShape(goldenBody), dir, resources, { fetchImpl: respond(goldenBody) });
+      expect(r.status).toBe("green");
+      expect(r.drift).toBeUndefined();
+    }));
+
+  it("recordContract writes a shape consistent with the fingerprint it writes beside it", async () => {
+    const body = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5 }] };
+    const rec = await recordContract(tool(goldenFingerprint), {}, resources, {
+      fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
+      now: new Date("2026-08-24T00:00:00Z"),
+    });
+    expect(rec.outcome).toBe("green");
+    expect(rec.shape).toEqual(describeShape(body));
+    expect(rec.fingerprint).toBe(fingerprintShape(body));
+    expect(JSON.stringify(rec.shape)).not.toContain("Hotel A");
   });
 });

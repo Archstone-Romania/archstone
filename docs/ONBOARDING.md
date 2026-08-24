@@ -726,6 +726,30 @@ A record looks like this — and this is the whole of it:
 - **Never point the JSON Lines sink at stdout.** On the stdio transport stdout *is* the MCP
   protocol channel; `jsonLinesAuditSink` refuses `process.stdout` outright for that reason.
 
+### Before go-live: `archstone doctor`
+
+```bash
+archstone doctor path/to/manifest        # human-readable
+archstone doctor path/to/manifest --json # for CI
+```
+
+Offline by construction — it compiles the manifest and inspects the result plus what sits beside
+it on disk. Nothing is invoked and no backend is contacted; that is `verify`. `doctor` answers
+the question you ask *before* pointing anything at production.
+
+What it blocks on (exit 1): a `baseUrl` that interpolates caller-supplied data (the SSRF shape —
+set `allowedHosts`), a contract naming a fixture that is not on disk, and a committed
+`archstone.ir.json` that no longer matches a fresh build.
+
+What it warns about: capabilities declared but unbound, and bound capabilities with no contract
+fixture — `verify` has nothing to replay for those, so backend drift is found by an agent in
+front of a customer instead of by CI.
+
+What it makes you look at: every `irreversible` effect, every capability whose declared rate
+limit needs a counter wired, every capability requiring an authenticated caller (which `serve`
+over stdio cannot serve to more than one identity), and anything still `experimental` — hidden
+from listings and still invocable by id.
+
 ### Keeping the trail: `rotatingFileAuditSink`
 
 `jsonLinesAuditSink` writes; it does not *keep*. For a deployment that has to retain an audit
@@ -814,6 +838,43 @@ request itself failed. It exits non-zero on any 🔴, so it drops straight into 
 drift gate. It's the only Archstone command that makes a live network call outside a real
 tool invocation — on demand only, never triggered by `apply`/`serve`. Wiring it to a schedule
 (cron, a CI job) is your call, not Archstone's.
+
+If the `contract:` also records a `shape:` — the response's paths and their types, never its
+values — `verify` can say *which* fields moved rather than only that the fingerprint did:
+
+```
+🟡 tourism.search — mapping still resolves; response shape gained 1 field(s): $.stays[].boardType (string)
+```
+
+### Declaring a field the backend started returning
+
+`verify` naming a new field does not give it to your agent. **An undeclared field never
+reaches a model** — the `response:` map is an allowlist, and that is deliberate: your
+provider's payload very likely carries wholesale rates, commissions or internal ids alongside
+the fields you publish, and none of them should reach a model because a backend deploy added
+them.
+
+Declaring one is a separate, deliberate step:
+
+```bash
+archstone adopt ./my-manifest-dir
+```
+
+It replays the same fixture, offers each field the backend returns that your manifest does not
+declare, and for each one you accept it asks you to describe it — an agent reads that
+description to decide whether to use the field, so it is not something a tool can invent for
+you. It then writes the field into your resource (always `required: false`; one observation is
+not evidence the provider always sends it), adds the JSONPath to your binding, re-records the
+contract, and re-compiles the result before keeping anything. If the edit does not compile,
+nothing is written.
+
+It needs a person: with stdin closed — a pipeline, a cron job — it refuses and writes nothing.
+That is the point rather than a limitation. What lands in your repository is an ordinary diff
+you review like any other change.
+
+Some fields it will not adopt, and it says why rather than skipping them silently: a boolean
+(CDL has no boolean type), a nested object or array, or anything outside the collection your
+capability maps.
 
 ---
 

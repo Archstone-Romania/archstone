@@ -115,6 +115,10 @@ export interface EmitResult {
  */
 export interface RecordedContract {
   fingerprint: string;
+  /** The recorded response shape — `path -> type`, values never present (ADD-114). Optional:
+   *  a recording made before ADD-114, or by a caller that does not supply one, still emits a
+   *  valid `contract:`. */
+  shape?: Record<string, string>;
   /** ISO timestamp, from the recorder's clock. `emit` has no clock of its own. */
   recordedAt: string;
   /** The golden fixture's exact JSON content. Written verbatim; never re-derived. */
@@ -742,6 +746,16 @@ function renderBindingFile(
       bw.block("contract", (cw) => {
         cw.entry("source", "recorded");
         cw.entry("fingerprint", contract.fingerprint);
+        if (contract.shape) {
+          const shape = contract.shape;
+          // Sorted, so re-running `init` over an unchanged backend produces byte-identical
+          // bytes — the property this whole writer exists to preserve. Keys are quoted by
+          // `yamlKey` (every path starts with `$` and most contain `[`/`]`), so no special
+          // handling is needed here.
+          cw.block("shape", (sw) => {
+            for (const path of Object.keys(shape).sort()) sw.entry(path, shape[path]);
+          });
+        }
         cw.entry("verifiedAt", contract.recordedAt);
         cw.block("probe", (pw) => {
           pw.entry("fixture", fixturePath(plan.decision.capabilityId));

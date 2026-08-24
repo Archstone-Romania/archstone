@@ -10,7 +10,13 @@ binding:
 
   # Provider body → Stay resource (ADD-12). The resource is the anchor; these JSONPaths
   # are the only thing that moves if the backend renames a field. Required fields (name,
-  # location, pricePerNight) missing → contract VIOLATION; rating is optional → DEGRADED.
+  # location, pricePerNight) missing → contract VIOLATION; the optional ones → DEGRADED.
+  #
+  # Note what is NOT here. The backend also returns `boardType`, `freeCancellationUntil`,
+  # `roomDescription`, `net` and `commission` — the vocabulary Amadeus Hotel Search v3 and
+  # Hotelbeds actually return, wholesale rate and agency cut included. None are mapped, so
+  # none reach the model (ADR-0008). Nothing here has to change to keep them out: leaving a
+  # field unnamed IS the control. Adopting the useful ones is a deliberate act, not a default.
   response:
     collection: "$.stays[*]"
     resource: Stay
@@ -24,7 +30,25 @@ binding:
   # fixtures/tourism.search.golden.json's `request` live and compares the response shape.
   contract:
     source: recorded
-    fingerprint: "sha256:cabe202bbd2f2d4c6aef739c652a1fba3de20333539a1df42ea5cc187dfb1273"
-    verifiedAt: "2026-07-16T00:00:00Z"
+    fingerprint: "sha256:fd7fa633978968bec2eb3afdb565541783d2a20b46d8189c445e16d910a8d258"
+    # Recorded response shape — paths and types, never values (ADD-114). This is what lets
+    # `archstone verify` name a field the backend gained, instead of only reporting a moved hash.
+    # Note what is here and unmapped: `net` and `commission` are recorded as SHAPE, so drift in
+    # them is still detected — and still never forwarded to a model (ADR-0008).
+    shape:
+      "$": object
+      "$.stays": array
+      "$.stays[]": object
+      "$.stays[].boardType": string
+      "$.stays[].commission": number
+      "$.stays[].freeCancellationUntil": string
+      "$.stays[].id": string
+      "$.stays[].location": string
+      "$.stays[].name": string
+      "$.stays[].net": number
+      "$.stays[].pricePerNight": number
+      "$.stays[].rating": number
+      "$.stays[].roomDescription": string
+    verifiedAt: "2026-08-24T00:00:00Z"
     probe:
       fixture: fixtures/tourism.search.golden.json

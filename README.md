@@ -109,7 +109,16 @@ them into a typed, described `outputSchema`, and a binding's `response:` mapping
 that shape at every call — a required field missing from the provider's response fails
 closed (a structured error, never a silent raw pass-through). `archstone verify` replays a
 recorded fixture against the live backend on demand and reports a 🟢/🟡/🔴 health status per
-binding, so contract drift shows up before an agent hits it.
+binding, so contract drift shows up before an agent hits it — naming the fields the provider
+gained, lost or retyped, not merely reporting that something moved.
+
+**A field your manifest does not name never reaches a model.** That is deliberate: your
+provider's payload very likely carries wholesale rates, commissions or internal ids beside the
+fields you publish, and a backend deploy adding one must not be a decision about what an
+assistant can say. Declaring a new field is a separate, deliberate act — `archstone adopt`
+offers each one, asks you to describe it, writes it into your resource and binding, and
+recompiles before keeping anything. With stdin closed it refuses and writes nothing: it needs a
+person, which is the point rather than a limitation.
 
 ---
 
@@ -158,6 +167,12 @@ archstone serve examples/manifests/tourism
 archstone serve --http examples/manifests/tourism --token my-bearer-token
 archstone verify examples/manifests/tourism
 archstone verify examples/manifests/tourism --json
+
+# Check a manifest against the pre-production checklist — offline, no backend contacted
+archstone doctor examples/manifests/tourism
+
+# Declare a field the backend started returning (asks before writing; needs a person)
+archstone adopt examples/manifests/tourism
 ```
 
 ---
@@ -243,7 +258,7 @@ archstone/
 │   ├── emitter-support/ # IR indexing + semantic-type → JSON-Schema lowering (RFC-0008)
 │   ├── agent/           # embedded SDK: fromIR(), tools(), execute() (RFC-0008)
 │   ├── runtime/         # registry + MCP emitter (stdio + HTTP)
-│   └── cli/             # `archstone apply` / `build` / `serve` / `verify` — wires pipeline
+│   └── cli/             # `apply` / `build` / `serve` / `verify` / `doctor` / `adopt` — wires pipeline
 ├── providers/
 │   └── rest/            # REST adapter (providers = adapters)
 ├── examples/            # manifests + the Claude demo

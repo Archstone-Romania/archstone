@@ -112,7 +112,12 @@ export function probeGate(decision: Extract<CapabilityDecision, { keep: true }>,
 /** A recording promoted to an emittable contract — or `undefined` when nothing may be written. */
 function contractOf(recording: ContractRecording): RecordedContract | undefined {
   if (recording.fingerprint === undefined || recording.fixture === undefined) return undefined;
-  return { fingerprint: recording.fingerprint, recordedAt: recording.fixture.recordedAt ?? new Date(0).toISOString(), fixture: recording.fixture };
+  return {
+    fingerprint: recording.fingerprint,
+    ...(recording.shape ? { shape: recording.shape } : {}),
+    recordedAt: recording.fixture.recordedAt ?? new Date(0).toISOString(),
+    fixture: recording.fixture,
+  };
 }
 
 export interface RunProbesOptions extends RecordContractOptions {

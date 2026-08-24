@@ -5,6 +5,41 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 
+/**
+ * A stay matching the shape recorded in the tourism binding's `contract:`.
+ *
+ * It carries the fields the demo backend returns but the manifest does NOT map — `boardType`,
+ * `freeCancellationUntil`, `roomDescription`, and the commercial `net`/`commission` — because
+ * the contract fingerprints the provider's WHOLE response, not the mapped subset. Drop one and
+ * `verify` correctly reports a lost field (ADD-114), which is what these green-path tests would
+ * otherwise trip over. Nothing here reaches a model: the mapping allowlist is what governs that
+ * (ADR-0008), and `demo.integration.test.ts` is where that is asserted.
+ */
+/** The retired-gate fixture manifest keeps its own pre-ADD-114 contract, recorded against the
+ *  five-field payload — so its probes must keep sending exactly that. Separate constant rather
+ *  than a shared one: the two manifests pin different fingerprints on purpose, and collapsing
+ *  them would couple an unrelated fixture to the demo manifest's next re-record. */
+const RETIRED_GATE_STAY = {
+  id: "azur-01",
+  name: "Hotel Azur",
+  location: "Nice, France",
+  pricePerNight: 118,
+  rating: 4.5,
+};
+
+const CLEAN_STAY = {
+  id: "azur-01",
+  name: "Hotel Azur",
+  location: "Nice, France",
+  pricePerNight: 118,
+  rating: 4.5,
+  boardType: "BREAKFAST",
+  freeCancellationUntil: "2026-07-11",
+  roomDescription: "Junior Suite, terrace",
+  net: 92.04,
+  commission: 14.16,
+};
+
 // `archstone verify` end to end: spawn the real CLI against the tourism demo manifest,
 // pointed at a mock backend, and assert exit code + printed health status (ADD-18).
 
@@ -34,7 +69,7 @@ function startMock(body: unknown): Promise<{ url: string; close: () => Promise<v
 describe("archstone verify (ADD-18)", () => {
   it("exits 0 and prints green for a clean backend matching the golden fixture", async () => {
     const mock = await startMock({
-      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+      stays: [CLEAN_STAY],
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", tourism], {
@@ -71,7 +106,7 @@ describe("archstone verify (ADD-18)", () => {
 describe("archstone verify — retired capability escapes the CI gate (#54)", () => {
   it("exits 0: the stable capability is green, the retired one with a broken contract never appears", async () => {
     const mock = await startMock({
-      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+      stays: [RETIRED_GATE_STAY],
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", retiredGate, "--json"], {
@@ -89,7 +124,7 @@ describe("archstone verify — retired capability escapes the CI gate (#54)", ()
 
   it("exits 0 on the human (non-json) path too, printing only the stable capability", async () => {
     const mock = await startMock({
-      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+      stays: [RETIRED_GATE_STAY],
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", retiredGate], {
@@ -107,7 +142,7 @@ describe("archstone verify — retired capability escapes the CI gate (#54)", ()
 describe("archstone verify --json (ADD-20)", () => {
   it("clean backend + --json → stdout parses as JSON, one entry, exit 0", async () => {
     const mock = await startMock({
-      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+      stays: [CLEAN_STAY],
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", tourism, "--json"], {
@@ -162,7 +197,7 @@ describe("archstone verify --json (ADD-20)", () => {
 
   it("stdout parses as a single JSON document with no interleaved free text (--json flag position independent)", async () => {
     const mock = await startMock({
-      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+      stays: [CLEAN_STAY],
     });
     try {
       // flag comes before the directory here, proving argv parsing tolerates either order
@@ -179,7 +214,7 @@ describe("archstone verify --json (ADD-20)", () => {
 
   it("default (non-json) invocation is unchanged", async () => {
     const mock = await startMock({
-      stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+      stays: [CLEAN_STAY],
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", tourism], {

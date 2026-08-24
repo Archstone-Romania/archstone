@@ -19,16 +19,16 @@ manifest, and it keeps working with no relationship to us.
 |---|---|---|
 | **Current** | The latest minor | Features, fixes, security |
 | **Maintenance** | The previous minor | Security fixes and fail-closed correctness defects |
-| **LTS** | A minor designated under a commercial agreement | Security fixes and fail-closed correctness defects for the agreed window |
+| **LTS** | A minor designated under a commercial agreement, maintained on its own `release/X.Y.x` branch | Security fixes and fail-closed correctness defects, for 12 months from your go-live on that line. Published under the `lts-X.Y` dist-tag, never `latest` |
 | **End of life** | Everything older | Nothing. The code keeps working — it cannot be switched off remotely — but we do not fix it |
 
 ### Today
 
 | Line | Version | Status |
 |---|---|---|
-| Current | `0.13.x` | ✅ Supported |
-| Maintenance | `0.12.x` | ✅ Security and fail-closed fixes |
-| LTS | — | None designated yet |
+| Current | `0.14.x` | ✅ Supported · `release/0.14.x` |
+| Maintenance | `0.13.x` | ✅ Security and fail-closed fixes · `release/0.13.x` |
+| LTS | `0.14.x` | 🟢 **Available for designation** under a support agreement — the current minor, so a line designated today starts at the newest code rather than one already superseded |
 | End of life | `≤ 0.11.x` | ⛔ |
 
 ---

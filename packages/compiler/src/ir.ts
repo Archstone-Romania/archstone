@@ -6,6 +6,9 @@
 // directly. No emit-target format (JSON Schema, MCP shapes) appears here; the MCP
 // emitter (#7) owns semantic-type → JSON-Schema lowering.
 
+// Type-only: erased at compile time, so the neutral IR gains no runtime dependency.
+import type { ShapeMap } from "./fingerprint";
+
 export type SemanticType =
   | "location"
   | "date-range"
@@ -104,6 +107,15 @@ export interface IRResponseMapping {
  */
 export interface IRContract {
   fingerprint: string; // sha256:… of the recorded response SHAPE
+  /**
+   * The recorded shape itself — `path -> type`, values never present (ADD-114 D-1).
+   *
+   * Optional, and NARRATIVE ONLY: `fingerprint` above remains the sole authority for a
+   * binding's health (ADD-114 D-2, preserving ADD-18 D-4). This exists so `verify` can name
+   * WHICH paths moved instead of only reporting that a hash did. A contract without it
+   * verifies exactly as it did before ADD-114.
+   */
+  shape?: ShapeMap;
   probeFixture: string; // path to the golden fixture, relative to the manifest dir
 }
 

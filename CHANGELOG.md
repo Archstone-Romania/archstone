@@ -5,6 +5,95 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.14.0]
+
+Minor. Additive provider drift stops being a mystery you have to investigate: `verify` names the
+fields a backend gained, lost or retyped, and declaring one is a command rather than a
+hand-edit. What does **not** change is the guarantee underneath — an undeclared field still
+never reaches a model, and that is now a written decision rather than an implementation detail.
+Plus the pre-production checklist, made runnable.
+
+### Added
+
+- **`archstone verify` names what moved (#114).** It could say a provider's response shape had
+  changed and nothing more, because a `contract:` stored a hash and a hash does not subtract.
+  A binding may now also record `shape:` — the response's paths and their types, **never its
+  values** — and `verify` diffs it:
+
+  ```
+  🟡 tourism.search — mapping still resolves; response shape gained 3 field(s): $.stays[].checkInFrom (string), $.stays[].distanceToBeachM (number), $.stays[].sustainabilityLabel (string)
+  ```
+
+  The same three sets — `added`, `removed`, `retyped` — ride into `verify --json` as an additive
+  `drift` key. **Health semantics are unchanged**: the fingerprint remains the sole authority for
+  🟢/🟡/🔴, and the shape explains a status it never determines. `shape:` is optional, so a
+  contract without one behaves exactly as it did before.
+
+  One new failure mode, handled rather than ignored: `shape` and `fingerprint` are two records of
+  one observation and can disagree if either is hand-edited. Before printing a diff, `verify`
+  re-derives the fingerprint from the stored shape; on mismatch it reports the shape as stale and
+  names nothing. A confidently wrong diff is worse than none.
+
+- **`archstone adopt` — declare a field the backend started returning (#117).** Naming a field
+  does not give it to an agent. The `response:` map is an allowlist and stays one; `adopt` is the
+  sanctioned crossing. It replays the same fixture, offers each field the backend returns that
+  your manifest does not declare, asks you to describe each one you accept — an agent reads that
+  description to decide whether to use the field, so it is not something a tool can invent for
+  you — then writes it into your resource, adds the JSONPath to your binding, re-records the
+  contract, and recompiles the result before keeping anything. If the edit does not compile,
+  nothing is written.
+
+  It is a **verb, not a `verify --adopt` flag**, because `verify` is a read-only CI gate and a
+  mutating flag on it invites exactly the pipeline usage this feature must not have. There is no
+  `--yes`: with stdin closed it prints what it found, refuses, and exits non-zero. Adopted fields
+  are always `required: false` — one observation is not evidence the provider always sends it,
+  and a wrongly-required field turns the next absent value into a fail-closed violation on a
+  capability that worked yesterday.
+
+  Some fields it declines, and says why rather than skipping them silently: a boolean (CDL has no
+  boolean type), a nested object or array, or anything outside the collection your capability
+  maps.
+
+- **`archstone doctor` — the pre-production checklist, run instead of read.** A list a human
+  reads before go-live is a list a human skips; everything on it except the judgement steps is
+  computable from the manifest. Offline by construction: it compiles and inspects, contacts no
+  backend, invokes nothing. It **blocks** on a caller-influenced `baseUrl` (the SSRF shape), a
+  contract naming a fixture that is not on disk, and a committed IR artifact that no longer
+  matches a fresh build; **warns** on unbound capabilities and bound ones with no fixture; and
+  **surfaces for confirmation** every `irreversible` effect, every rate limit needing a counter,
+  every capability requiring an authenticated caller, and anything still `experimental`. Every
+  finding carries a machine-readable code and the reason it matters, and `--json` makes it a CI
+  gate.
+
+### Decided
+
+- **Undeclared provider data never reaches a model.** Unmapped fields stay dropped — no flag, no
+  per-binding opt-in, no trusted-provider mode. This has been true since response mapping
+  shipped, but it fell out of the implementation rather than being decided, and it became a
+  decision the moment the opposite was requested: forward new fields automatically so the
+  integration improves itself.
+
+  It is refused on three grounds. A forwarded field arrives with no declared type and no
+  description, so the model must guess what it means — forfeiting precisely the property that
+  makes a declared shape worth having. Accommodation and booking APIs routinely carry net rate
+  beside selling rate, commission, and guest personal data in the same payload, which would make
+  the provider's next deploy a disclosure decision taken by nobody. And `outputSchema` would stop
+  describing the output, while "raw body withheld" — the sentence the fail-closed contract rests
+  on — would become conditionally false. A guarantee with a flag that disables it is a default.
+
+  The honest half of that request is what #114 and #117 answer instead: the alarm now carries
+  information, and acting on it is one command with a person at the gate.
+
+### Changed
+
+- **The long-term lines exist: `release/0.13.x` (current) and `release/0.12.x` (maintenance).**
+  An LTS designation is made on the **current** minor, so a line designated today starts at the
+  newest code rather than one already superseded.** Until now an LTS designation was a
+  policy with no branch behind it — the pipeline could ship a backport (v0.12.0) but nothing had
+  been cut to ship one *from*. `SUPPORT.md` names the designatable line. The backport
+  path itself stays unexercised until the first qualifying fix; a backport will not be
+  manufactured to rehearse it, because the list of what qualifies is deliberately narrow.
+
 ## [0.13.0]
 
 Minor. **CDL is 1.0** — the language you author in is frozen, while the packages stay pre-1.0 and

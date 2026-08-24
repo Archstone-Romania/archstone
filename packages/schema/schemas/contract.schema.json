@@ -16,6 +16,14 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "description": "Hash of the recorded response SHAPE (sorted key paths + value type), not its values."
     },
+    "shape": {
+      "type": "object",
+      "description": "Recorded response SHAPE — JSONPath-ish key path to JSON type; values are NEVER recorded (ADR-0008). Optional and advisory: it lets `archstone verify` name which paths were added, removed or retyped, but `fingerprint` above remains the sole authority for a binding's health (ADD-114 D-2). A contract without it verifies exactly as it did before ADD-114.",
+      "propertyNames": { "pattern": "^\\$" },
+      "additionalProperties": {
+        "enum": ["string", "number", "boolean", "null", "array", "object"]
+      }
+    },
     "verifiedAt": {
       "type": "string",
       "format": "date-time"

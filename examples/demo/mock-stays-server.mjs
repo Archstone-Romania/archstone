@@ -13,6 +13,25 @@ const NAMES = [
   "Riverside Lodge", "Marina View", "The Old Quarter Hotel", "Cypress Suites", "Harbor House",
 ];
 
+// Board types as Amadeus Hotel Search v3 spells them; room wording follows its
+// `room.description`. Kept deterministic (hashed from the destination) so the same query
+// always returns the same three stays — a demo backend that varied would make every
+// `archstone verify` run report drift that never happened.
+const BOARD_TYPES = ["ROOM_ONLY", "BREAKFAST", "HALF_BOARD", "ALL_INCLUSIVE"];
+const ROOMS = [
+  "Double Deluxe Premium, sea view",
+  "Junior Suite, terrace",
+  "Twin Classic, garden view",
+  "Family Room, two bedrooms",
+];
+
+/** A free-cancellation deadline, as a Hotelbeds-style `cancellationPolicies[].from` date. */
+function cancelBy(seed) {
+  const day = 1 + (seed % 27);
+  const month = 6 + (seed % 3);
+  return `2026-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function hash(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -31,6 +50,15 @@ function buildStays(where) {
       location: where,
       pricePerNight: price,
       rating,
+      boardType: BOARD_TYPES[(seed + i * 3) % BOARD_TYPES.length],
+      freeCancellationUntil: cancelBy(seed + i * 11),
+      roomDescription: ROOMS[(seed + i * 5) % ROOMS.length],
+      // Wholesale rate and agency cut — returned here because real accommodation APIs return
+      // them beside the public price (Hotelbeds `net`, Amadeus v3 `commission`). The manifest
+      // does not map them, so they never reach a model (ADR-0008). Their presence is the point:
+      // the control is the mapping allowlist, not the backend's discretion.
+      net: Math.round(price * 0.78 * 100) / 100,
+      commission: Math.round(price * 0.12 * 100) / 100,
     };
   });
   return stays.sort((a, b) => a.pricePerNight - b.pricePerNight);

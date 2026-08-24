@@ -8,7 +8,19 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fingerprintShape, type IRTool, type IRResourceRegistry } from "@archstone/compiler";
+import {
+  describeShape,
+  diffShape,
+  fingerprintShape,
+  fingerprintShapeMap,
+  hasShapeDrift,
+  shapeDriftSummary,
+  type IRContract,
+  type IRTool,
+  type IRResourceRegistry,
+  type ShapeDiff,
+  type ShapeMap,
+} from "@archstone/compiler";
 import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 import { evaluatePolicy, lifecycleExposure } from "@archstone/emitter-support";
 import { applyResponseMapping } from "./mapping";
@@ -50,6 +62,16 @@ export interface ToolVerification {
    * warning. `runtime/test/lifecycle.integration.test.ts` asserts it.
    */
   policyDenied?: true;
+  /**
+   * #114 (ADD-114 D-4): which paths the provider gained, lost or retyped since the contract was
+   * recorded. Present only when the binding recorded a `contract.shape`, that shape is
+   * consistent with its own fingerprint (D-3), and something actually moved.
+   *
+   * NARRATIVE ONLY. `status` above is derived exactly as ADD-18 D-4 defines it, from the
+   * fingerprint alone — this field explains a status it never determines (D-2). It rides into
+   * `archstone verify --json` for free, since the CLI serialises this object directly.
+   */
+  drift?: ShapeDiff;
 }
 
 export interface GoldenFixture {
@@ -65,6 +87,32 @@ function readFixture(dir: string, path: string): GoldenFixture | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Turn a fingerprint mismatch into a sentence that names what moved — or explains why it
+ * cannot (ADD-114 D-3).
+ *
+ * Three outcomes, in order of how much we are entitled to claim:
+ *   1. no `contract.shape` recorded → ADD-18's original wording, unchanged;
+ *   2. a shape recorded that disagrees with its own fingerprint → say so, and name nothing. The
+ *      two are records of one observation and can only diverge by hand-editing; naming fields
+ *      from a shape that does not describe this contract is worse than naming none;
+ *   3. a consistent shape → the named diff.
+ */
+function narrateShapeChange(
+  contract: IRContract,
+  liveShape: ShapeMap,
+  liveFingerprint: string,
+): { detail: string; drift?: ShapeDiff } {
+  const fingerprints = `fingerprint ${contract.fingerprint} → ${liveFingerprint}`;
+  if (!contract.shape) return { detail: `response shape changed (${fingerprints})` };
+  if (fingerprintShapeMap(contract.shape) !== contract.fingerprint) {
+    return { detail: `response shape changed (${fingerprints}); recorded shape is stale and was not used — re-record this contract` };
+  }
+  const drift = diffShape(contract.shape, liveShape);
+  if (!hasShapeDrift(drift)) return { detail: `response shape changed (${fingerprints})` };
+  return { detail: `response shape ${shapeDriftSummary(drift)}`, drift };
 }
 
 /** Verify one tool's contract against the live backend. Returns green/yellow/red — never
@@ -120,12 +168,13 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
 
   const liveFingerprint = fingerprintShape(result.data);
   const fingerprintChanged = liveFingerprint !== contract.fingerprint;
+  const liveShape = describeShape(result.data);
 
   if (!tool.response) {
     // No response mapping to validate against — fingerprint drift is all we can see.
-    return fingerprintChanged
-      ? { ...base, status: "yellow", detail: `response shape changed (fingerprint ${contract.fingerprint} → ${liveFingerprint})` }
-      : { ...base, status: "green", detail: "fingerprint unchanged" };
+    if (!fingerprintChanged) return { ...base, status: "green", detail: "fingerprint unchanged" };
+    const { detail, drift } = narrateShapeChange(contract, liveShape, liveFingerprint);
+    return { ...base, status: "yellow", detail, ...(drift ? { drift } : {}) };
   }
 
   const mapped = applyResponseMapping(tool, result.data, resources);
@@ -144,7 +193,8 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
     return { ...base, status: "yellow", detail: `degraded: optional field(s) absent — ${(mapped.degraded ?? []).join(", ")}` };
   }
   if (fingerprintChanged) {
-    return { ...base, status: "yellow", detail: `response shape changed (fingerprint ${contract.fingerprint} → ${liveFingerprint}) but mapping still resolves` };
+    const { detail, drift } = narrateShapeChange(contract, liveShape, liveFingerprint);
+    return { ...base, status: "yellow", detail: `mapping still resolves; ${detail}`, ...(drift ? { drift } : {}) };
   }
   return { ...base, status: "green", detail: "fingerprint unchanged, mapping OK" };
 }
@@ -237,6 +287,10 @@ export interface ContractRecording {
   outcome: ProbeOutcome;
   detail: string;
   fingerprint?: string;
+  /** The recorded response shape (ADD-114 D-6), derived from the SAME body as `fingerprint`
+   *  in the same call — which is what makes the two consistent by construction at the only
+   *  point that writes them, and is what D-3's check later relies on. */
+  shape?: ShapeMap;
   fixture?: GoldenFixture;
   /** Optional fields that came back absent or null. Real required/optional evidence — the
    *  caller may offer a loosening at the gate, and must never apply one silently: n=1 is not
@@ -319,6 +373,7 @@ export async function recordContract(
   }
 
   const fingerprint = fingerprintShape(result.data);
+  const shape = describeShape(result.data);
   const fixture: GoldenFixture = {
     capabilityId: tool.id,
     recordedAt: (opts?.now ?? new Date()).toISOString(),
@@ -327,7 +382,7 @@ export async function recordContract(
 
   if (!tool.response) {
     // Nothing to validate against; the fingerprint is still a real, replayable fact.
-    return { ...base, outcome: "green", detail: "recorded — no response mapping to validate", fingerprint, fixture };
+    return { ...base, outcome: "green", detail: "recorded — no response mapping to validate", fingerprint, shape, fixture };
   }
 
   const mapped = applyResponseMapping(tool, result.data, resources);
@@ -349,9 +404,10 @@ export async function recordContract(
       outcome: "yellow",
       detail: `recorded, degraded: optional field(s) absent — ${(mapped.degraded ?? []).join(", ")}`,
       fingerprint,
+      shape,
       fixture,
       ...(mapped.degraded ? { degraded: mapped.degraded } : {}),
     };
   }
-  return { ...base, outcome: "green", detail: "recorded — mapping OK", fingerprint, fixture };
+  return { ...base, outcome: "green", detail: "recorded — mapping OK", fingerprint, shape, fixture };
 }

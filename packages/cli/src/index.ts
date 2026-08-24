@@ -33,6 +33,8 @@ import { Registry, buildRegistry, serveStdio, runVerify, type HealthStatus } fro
 import { createHttpHandler } from "@archstone/runtime/http";
 import { INIT_USAGE, runInitCmd } from "./init";
 import { runAuditCmd } from "./audit-cmd";
+import { diagnose, formatReport } from "./doctor";
+import { runAdoptCmd } from "./adopt";
 
 /** `archstone --version` is the first thing a human types after installing, and until this
  *  existed it printed the usage block and exited 2 — which reads as "broken install" at the
@@ -61,11 +63,14 @@ function printUsage(opts?: { toStderr?: boolean }): void {
     // `init` is named HERE, in the verb list, and not only in the block below it. It takes a
     // spec file rather than a manifest directory, so it cannot share the first line's shape —
     // which is exactly how it came to be missing from the one line a user actually scans.
-    "usage: archstone <apply|serve|verify|build|init|audit>\n\n" +
+    "usage: archstone <apply|serve|verify|build|doctor|init|adopt|audit>\n\n" +
       "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
       "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
       "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
+      "       archstone doctor <manifest-dir> [--json]  — pre-production checks, offline\n" +
       "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n" +
+      "       archstone adopt <manifest-dir>\n" +
+      "         declare a field the backend started returning; asks before writing, needs a person\n\n" +
       "       archstone audit <file...> [--since <date>] [--format summary|jsonl|csv]\n" +
       "         read your own Execution audit records; nothing is uploaded (audit --help for filters)\n\n" +
       "       archstone --version | --help\n\n" +
@@ -440,6 +445,32 @@ function flagArg(argv: string[], name: string): { value?: string; idx: number } 
   return { value: idx !== -1 ? argv[idx + 1] : undefined, idx };
 }
 
+/**
+ * #102 — A-7 §5's pre-production checklist, run instead of read. Offline by construction: it
+ * compiles the manifest and inspects the IR plus what sits beside it on disk. Nothing is
+ * invoked and no backend is contacted — that is `verify`, and this is the question you ask
+ * before pointing anything at production.
+ */
+function runDoctor(dir: string, json: boolean): void {
+  const res = load(dir);
+  const diags = validateSemantics(res);
+  const errors = diags.filter((d) => d.severity === "error");
+  if (!res.ok || errors.length > 0) {
+    console.error(`archstone doctor ${dir}: manifest invalid — run 'archstone apply ${dir}' for details`);
+    process.exit(1);
+  }
+
+  const ir = compile(res);
+  // Compare drift against what `build` would actually write, which strips `contract` (ADD-43
+  // D-9's strip rule) — comparing against the unstripped IR would report drift on every
+  // manifest that records a fixture, i.e. on every well-configured one.
+  const stripped: IR = { ...ir, tools: ir.tools.map(({ contract: _contract, ...t }) => t) };
+  const report = diagnose(ir, dir, { builtIr: `${JSON.stringify(stripped, null, 2)}\n` });
+
+  console.log(json ? JSON.stringify(report, null, 2) : formatReport(report, dir));
+  process.exit(report.ok ? 0 : 1);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
@@ -493,6 +524,15 @@ async function main(): Promise<void> {
   if (cmd === "build" && dir) {
     runBuild(dir, out.value);
     return;
+  }
+  if (cmd === "doctor" && dir) {
+    runDoctor(dir, json);
+    return;
+  }
+  if (cmd === "adopt") {
+    // Its own parser, and its own module: it is the only verb that WRITES a manifest a human
+    // already owns, so keeping it apart from the read-only verbs above is deliberate.
+    process.exit(await runAdoptCmd(argv));
   }
   if (cmd === "audit") {
     // Own parser, for the same reason `init` has one: this verb's flags outnumber the other
