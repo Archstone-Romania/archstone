@@ -284,6 +284,18 @@ every tier.
 
 ---
 
+## The language
+
+CDL is **1.0 and frozen**: every primitive is Canonical, so a manifest that compiles today
+compiles against every later CDL 1.x. The normative grammar — what each primitive means, what a
+processor MUST and MUST NOT do — is [`docs/cdl-specification.md`](docs/cdl-specification.md);
+the machine contract is [`cdl.schema.json`](packages/schema/schemas/cdl.schema.json). Why the
+grammar looks the way it does — every primitive's justification, and the ones that were rejected
+— is the Rationale, [RFC-0002](docs/rfc/0002-cdl-v0.2.md). Terms are defined in the
+[glossary](docs/glossary.md).
+
+---
+
 ## Identity
 
 Archstone never resolves identity — your host does, and hands over an opaque principal. What to

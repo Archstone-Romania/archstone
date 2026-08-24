@@ -13,7 +13,13 @@ export interface AuditFilter {
   since?: string;
   until?: string;
   capability?: string;
+  /** Exact match. Anonymous invocations are selected with `anonymous`, not with `""` — see
+   *  `applyFilter`. */
   principal?: string;
+  /** Select only invocations that carried no principal at all. The absence of the field is a
+   *  real distinction (ADD-42 D-4: anonymous is not denied, but never privileged), so it gets
+   *  its own selector rather than being spelled as an empty principal. */
+  anonymous?: boolean;
   phase?: string;
 }
 
@@ -64,7 +70,13 @@ export function applyFilter(records: readonly ExecutionRecord[], f: AuditFilter)
     if (f.until && r.metadata.startedAt >= f.until) return false;
     if (f.capability && r.metadata.capabilityId !== f.capability) return false;
     if (f.phase && r.status.phase !== f.phase) return false;
-    if (f.principal !== undefined && (r.spec.principal ?? "") !== f.principal) return false;
+    // Two different questions, deliberately not one. `principal: ""` means "the caller supplied
+    // an empty string as its principal", which is a present-but-empty value and a real thing a
+    // host can do; `anonymous` means the field was absent. Conflating them — the shape this
+    // filter shipped with in v0.12.0 — makes the more common question the harder one to ask,
+    // and makes a plausible typo (`--principal ""`) silently answer the other one.
+    if (f.anonymous && r.spec.principal !== undefined) return false;
+    if (f.principal !== undefined && r.spec.principal !== f.principal) return false;
     return true;
   });
 }

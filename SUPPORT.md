@@ -26,10 +26,10 @@ manifest, and it keeps working with no relationship to us.
 
 | Line | Version | Status |
 |---|---|---|
-| Current | `0.12.x` | ✅ Supported |
-| Maintenance | `0.11.x` | ✅ Security and fail-closed fixes |
+| Current | `0.13.x` | ✅ Supported |
+| Maintenance | `0.12.x` | ✅ Security and fail-closed fixes |
 | LTS | — | None designated yet |
-| End of life | `≤ 0.10.x` | ⛔ |
+| End of life | `≤ 0.11.x` | ⛔ |
 
 ---
 
@@ -49,19 +49,25 @@ get them.
 
 ---
 
-## Pre-1.0, and what is stable anyway
+## Versions: CDL is 1.0, the packages are not
 
-The packages are `0.x`: **a minor release may contain breaking changes**, and each one states
-them in [CHANGELOG.md](CHANGELOG.md).
+**The language you author in is 1.0 and frozen.** Every CDL primitive is Canonical: none will be
+removed or redefined, so a manifest that compiles today compiles against every later CDL 1.x.
+New primitives may be added — that is additive and breaks nothing. This is the guarantee that
+protects your actual investment, because the manifest is your source code and it lives in your
+repository.
 
-Two things are more stable than that number suggests, and they are the two you author against:
+**The packages are `0.x`**, and a minor release may contain breaking changes. Each one states
+them in [CHANGELOG.md](CHANGELOG.md). That is what an LTS line is for: pin a version, receive
+security and fail-closed fixes on it, upgrade when you choose.
 
-- **CDL.** A primitive that ships is permanent — removing or redefining one is a breaking change
-  we do not make. A capability you can express today stays expressible in later versions without
-  new primitives.
-- **Your compiled IR.** `archstone build` writes an artifact you commit to your own repository
-  and rebuild in your own CI. An upgrade that changes it shows up as a diff in your pipeline,
-  before production, not as a surprise after.
+The two version numbers are deliberately independent. Freezing a TypeScript surface this young
+would mean a major version every time an argument name improves; freezing the language costs
+nothing, because its meaning was already committed.
+
+**Your compiled IR** is the third piece: `archstone build` writes an artifact you commit to your
+own repository and rebuild in your own CI, so an upgrade that changes anything agent-visible
+shows up as a diff in your pipeline — before production, not as a surprise after.
 
 ---
 

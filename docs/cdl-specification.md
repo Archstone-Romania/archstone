@@ -1,0 +1,234 @@
+# CDL Specification
+
+**The normative reference for the Capability Definition Language.**
+
+**Project:** Archstone (Capability Platform)
+**Language version:** CDL 1.0 (Canonical)
+**Status:** ✅ Normative — frozen by ADR-0007
+**Date:** 2026-07-14 · CDL 1.0 as of 2026-08-23
+**Machine contract:** [`cdl.schema.json`](../packages/schema/schemas/cdl.schema.json)
+
+> This is the **Reference**: strict grammar and conformance, no argument. It says
+> *what CDL is*. It does **not** justify itself — the justification, the evidence and the
+> rejected alternatives live in the Rationale, [RFC-0002](rfc/0002-cdl-v0.2.md). The split
+> mirrors Rust's *Reference* vs *RFCs*.
+
+> **Names referenced but not linked** — `Rule #N` and `Axiom A-N` are Archstone's internal
+> constitution; `ADR-NNNN` and `RQ-NNN` are its decision and research series (the CDL
+> rationale, RFC-0002, *is* published — see above). They are cited so a claim here can be traced
+> to where it was decided; the rest are not published. Nothing in this specification depends on reading them: what is
+> normative is here, and the compiler enforces exactly this.
+
+---
+
+## 1. Notational conventions
+
+The key words **MUST**, **MUST NOT**, **SHALL**, **SHOULD**, **SHOULD NOT**, and
+**MAY** in this document are to be interpreted as described in RFC 2119. They appear
+**only in normative statements** — surrounding prose is descriptive.
+
+A **processor** is any tool that reads CDL: a validator, the compiler, or the
+runtime registry.
+
+---
+
+## 2. Formal definition
+
+> **A Capability Definition is a declarative description of a business capability,
+> independent of implementation, execution, protocol, and consumer.**
+
+From this, four independence properties follow. A Capability Definition:
+
+- **MUST NOT** contain implementation detail (no REST paths, SQL, HTTP verbs, wire formats). Implementation lives in bindings.
+- **MUST NOT** contain execution detail (no retries, timeouts, transactions, locks, scheduling). Execution is the runtime's concern.
+- **MUST NOT** name an ingress protocol (no MCP, Function Calling). Protocols are generated targets.
+- **MUST NOT** name or assume a specific consumer. A capability is complete without knowing who invokes it.
+
+CDL is a **synchronous, request/response** language: a capability describes one
+bounded invocation with declared inputs and outputs. Asynchronous interaction —
+initiation and streaming — is out of scope for the grammar (see RQ-001, the Model-Breakers study).
+
+---
+
+## 3. The two categories
+
+CDL has exactly two kinds of thing. Conflating them is an error; the distinction is
+load-bearing for the compiler.
+
+| Category | What it is | Examples |
+|---|---|---|
+| **Language primitives** (§4) | the vocabulary that *composes* a capability | `effect`, `failures`, field forms `type`/`ref`/`collection`, `lifecycle`, `policies` |
+| **Manifests** (§5) | deployable *files* that carry declarations | `*.capability.yaml`, `capabilities.yaml`, `*.resource.yaml`, `*.binding.yaml` |
+
+> **Resource splits across the two.** A **Resource Reference** (`ref`) is a *language
+> primitive* (§4.3). A **Resource Definition** (`*.resource.yaml`) is a *manifest*
+> (§5.3) — **not** a grammar primitive. The compiler treats them differently: `ref`
+> is resolved during capability compilation; a Resource Definition is loaded as a
+> named type.
+
+---
+
+## 4. Language primitives
+
+### 4.1 Capability
+
+A Capability Definition **MUST** declare:
+
+- `id` — **MUST** match `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$` (`domain.action`, kebab-case).
+- `description` — **MUST** be a non-empty string.
+- `effect` — **MUST** be one of `read | write | irreversible` (§4.2).
+
+A Capability Definition **MAY** declare `input`, `output`, `failures`, `lifecycle`,
+`policies`, `provider`. It **MUST NOT** declare any other top-level key.
+
+### 4.2 `effect`
+
+`effect` **MUST** be exactly one of:
+
+| Value | Meaning | Processor consequence |
+|---|---|---|
+| `read` | observes; changes no business state | freely repeatable |
+| `write` | changes state; a compensating capability exists in the domain | confirm; retry with care |
+| `irreversible` | changes state with no business-level undo | explicit confirm; **MUST NOT** auto-retry |
+
+Per Axiom A-1, `effect` **MUST** describe the
+reversibility of **invoking** the capability, not of its downstream consequences. A
+processor **MUST NOT** define a fourth value.
+
+### 4.3 Fields and field forms
+
+`input` and `output` are maps of field name → field descriptor. Each field
+descriptor **MUST** use exactly **one** of three forms:
+
+| Form | Syntax | Meaning | Position |
+|---|---|---|---|
+| **Type** | `{ type: <t> }` | a value of semantic type `<t>` (§4.7) or a Resource by representation | input or output |
+| **Reference** | `{ ref: <Resource> }` | a **Resource Reference** — points at a Resource **by identity** | input |
+| **Collection** | `{ collection: <Resource> }` | an ordered set of a Resource | input or output |
+
+Normative:
+
+- A **Resource Reference** (`ref`) **MUST** name a Resource (§5.3) and **MUST NOT**
+  carry any identifier scheme, URL, or backend key — those are binding concerns.
+- `ref` **SHOULD** appear only in `input`; `output` **SHOULD** use `type` or
+  `collection` (a returned representation, not a pointer).
+- A `type` field **MAY** be a semantic type (lowercase, §4.7) or a Resource name
+  (PascalCase). A field descriptor **MUST NOT** combine forms.
+- A field **MAY** declare `required: false`; absent, it defaults to `required: true`.
+
+### 4.4 `failures`
+
+`failures`, if present, **MUST** be a map of kebab-case token → one-line description
+of a **business** failure state.
+
+- Tokens are capability-scoped and **MUST** describe business outcomes (e.g.
+  `insufficient-funds`), **NOT** transport status codes.
+- A processor **MUST NOT** attach severities, numeric codes, or retry hints to a
+  failure token; those are Execution-model concerns.
+- Per-item outcomes of a batch **MUST** be modeled as `output` data, not `failures`.
+
+### 4.5 `lifecycle`
+
+`lifecycle`, if present, **MUST** be one of
+`experimental | beta | stable | deprecated | retired`.
+
+- If absent, a processor **MUST** treat the capability as `stable`.
+- Agent-facing ingress **SHOULD** hide `experimental` and `retired`; **MAY** hide
+  `deprecated` per Policy.
+- `lifecycle` is a business fact. Audience/visibility ("who may call it") **MUST NOT**
+  be expressed here — that is Policy.
+
+### 4.6 `policies` and `provider`
+
+- `policies`, if present, **MUST** be a list of reserved intent tokens
+  (`authenticated`, `rate-limited`, `tenant-scoped`, `human-approval`,
+  `consent-required`). Tokens declare intent; a processor **MUST NOT** read
+  enforcement configuration (thresholds, JWT, IAM) from CDL.
+- `provider`, if present, **MUST** name a backend system whose id appears in the
+  tenant's [`capabilities.yaml`](§5.2) `providers` list.
+
+### 4.7 Semantic types
+
+The set of semantic types (`location`, `date-range`, `money`, `enum`, `date`, …) is
+defined by the **Semantic Type System**, RFC-0005,
+which versions independently of this grammar. A processor **MUST** reject a `type`
+whose name is neither a registered semantic type nor a defined Resource.
+
+---
+
+## 5. Manifests
+
+Manifests are deployable files. They are **not** language primitives.
+
+### 5.1 `*.capability.yaml`
+
+Carries exactly one Capability Definition (§4.1) under a `capability:` root. It
+**MUST NOT** contain binding or connector detail.
+
+### 5.2 `capabilities.yaml`
+
+The tenant's iconic catalog. It **MUST** declare `company`, `capabilities` (a list of
+`id`s), and `providers`. Every `id` listed **MUST** resolve to a `*.capability.yaml`
+in the same manifest set.
+
+### 5.3 `*.resource.yaml` — Resource Definition
+
+A **Resource Definition** is a manifest, **not** a language primitive. It **MUST**
+declare:
+
+- `name` — domain-qualified (`domain.Name`, PascalCase name part); the bare name
+  **MAY** be used as shorthand within files of the same domain.
+- `fields` — a field map using the §4.3 grammar.
+
+A Resource Definition **MUST NOT** declare `states` or `transitions`. Resource state
+is modeled as a `fields` entry (a status field of an `enum` type, timestamps of
+`date` type); the state machine is **derived** from capabilities, never authored
+(see RQ-002).
+
+### 5.4 `*.binding.yaml`
+
+Carries connector/implementation detail for one capability. Bindings are **outside
+CDL**; a CDL processor **MUST** validate a capability without reference to any
+binding.
+
+---
+
+## 6. Conformance
+
+- A **conforming CDL document** satisfies every **MUST** in §4–§5 and validates
+  against [`cdl.schema.json`](../packages/schema/schemas/cdl.schema.json).
+- A **conforming processor**:
+  - **MUST** reject any document violating a **MUST**.
+  - **MUST** preserve `id` as a stable contract across compilations.
+  - **SHALL** generate ingress and developer targets (MCP, JSON Schema, …) from the
+    document alone, without human-authored per-target files.
+  - **MUST NOT** require any information a Capability Definition is forbidden to carry
+    (§2) in order to validate it.
+
+---
+
+## 7. Status of primitives
+
+**Every primitive in this document is Canonical** (Rule #11,
+ADR-0007, 2026-08-23): frozen in
+meaning, and neither removable nor redefinable. A manifest that compiles against CDL 1.0
+compiles against every later 1.x.
+
+They were held at Experimental until the compiler and real manifests exercised them. The
+compiler enforces all of them and a production deployment exercises most; the remainder are
+exercised by the compiler's own suite and the example manifests. ADR-0007 records why those
+graduate too — what freezes is *meaning*, not *usage*, and a two-tier grammar would leave a
+reader unable to tell which half of a normative document they may rely on.
+
+**Additions remain possible and are not breaking.** A new primitive earns its place under
+Rule #10 or it does not enter; either way an existing manifest is
+unaffected, which is why RQ-001 and
+RQ-002 can stay open across a 1.0.
+
+The **semantic type system versions independently** of this grammar (§4.7) and is not frozen by
+1.0. This document tracks the **normative** grammar at each version; the
+the Rationale RFC tracks *why* each primitive exists.
+
+---
+
+*CDL Specification · v1.0 · normative reference · the grammar, without the argument*

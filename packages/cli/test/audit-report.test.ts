@@ -74,10 +74,17 @@ describe("applyFilter", () => {
     expect(applyFilter(records, { phase: "denied" })).toHaveLength(1);
   });
 
-  it("treats --principal '' as anonymous, which is a real question an auditor asks", () => {
-    const mixed = [rec({ principal: "user:alice" }), rec()];
+  it("separates 'no principal' from 'the principal was an empty string'", () => {
+    const mixed = [rec({ principal: "user:alice" }), rec({ principal: "" }), rec()];
+
     expect(applyFilter(mixed, { principal: "user:alice" })).toHaveLength(1);
+    // `anonymous` is the absence of the field — ADD-42 D-4 makes that a real distinction.
+    expect(applyFilter(mixed, { anonymous: true })).toHaveLength(1);
+    // …and an empty-string principal is a present value a host can legitimately supply, so it
+    // is NOT anonymous. Conflating the two (the v0.12.0 shape) answered the wrong question for
+    // anyone who typed `--principal ""` meaning "no principal".
     expect(applyFilter(mixed, { principal: "" })).toHaveLength(1);
+    expect(applyFilter(mixed, { anonymous: true })[0].spec.principal).toBeUndefined();
   });
 });
 

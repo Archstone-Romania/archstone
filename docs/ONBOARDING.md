@@ -772,8 +772,9 @@ archstone audit audit.log --principal user:alice --phase denied --format jsonl
 ```
 
 `--since` is inclusive and `--until` exclusive, so adjacent ranges tile without counting a
-boundary record twice. `--principal ''` selects anonymous invocations — the absence of the field
-is a real distinction (ADD-42 D-4), not a missing value. Unreadable lines are reported, never
+boundary record twice. `--anonymous` selects invocations that carried no principal at all — the
+absence of the field is a real distinction (ADD-42 D-4), not a missing value, and it is not the
+same as `--principal ''`, which would mean the host supplied an empty string. Unreadable lines are reported, never
 skipped silently: in an audit trail that is either corruption or a record from a newer writer,
 and both are your business.
 

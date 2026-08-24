@@ -40,7 +40,8 @@ export function printAuditUsage(): void {
       "  --since <date>       inclusive lower bound on startedAt (date or ISO timestamp)\n" +
       "  --until <date>       exclusive upper bound — so adjacent ranges tile without overlap\n" +
       "  --capability <id>    exact CDL capability id, e.g. framing.estimate-frame-price\n" +
-      "  --principal <p>      exact principal; use '' for anonymous invocations\n" +
+      "  --principal <p>      exact principal, e.g. user:alice\n" +
+      "  --anonymous          only invocations that carried no principal at all\n" +
       "  --phase <p>          succeeded | failed | denied\n" +
       "  --format <f>         summary (default) · jsonl (filtered passthrough) · csv (spreadsheet)\n" +
       "\n" +
@@ -72,8 +73,25 @@ export function runAuditCmd(argv: string[]): number {
     until: isoOrExit(flag(argv, "--until"), "--until"),
     capability: flag(argv, "--capability"),
     principal: argv.includes("--principal") ? (flag(argv, "--principal") ?? "") : undefined,
+    anonymous: argv.includes("--anonymous"),
     phase: flag(argv, "--phase"),
   };
+
+  // An empty `--principal` used to be how anonymous invocations were selected (v0.12.0). It
+  // reads like a mistake in a shell, and it is indistinguishable from one — so it is now an
+  // error that names the right flag rather than a subtlety that quietly answers a different
+  // question than the operator asked.
+  if (filter.principal === "") {
+    console.error(
+      "archstone audit: --principal '' is not how you select anonymous invocations — use --anonymous.\n" +
+        "  (An empty principal would mean the host supplied the empty string, which is a different thing.)",
+    );
+    return 2;
+  }
+  if (filter.anonymous && filter.principal !== undefined) {
+    console.error("archstone audit: --anonymous and --principal are mutually exclusive — a call is one or the other.");
+    return 2;
+  }
 
   const records = [];
   let skipped = 0;

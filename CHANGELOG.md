@@ -5,6 +5,49 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.13.0]
+
+Minor. **CDL is 1.0** — the language you author in is frozen, while the packages stay pre-1.0 and
+version independently. The specification, its rationale and the glossary are published, so the
+freeze is a commitment a reader can check rather than a claim. One breaking CLI change, corrected
+a day after it shipped.
+
+### Added
+
+- **RFC-0002 (the CDL rationale) and the glossary are published**, alongside the specification.
+  The spec states the grammar; the RFC argues why each primitive exists and records the ones that
+  were rejected — a reader evaluating a frozen language wants the second as much as the first,
+  and the Rust split the documents already claimed only works if both halves are readable.
+  Citations of internal series are de-linked with a note, per the same rule the specification
+  follows.
+
+- **The CDL specification is published** — `docs/cdl-specification.md`, the normative grammar:
+  what each primitive means, and what a processor MUST and MUST NOT do with it. It was internal
+  until now, which made "CDL is 1.0 and frozen" a claim a reader could not check; the
+  specification contains no strategy, only grammar, so there was nothing to withhold but the
+  ability to edit it quietly. Its citations of internal series (`Rule #N`, `RFC-NNNN`) are
+  de-linked with a note explaining what they are — a public document must not link into a
+  private repository, but a claim should still be traceable to where it was decided.
+
+- **CDL is 1.0.** Every primitive in the language is now Canonical — frozen in meaning, and
+  neither removable nor redefinable — so a manifest that compiles today compiles against every
+  later CDL 1.x. Additions stay possible and break nothing. The packages remain `0.x` and
+  version independently, which is not a contradiction but the point: the language is what you
+  author and what lives in your repository, while the TypeScript surface is young enough that
+  freezing it would mean a major version every time an argument name improves. `SUPPORT.md`
+  states both, and what to do about the second (pin a line).
+
+### Changed
+
+- **`archstone audit` selects anonymous invocations with `--anonymous`, not `--principal ''`.**
+  The v0.12.0 shape spelled "no principal at all" as an empty principal, which reads like a typo
+  in a shell and is indistinguishable from one — and it collapsed two genuinely different
+  questions, since a host *can* supply an empty string and that is a present value, not an
+  absent one. `--principal ''` is now a refusal that names the right flag rather than a
+  subtlety that quietly answers the other question; `--anonymous` and `--principal` are mutually
+  exclusive. Breaking for anyone who adopted the flag within a day of its release, which is why
+  it is being corrected now rather than left to harden.
+
 ## [0.12.0]
 
 Minor. Two gaps a self-hosted deployment hits first — a rate limiter that only worked in one
