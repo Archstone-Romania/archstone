@@ -9,6 +9,42 @@
 // sanitizer, since its function-calling Schema object is NOT full JSON Schema — see
 // sanitizeGeminiSchema below.
 
+// #126 — `effect` and these envelopes: why nothing is emitted here.
+//
+// `@archstone/runtime`'s MCP emitter now lowers a capability's `effect` into MCP tool
+// annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`, server.ts's
+// `effectAnnotations`), because an MCP client is REMOTE and can act only on what crosses the
+// wire. #126 asks for "the equivalent where the target format has one". Each of the four
+// formats below was checked against its live reference before concluding, and none has one:
+//
+//   anthropic    The Messages API tool definition takes `name`/`description`/`input_schema`
+//                plus exactly six optional properties — `cache_control`, `strict`,
+//                `defer_loading`, `allowed_callers`, `input_examples`,
+//                `eager_input_streaming` (platform.claude.com "Tool reference" §Tool
+//                definition properties, checked 2026-08-25). None annotates side effects.
+//   openai       A function tool is `{type, name, description, parameters, strict}`
+//                (developers.openai.com function-calling guide, checked 2026-08-25). Read-only
+//                and destructive hints appear in OpenAI's docs ONLY when describing MCP
+//                servers/connectors — i.e. they are MCP's annotations, reached through MCP,
+//                not a native field of this envelope. Do not be misled by a search result
+//                that says otherwise; that conflation is exactly why this was read at source.
+//   gemini       `FunctionDeclaration` does carry a `behavior` field, and it is NOT an
+//                equivalent: its values are BLOCKING/NON_BLOCKING and they control whether the
+//                model waits for the tool response in the Live API — an async-execution
+//                concern, not a side-effect annotation (checked 2026-08-25). Mapping
+//                `irreversible` onto it would be a category error dressed as a feature.
+//   json-schema  Archstone's own neutral envelope, so nothing stops us adding a field — which
+//                is precisely why we don't. This consumer is IN-PROCESS and already holds
+//                `archstone.registry`; `effect` is one property lookup away on the IR and was
+//                never withheld from them. The asymmetry that makes #126 a bug for MCP simply
+//                does not exist here, and widening a published type to restate a fact the
+//                caller can already read would be an unratified API change, not a fix.
+//
+// So: no invention, in either direction — `tools()` gains no field, and no format gets a
+// hand-rolled stand-in. `test/tools.test.ts` pins each envelope's exact key set so that a
+// future contributor adding one has to change a test that says why it is absent. Revisit per
+// format, against that format's live reference, if a provider ships a real equivalent.
+
 import { Registry, inputJsonSchema } from "@archstone/emitter-support";
 
 type JsonSchema = Record<string, unknown>;

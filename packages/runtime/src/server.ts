@@ -11,7 +11,13 @@
 // file, so a consumer depending on that subpath alone stays fs-free.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolResult,
+  type ToolAnnotations,
+} from "@modelcontextprotocol/sdk/types.js";
+import type { IRTool } from "@archstone/compiler";
 import {
   Registry,
   inputJsonSchema,
@@ -32,11 +38,106 @@ import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 
 type JsonSchema = Record<string, unknown>;
 
+/**
+ * #126: the subset of MCP's `ToolAnnotations` this emitter is entitled to populate from CDL.
+ *
+ * Derived from the SDK's own `ToolAnnotations` via `Pick` rather than re-declared, so the three
+ * field names are checked against the installed SDK at compile time instead of being trusted to
+ * a comment. Confirmed present on the tool definition at the version `^1.12.0` resolves to
+ * (1.30.0): `ToolSchema.annotations` is `ToolAnnotationsSchema.optional()`, and that schema
+ * declares `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`.
+ *
+ * The two members deliberately NOT picked, because no CDL field means them:
+ *  - `openWorldHint` — whether the tool's domain of interaction is open or closed. Archstone
+ *    knows a capability's `effect`, never the shape of the world behind its connector. A guess
+ *    here would be indistinguishable, to a client, from a fact.
+ *  - `title` — a display concern with no CDL source; `description` already carries the
+ *    business-authored text (plus any exposure hint, ADD-24).
+ */
+export type McpToolAnnotations = Pick<ToolAnnotations, "readOnlyHint" | "destructiveHint" | "idempotentHint">;
+
+/**
+ * #126: lower a capability's `effect` — the one field `archstone init` refuses to guess and
+ * insists a human confirm — into MCP tool annotations, so the client's tool-confirmation dialog
+ * can tell `tourism.search` from a capability that charges a card. Before this, `effect` was
+ * compiled, carried through the IR, and dropped here: `McpToolDef` had no field for it and
+ * `toolDefinitions` never read it, so the ONLY human-in-the-loop mechanism that exists today
+ * (`human-approval` is declared and unenforced — `apply` says so) decided blind.
+ *
+ * The mapping, exactly and only:
+ *   read         → readOnlyHint: true
+ *   irreversible → destructiveHint: true,  idempotentHint: false
+ *   write        → destructiveHint: false
+ *
+ * `write`'s single `false` is not a no-op: per the SDK's own schema docs, `destructiveHint`
+ * DEFAULTS TO TRUE when absent, so stating it is the only thing that keeps a `write` from
+ * reaching the client indistinguishable from an `irreversible`. Conversely `read` needs no
+ * `destructiveHint` — the same docs describe that field as meaningful only when `readOnlyHint`
+ * is false.
+ *
+ * The seam in this mapping, named rather than papered over: MCP describes
+ * `destructiveHint: false` as a tool whose updates are purely additive, whereas CDL's `write`
+ * means "modifies, reversibly" — `examples/manifests/booking`'s `tourism.cancel` is an
+ * `effect: write` and is plainly not additive. The two vocabularies are adjacent, not
+ * identical, and #126 ratified this pairing as the closest available fit, not a perfect one.
+ * Read `destructiveHint: false` here as *not irreversible*, the distinction CDL actually draws.
+ * Do not "improve" this into a finer per-capability judgement: CDL has no additivity primitive,
+ * so anything more specific would be invented rather than derived — the same reasoning that
+ * keeps `openWorldHint` off the list above.
+ *
+ * **This is a hint, not a control.** Nothing in Archstone gates, refuses, or retries on the
+ * value — deliberately (#126, Not in scope). MCP's own spec says as much of every annotation,
+ * and a client is free to ignore all of it.
+ *
+ * WHY THIS LIVES HERE AND NOT IN @archstone/emitter-support. CLAUDE.md puts lowering that is
+ * *shared* between emitters in emitter-support; `readOnlyHint`/`destructiveHint`/
+ * `idempotentHint` are MCP-protocol vocabulary with, as of this increment, exactly one
+ * consumer. Every target format `@archstone/agent`'s `tools()` emits was checked against its
+ * live reference before this call was made — the field lists, references and dates are in
+ * `packages/agent/src/tools.ts`'s header comment, pinned by `packages/agent/test/tools.test.ts`
+ * — and NONE has an equivalent field, so there is nothing to share. Note that `effect` itself
+ * still reaches every `@archstone/agent` consumer: they hold the Registry and read it off the
+ * IR directly, which is exactly why nothing needed inventing there. `exposure.ts` — the neutral
+ * presentation module, and the obvious tempting
+ * home — states the rule this follows verbatim: "MCP-specific rendering ... belongs only in
+ * @archstone/runtime's server.ts, never here." Move it to emitter-support the day a second
+ * emitter needs it, and not before: re-encoding `read|write|irreversible` into some other
+ * neutral vocabulary one layer down would add a translation with no second reader, when the IR
+ * already carries the fact in the neutral vocabulary that matters.
+ *
+ * TOTAL, on purpose — same trust boundary and same reasoning as `lifecycleExposure`'s
+ * `default` branch (ADD-56 D-1). `effect`'s static type is a closed three-member union, but the
+ * value reaches this function un-runtime-validated whenever the Registry was built by
+ * `fromIR`'s `json as IR` cast (`agent/src/index.ts`, which validates only `version === "0"`)
+ * and served through `mcpHandler` → `createHttpHandler` → `createMcpServer` → here. A
+ * hand-written or forward-versioned artifact can carry any string. That case returns
+ * `undefined` — NO annotations at all — rather than any positive claim, so the client falls
+ * back to MCP's own documented defaults (`readOnlyHint: false`, `destructiveHint: true`), which
+ * are the cautious reading. The one outcome that must never be reachable from an unrecognized
+ * value is `readOnlyHint: true`, and returning nothing is the only answer that guarantees it.
+ */
+export function effectAnnotations(effect: IRTool["effect"]): McpToolAnnotations | undefined {
+  switch (effect) {
+    case "read":
+      return { readOnlyHint: true };
+    case "irreversible":
+      return { destructiveHint: true, idempotentHint: false };
+    case "write":
+      return { destructiveHint: false };
+    default:
+      // Unrecognized `effect` across the `fromIR` trust boundary — claim nothing. See above.
+      return undefined;
+  }
+}
+
 export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
+  /** #126: derived from the capability's `effect` — see `effectAnnotations`. Absent only when
+   *  `effect` is a value this build does not recognize (possible solely via `fromIR`). */
+  annotations?: McpToolAnnotations;
 }
 
 /** The MCP tool list: only invocable (bound) capabilities become tools — Registry's
@@ -51,7 +152,13 @@ export interface McpToolDef {
  *  list entirely — unlisted, per D-10, though `experimental` remains callable by id (see
  *  `callTool`). A tool carrying a `hint` (beta/deprecated, or a yellow/red health reading) has
  *  its text appended to `description` — the only MCP-specific rendering of the neutral
- *  exposure the emitter-support layer computed. */
+ *  exposure the emitter-support layer computed.
+ *
+ *  #126: every listed tool also carries `annotations` derived from its `effect`
+ *  (`effectAnnotations`), so the client's confirmation dialog stops treating a search and a
+ *  payment identically. Both transports reach this one function — stdio via `serveStdio`'s
+ *  `createMcpServer`, HTTP via `createHttpHandler`'s — so there is no second place to keep in
+ *  step. */
 export function toolDefinitions(registry: Registry): McpToolDef[] {
   const resources = registry.ir.resources;
   return registry
@@ -65,6 +172,8 @@ export function toolDefinitions(registry: Registry): McpToolDef[] {
         inputSchema: inputJsonSchema(t.input, resources),
       };
       if (t.output.length > 0) def.outputSchema = objectJsonSchema(t.output, resources);
+      const annotations = effectAnnotations(t.effect);
+      if (annotations) def.annotations = annotations;
       return def;
     });
 }

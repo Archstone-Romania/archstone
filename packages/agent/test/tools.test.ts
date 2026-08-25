@@ -196,3 +196,108 @@ describe("#55: tools()/buildToolDefs honour capability exposure/lifecycle (ADD-2
     }
   });
 });
+
+// #126 — the effect SURFACE test. The MCP emitter now lowers `effect` into MCP tool
+// annotations (runtime/src/server.ts `effectAnnotations`); #126 asks for "the equivalent where
+// the target format has one", and none of these four has one. Each was checked at source
+// before concluding — see the header comment in `packages/agent/src/tools.ts` for the exact
+// field lists, the references and the dates:
+//
+//   anthropic   six optional properties, none about side effects
+//   openai      {type, name, description, parameters, strict}; readOnly/destructive hints
+//               appear in OpenAI's docs only when describing MCP servers, not this envelope
+//   gemini      has `behavior`, but it is BLOCKING/NON_BLOCKING — async execution in the Live
+//               API, not a side-effect annotation
+//   json-schema our own neutral envelope; this consumer is in-process and already holds
+//               `archstone.registry`, so `effect` was never withheld from it
+//
+// These assertions exist so "we emit nothing" is a recorded decision rather than an omission a
+// later reader mistakes for an oversight: adding a field means changing a test that says why it
+// is absent. This is the same instinct as audit-surface.test.ts / onresponse-surface.test.ts —
+// pin the deliberate absence, not just the presence.
+describe("#126 — no agent target format has an effect equivalent, so none is invented", () => {
+  let dir: string;
+  let archstone: ReturnType<typeof fromIR>;
+  const EFFECTS = ["read", "write", "irreversible"] as const;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "archstone-agent-effect-"));
+    writeFileSync(
+      join(dir, "capabilities.yaml"),
+      ["company:", "  id: demo", "capabilities:", ...EFFECTS.map((e) => `  - demo.${e}`), "providers:", "  - acme", ""].join("\n"),
+    );
+    mkdirSync(join(dir, "bindings"));
+    for (const e of EFFECTS) {
+      writeFileSync(
+        join(dir, `demo.${e}.capability.yaml`),
+        [
+          "capability:",
+          `  id: demo.${e}`,
+          `  description: A ${e} capability.`,
+          `  effect: ${e}`,
+          "  provider: acme",
+          "  output:",
+          "    value:",
+          "      type: string",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(dir, "bindings", `demo.${e}.binding.yaml`),
+        [
+          "binding:",
+          `  capabilityId: demo.${e}`,
+          "  connector:",
+          "    type: rest",
+          "    rest:",
+          '      baseUrl: "${DEMO_API_URL}"',
+          `      method: ${e === "read" ? "GET" : "POST"}`,
+          "      path: /x",
+          "",
+        ].join("\n"),
+      );
+    }
+    const built = buildRegistry(dir);
+    if (!built.ok || !built.registry) {
+      throw new Error(`fixture manifest failed to build: ${JSON.stringify(built.diagnostics)}`);
+    }
+    archstone = fromIR(JSON.parse(JSON.stringify(built.registry.ir)));
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Exact key sets, unchanged by #126 — asserted with `.sort()` equality, not `toHaveProperty`,
+   *  so an ADDED key fails just as loudly as a missing one. */
+  const EXPECTED_KEYS: Record<string, string[]> = {
+    anthropic: ["description", "input_schema", "name"],
+    openai: ["function", "type"],
+    gemini: ["description", "name", "parameters"],
+    "json-schema": ["description", "name", "schema"],
+  };
+
+  it.each(EFFECTS)("effect: %s changes no envelope's key set in any format", (effect) => {
+    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+      const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
+      const def = defs.find((d) => (d.name ?? d.function?.name) === `demo_${effect}`)!;
+      expect(def, `demo_${effect} must be listed in ${format}`).toBeDefined();
+      expect(Object.keys(def).sort(), `${format} envelope for effect: ${effect}`).toEqual(EXPECTED_KEYS[format]);
+    }
+    // OpenAI's inner function object, the one place a native field could plausibly have gone.
+    const openai = archstone.tools("openai") as OpenAIToolDef[];
+    const fn = openai.find((d) => d.function.name === `demo_${effect}`)!.function;
+    expect(Object.keys(fn).sort()).toEqual(["description", "name", "parameters"]);
+  });
+
+  it("no format leaks an MCP annotation key or a raw `effect` field onto a tool definition", () => {
+    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+      const serialized = JSON.stringify(archstone.tools(format));
+      // "effect" is safe to grep for here: this fixture's descriptions are "A <effect>
+      // capability." and never contain the word itself.
+      for (const forbidden of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint", "effect"]) {
+        expect(serialized, `${format} must not carry ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+});

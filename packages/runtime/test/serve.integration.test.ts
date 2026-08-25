@@ -49,7 +49,15 @@ describe("#20 S-US3.1: MCP tool listing is unaffected by binding health status",
       expect(tools.map((t) => t.name)).toEqual(["tourism_search"]);
       expect((tools[0].inputSchema as { type: string }).type).toBe("object");
       // No caution hint / health annotation of any kind on the listed tool (BR-6, D-5).
-      expect(Object.keys(tools[0]).sort()).toEqual(["description", "inputSchema", "name", "outputSchema"]);
+      //
+      // #126 added `annotations` to the tool definition, so the key set this assertion has
+      // always pinned grew by one. Restated rather than merely widened, because the property
+      // under test is "health does not reach the listing" and a looser assertion would stop
+      // proving it: `annotations` is asserted to be EXACTLY the mapping of tourism.search's
+      // `effect: read`, a compile-time fact that cannot vary with backend reachability. A
+      // health reading leaking in — as an extra hint key, or by flipping this one — fails here.
+      expect(Object.keys(tools[0]).sort()).toEqual(["annotations", "description", "inputSchema", "name", "outputSchema"]);
+      expect(tools[0].annotations).toEqual({ readOnlyHint: true });
     } finally {
       await client.close();
     }

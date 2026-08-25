@@ -5,6 +5,38 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.16.0]
+
+Minor. `effect` reached the IR at compile time — `archstone init` refuses to write a manifest
+without a human-confirmed one, on the grounds that a wrong `effect` costs your business months
+later, through an agent, in front of a customer — and the MCP emitter dropped it: `McpToolDef`
+had no field for it, and `toolDefinitions()` never read `t.effect` though it sat in scope one
+line above. The client's own tool-confirmation dialog — the only human-in-the-loop control that
+actually exists today, since `human-approval` is declared and unenforced — was deciding blind,
+unable to tell `tourism.search` from a capability that charges a card.
+
+### Added
+
+- **`tools/list` carries MCP's own `ToolAnnotations`, derived from `effect`, on stdio and HTTP
+  alike (#126).** `read` → `readOnlyHint: true`; `write` → `destructiveHint: false`;
+  `irreversible` → `destructiveHint: true, idempotentHint: false`. `write`'s lone `false` is
+  load-bearing, not redundant: MCP treats an absent `destructiveHint` as `true`, so without it a
+  reversible `write` would read exactly like an `irreversible`. Nothing else is emitted — no
+  `openWorldHint`, no `title` — because Archstone knows a capability's effect, not the shape of
+  the world behind its connector, and a guess there is indistinguishable to a client from a fact.
+  An unrecognized `effect` emits no annotations at all, leaving the client on MCP's own (cautious)
+  defaults, rather than ever risking `readOnlyHint: true` on a value we do not recognize.
+
+  This is additive and changes no behaviour: Archstone does not gate, refuse or retry on
+  `effect`. An annotation is a hint a client may honour or ignore — exactly as true as your
+  manifest, and never enforced by Archstone — documented as such in ONBOARDING.
+
+  `@archstone/agent`'s `tools()` is deliberately unchanged: none of its four target formats has
+  an equivalent field. Anthropic's tool definition carries only loading/validation options;
+  OpenAI's function tool is `{type, name, description, parameters, strict}`; Gemini's `behavior`
+  is `BLOCKING`/`NON_BLOCKING` for Live API response-waiting, not a side-effect signal, so mapping
+  `irreversible` onto it would be a category error. Nothing was invented to fill the gap.
+
 ## [0.15.0]
 
 Minor. Two P0 correctness fixes that are one bug seen from two commands (#124, #125,

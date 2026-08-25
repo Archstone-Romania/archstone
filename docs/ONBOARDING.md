@@ -315,6 +315,52 @@ bindings use in the `env` block, and restart — the tool (e.g. `tourism_search`
 the agent can call it. A complete, copy-pasteable Claude Desktop walkthrough lives in
 [`examples/demo/README.md`](../examples/demo/README.md).
 
+#### What the client is told about risk
+
+The `effect` you confirmed in Step 2 does not stop at the compiler. Every tool in `tools/list`
+carries **MCP tool annotations** derived from it — identically over stdio and over HTTP:
+
+| `effect` | annotations emitted |
+| --- | --- |
+| `read` | `readOnlyHint: true` |
+| `write` | `destructiveHint: false` |
+| `irreversible` | `destructiveHint: true`, `idempotentHint: false` |
+
+`write`'s lone `false` is doing real work: MCP treats an **absent** `destructiveHint` as
+**true**, so stating it is the only thing that stops a `write` reaching the client
+indistinguishable from an `irreversible`. It is also the loosest of the three pairings, and
+worth reading precisely: MCP describes `destructiveHint: false` as a tool whose updates are
+purely additive, while CDL's `write` means *modifies, reversibly* — `tourism.cancel` is a
+`write` and is plainly not additive. Take `destructiveHint: false` to mean **not irreversible**,
+which is the distinction CDL actually draws, and nothing finer.
+
+Nothing else is emitted — no `openWorldHint`, no `title`. Archstone knows a capability's effect;
+it does not know the shape of the world behind your connector, and a guess there would be
+indistinguishable, to a client, from a fact.
+
+**What you can rely on, precisely:**
+
+- **The value crosses the wire, faithfully and unconditionally.** Whatever `effect` you
+  declared is what the client is told, for every listed tool, on both transports.
+- **That is the entire guarantee.** An annotation is a *hint*. The client may honour it,
+  weaken it, or ignore it — MCP itself tells clients not to base tool-use decisions on
+  annotations from servers they do not trust, and plenty of clients surface none of this at
+  all. Archstone does not gate, refuse, delay, or retry anything on `effect`; it discloses,
+  it does not enforce. If you need a capability to require approval, an annotation is not the
+  mechanism, and today Archstone has no other: `policies: [human-approval]` is accepted and
+  **unenforced**, which `archstone apply` warns you about by name.
+- **It is exactly as true as your manifest.** The annotation is a faithful lowering of what
+  you wrote, not an audit of what your backend does. A `POST /charges` declared `effect: read`
+  is advertised as read-only, and nothing in the pipeline can tell. This is why `archstone
+  init` refuses to guess an `effect` and makes you confirm each one.
+- **MCP only.** `@archstone/agent`'s `tools()` emits no equivalent, because none of the
+  Anthropic, OpenAI, Gemini or plain-JSON-Schema tool formats has a field that means this. See
+  [Generate typed tool definitions](#generate-typed-tool-definitions).
+
+What it buys you: a client that *does* surface annotations can tell `tourism.search` from
+`banking.initiate-transfer` before it puts a confirmation dialog in front of a human. Before
+this, that dialog saw the two as identical.
+
 ### Step 7 — Make it reachable (deploy)
 
 `archstone serve` runs on your machine, over stdio. That is the whole story for Claude Desktop
@@ -1017,6 +1063,14 @@ const jsonSchemaTools = archstone.tools("json-schema"); // Plain JSON Schema
 Each tool includes a `name`, a `description` (as the AI agent sees it), and an `inputSchema`
 (from the semantic types defined in your CDL). The agent can discover and reason about them —
 no hand-written tool definitions.
+
+**No `effect` annotation here, deliberately.** The MCP emitter lowers `effect` into MCP tool
+annotations ([What the client is told about risk](#what-the-client-is-told-about-risk)); none
+of these four formats has a field that means the same thing, so none is invented — a
+side-effect hint spelled into a field that means something else would be worse than silence.
+You are not missing anything, either: unlike a remote MCP client, you are in-process and hold
+the registry, so the value is one lookup away —
+`archstone.registry.getCapability("tourism.search")?.effect`.
 
 ### Invoke capabilities with fail-closed semantics
 
