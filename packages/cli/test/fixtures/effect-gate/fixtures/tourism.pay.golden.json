@@ -1,0 +1,8 @@
+{
+  "capabilityId": "tourism.pay",
+  "recordedAt": "2026-08-25T00:00:00Z",
+  "request": {
+    "booking": "BK-1001",
+    "amount": { "amount": 472, "currency": "EUR" }
+  }
+}

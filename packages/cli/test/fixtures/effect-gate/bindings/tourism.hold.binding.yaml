@@ -1,0 +1,21 @@
+# A `write` capability that records a contract — the exact manifest shape #124 is about.
+#
+# The fingerprint is deliberately unmatchable (`sha256:dead…`), so the test never has to keep a
+# real hash in sync: a bare `archstone verify` must never reach the backend at all, and under
+# `--sandbox` the request IS issued and the mismatch is reported as drift (yellow, not red — so
+# the flag's own test does not depend on an exit code changing).
+binding:
+  capabilityId: tourism.hold
+  connector:
+    type: rest
+    rest:
+      baseUrl: "${STAYS_API_URL}"
+      method: POST
+      path: /v1/holds
+
+  contract:
+    source: recorded
+    fingerprint: "sha256:deaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead"
+    verifiedAt: "2026-08-25T00:00:00Z"
+    probe:
+      fixture: fixtures/tourism.hold.golden.json

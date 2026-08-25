@@ -13,7 +13,9 @@
 // verify: replay each bound capability's golden fixture against the LIVE backend
 //         and report a per-binding health status (ADD-18). The only command that
 //         makes a network call outside a real MCP invocation — on demand, never
-//         scheduled by Archstone itself (wire it into your own CI/cron).
+//         scheduled by Archstone itself (wire it into your own CI/cron). A replay IS an
+//         invocation, so a `write`/`irreversible` binding is skipped by default and
+//         re-included only by `--sandbox`, an assertion the operator makes (#124).
 // build: run the same compile pipeline as `apply`, strip each tool's `contract`
 //        (D-8 — the fingerprint/golden-fixture path is meaningless once the fixture
 //        file isn't shipping), and write the IR as a standalone JSON artifact —
@@ -65,6 +67,9 @@ function printUsage(opts?: { toStderr?: boolean }): void {
     // which is exactly how it came to be missing from the one line a user actually scans.
     "usage: archstone <apply|serve|verify|build|doctor|init|adopt|audit>\n\n" +
       "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
+      "       archstone verify <manifest-dir> [--json] [--sandbox]\n" +
+      "         --sandbox: also replay `write`/`irreversible` fixtures — they are skipped by default,\n" +
+      "         because a replay is a real invocation. Only for a backend you know is a sandbox tenant.\n" +
       "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
       "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
       "       archstone doctor <manifest-dir> [--json]  — pre-production checks, offline\n" +
@@ -401,7 +406,28 @@ async function handleHttpRequest(
 
 const HEALTH_ICON: Record<HealthStatus, string> = { green: "🟢", yellow: "🟡", red: "🔴" };
 
-async function runVerifyCmd(dir: string, json: boolean): Promise<void> {
+/** #124: deliberately NOT one of `HEALTH_ICON`'s three. A skipped binding was never inspected,
+ *  so it must not be scannable as a colour — no colour is earned (ADD-124 D-2). */
+const SKIP_ICON = "⏭";
+
+/**
+ * #124 / ADD-124 D-13 — printed once, only when something was skipped, and only to a human.
+ *
+ * It names the PATTERN and never a capability id: nothing in CDL or the IR links a `write`
+ * capability to its `read` counterpart (`examples/manifests/bank`'s
+ * `initiate-transfer`/`quote-transfer` pair is naming convention, not a declared relationship),
+ * so guessing one would sometimes name the wrong capability with the same confidence as the
+ * right one — worse than naming none (D-11). Same hedge as `doctor.ts`'s `no-contract-non-read`
+ * advisory ("Not every write has one…") — these two must not drift apart.
+ */
+const READ_TWIN_TIP =
+  "  Where one of these has a `read` capability against the same backend — the quote half of a\n" +
+  "  quote → commit pair — verifying that instead hits the same host, auth and serialization,\n" +
+  "  catching most infrastructure and schema drift at zero risk. Not every write has one, and\n" +
+  "  Archstone cannot tell you which capability it is: nothing in CDL declares that relationship.\n" +
+  "  If this backend really is a sandbox tenant, pass --sandbox.";
+
+async function runVerifyCmd(dir: string, json: boolean, sandbox: boolean): Promise<void> {
   const res = load(dir);
   const diags = validateSemantics(res);
   const errors = diags.filter((d) => d.severity === "error");
@@ -418,24 +444,50 @@ async function runVerifyCmd(dir: string, json: boolean): Promise<void> {
   }
 
   const registry = new Registry(compile(res));
-  const reports = await runVerify(registry.listCapabilities(), dir, registry.ir.resources);
+  // Two literal call sites rather than one with a computed 5th argument (#124 / ADD-124 D-3).
+  // The DEFAULT path — what CI and every non-sandbox operator runs — stays the exact
+  // three-argument form the two CLI surface tests pin: no `InvokeOptions` bag at all, so no
+  // audit sink and no per-response callback can reach it. The `--sandbox` path passes an
+  // explicit `undefined` in that slot for the same reason, so the scope argument can never be
+  // the reason such a bag starts being constructed here.
+  const { results, skipped } = sandbox
+    ? await runVerify(registry.listCapabilities(), dir, registry.ir.resources, undefined, { includeNonRead: true })
+    : await runVerify(registry.listCapabilities(), dir, registry.ir.resources);
+
+  // ADD-124 D-6: computed from `results` ONLY, exactly as before. A skip never fails the gate —
+  // an all-skipped run exits 0, the same code an all-empty run already produced. Inventing a
+  // failure mode for "every write/irreversible binding correctly declined to replay itself"
+  // would punish the manifests doing the safe, default thing.
+  const exitCode = results.some((r) => r.status === "red") ? 1 : 0;
 
   if (json) {
     // ADD-20 D-2: strictly disjoint from the `{error, issues, errors}` shape above.
-    console.log(JSON.stringify({ results: reports }));
-    process.exit(reports.some((r) => r.status === "red") ? 1 : 0);
+    //
+    // `skipped` and `sandbox` are ADDITIVE (ADD-124 D-7). A consumer filtering `results` for red
+    // is unaffected: skipped bindings were never in `results` to begin with. `sandbox` records
+    // HOW verify was invoked, so a dashboard can tell "nothing dangerous was replayed" from
+    // "everything was replayed because someone asserted a sandbox".
+    console.log(JSON.stringify({ results, skipped, sandbox }));
+    process.exit(exitCode);
   }
 
   console.log(`\narchstone verify ${dir}\n`);
-  if (reports.length === 0) {
+  if (results.length === 0 && skipped.length === 0) {
     console.log("  (no bindings declare a contract: — nothing to verify)\n");
     process.exit(0);
   }
-  for (const r of reports) {
+  for (const r of results) {
     console.log(`  ${HEALTH_ICON[r.status]} ${r.capabilityId} — ${r.detail}`);
   }
+  for (const s of skipped) {
+    console.log(`  ${SKIP_ICON} ${s.capabilityId} — ${s.detail}`);
+  }
+  if (skipped.length > 0) {
+    console.log(`\n  ${skipped.length} binding(s) were NOT verified against the backend.`);
+    console.log(READ_TWIN_TIP);
+  }
   console.log("");
-  process.exit(reports.some((r) => r.status === "red") ? 1 : 0);
+  process.exit(exitCode);
 }
 
 /** Value of a `--name value` flag pair, plus the index it was found at (-1 if absent) —
@@ -489,6 +541,13 @@ async function main(): Promise<void> {
 
   const json = argv.includes("--json");
   const http = argv.includes("--http");
+  // #124: boolean, takes no argument. NOT `--force`/`--yes`: those read as overriding a check
+  // Archstone performed, and the honest situation is the opposite — Archstone performed no check
+  // and structurally cannot (`doctor`'s own `env-baseurl` advisory already concedes that the
+  // deployment, not the manifest, decides where `${VAR}` points). `--sandbox` is the operator
+  // supplying the one fact only they hold. It takes no target string because a target would
+  // imply Archstone validates it against something, and there is nothing to validate against.
+  const sandbox = argv.includes("--sandbox");
   const out = flagArg(argv, "--out");
   const port = flagArg(argv, "--port");
   const token = flagArg(argv, "--token");
@@ -500,7 +559,7 @@ async function main(): Promise<void> {
       consumed.add(f.idx + 1);
     }
   }
-  const positional = argv.filter((a, i) => !consumed.has(i) && a !== "--json" && a !== "--http");
+  const positional = argv.filter((a, i) => !consumed.has(i) && a !== "--json" && a !== "--http" && a !== "--sandbox");
   const [cmd, dir] = positional;
 
   if (cmd === "apply" && dir) {
@@ -518,7 +577,7 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === "verify" && dir) {
-    await runVerifyCmd(dir, json);
+    await runVerifyCmd(dir, json, sandbox);
     return;
   }
   if (cmd === "build" && dir) {

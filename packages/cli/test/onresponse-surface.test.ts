@@ -30,6 +30,23 @@ describe("archstone CLI — no onResponse surface anywhere (#39)", () => {
     expect(cliSource).toMatch(/runVerify\(registry\.listCapabilities\(\),\s*dir,\s*registry\.ir\.resources\)/);
   });
 
+  // #124 (ADD-124 D-3) added `--sandbox`, which needed a way into `runVerify`. This assertion
+  // exists so that adding it did not quietly turn the assertion above into a claim about the
+  // uncommon path only.
+  //
+  // The flag deliberately does NOT ride on `InvokeOptions` — it is a 5th parameter of a
+  // purpose-built shape that cannot carry a callback by construction. So the `--sandbox` call
+  // site passes a LITERAL `undefined` in the options slot, which is a stronger statement than
+  // "3 arguments" was: the slot is visibly, explicitly empty rather than merely absent. Had the
+  // flag been folded into `InvokeOptions`, this file's regex would have had to loosen to allow
+  // a 4th argument, and it would have stopped protecting against a future callback riding along
+  // on the same object.
+  it("`archstone verify --sandbox` passes a literal `undefined` in the opts slot — the scope argument never becomes an options bag", () => {
+    expect(cliSource).toMatch(
+      /runVerify\(registry\.listCapabilities\(\),\s*dir,\s*registry\.ir\.resources,\s*undefined,\s*\{\s*includeNonRead:\s*true\s*\}\)/,
+    );
+  });
+
   it("the usage/help text advertises no --onResponse-style flag", () => {
     expect(cliSource).not.toMatch(/--on-?response/i);
   });

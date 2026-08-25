@@ -110,7 +110,9 @@ that shape at every call — a required field missing from the provider's respon
 closed (a structured error, never a silent raw pass-through). `archstone verify` replays a
 recorded fixture against the live backend on demand and reports a 🟢/🟡/🔴 health status per
 binding, so contract drift shows up before an agent hits it — naming the fields the provider
-gained, lost or retyped, not merely reporting that something moved.
+gained, lost or retyped, not merely reporting that something moved. Bindings whose capability
+`effect` is not `read` are skipped by default (replaying a fixture is a real invocation), and
+re-included only with `--sandbox`, an assertion that the backend is a sandbox tenant.
 
 **A field your manifest does not name never reaches a model.** That is deliberate: your
 provider's payload very likely carries wholesale rates, commissions or internal ids beside the
@@ -146,6 +148,9 @@ pnpm serve --http examples/manifests/tourism --token my-bearer-token
 
 # Replay a binding's golden fixture against the live backend; detect drift
 pnpm verify examples/manifests/tourism
+
+# Replay including write/irreversible capabilities (only for sandbox backends)
+pnpm verify examples/manifests/tourism --sandbox
 
 # Get structured JSON output for integration with CI pipelines and dashboards
 pnpm verify examples/manifests/tourism --json

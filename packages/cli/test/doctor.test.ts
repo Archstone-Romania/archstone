@@ -85,6 +85,89 @@ describe("diagnose — what warns", () => {
   });
 });
 
+// #125 (ADD-124 D-10/D-12): `doctor` used to emit two advisories on the same `irreversible`
+// capability that contradicted each other — "record a fixture so verify replays it in CI" and,
+// fifty lines below, "must never auto-retry". `verify` wired into CI IS an auto-retry,
+// mechanically. An advisory that recommends a dangerous action is worse than a missing check,
+// because it launders the action as reviewed.
+describe("diagnose — no-contract is effect-aware (#125)", () => {
+  const findingFor = (r: { findings: { code: string; severity: string; because: string; message: string }[] }, code: string) =>
+    r.findings.find((f) => f.code === code);
+
+  for (const effect of ["write", "irreversible"] as const) {
+    it(`does NOT advise recording a fixture for a bound \`${effect}\` capability`, () => {
+      const r = diagnose(ir([tool({ effect })]), dir);
+      // THE DoD ASSERTION.
+      expect(codes(r)).not.toContain("no-contract");
+      expect(codes(r)).toContain("no-contract-non-read");
+      expect(r.ok).toBe(true);
+    });
+
+    it(`its --json code is DISTINCT from the read case, so a dashboard filtering \`no-contract\` cannot merge them (\`${effect}\`)`, () => {
+      const nonRead = codes(diagnose(ir([tool({ effect })]), dir));
+      const read = codes(diagnose(ir([tool({ effect: "read" })]), dir));
+      expect(read).toContain("no-contract");
+      expect(read).not.toContain("no-contract-non-read");
+      expect(nonRead).toContain("no-contract-non-read");
+      expect(nonRead).not.toContain("no-contract");
+    });
+  }
+
+  it("says the opposite thing, and names both alternatives — the read twin and a sandbox-scoped run", () => {
+    const f = findingFor(diagnose(ir([tool({ effect: "irreversible" })]), dir), "no-contract-non-read")!;
+    expect(f.severity).toBe("advisory"); // having no fixture here is the CORRECT state, not a gap
+    expect(f.because).toMatch(/`read` counterpart/);
+    expect(f.because).toMatch(/--sandbox/);
+    expect(f.because).toMatch(/skips it by default/);
+    // D-11's honesty doctrine, applied to the prose itself: the advisory must not PRESUME the
+    // capability has a read counterpart (plenty do not — `delete-account`, `send-notification`),
+    // and must not imply Archstone could name it. Nothing in CDL declares that relationship, so
+    // guessing one would sometimes name the wrong capability with the same confidence as the
+    // right one. `index.ts`'s READ_TWIN_TIP hedges the same way; these two must not drift apart.
+    expect(f.because).toMatch(/Not every write has one/);
+    expect(f.because).toMatch(/Archstone cannot tell you which capability it is/);
+  });
+
+  it("the read branch is untouched — same code, severity and prose as before the split", () => {
+    const f = findingFor(diagnose(ir([tool({ effect: "read" })]), dir), "no-contract")!;
+    expect(f.severity).toBe("warning");
+    expect(f.message).toBe("bound, but records no contract fixture");
+    expect(f.because).toMatch(/backend drift is found by an agent, in front of a customer, instead of by CI/);
+  });
+
+  it("the two advisories on ONE irreversible capability now agree instead of colliding", () => {
+    const r = diagnose(ir([tool({ effect: "irreversible" })]), dir);
+    expect(codes(r)).toContain("irreversible-effect");
+    expect(codes(r)).toContain("no-contract-non-read");
+    // Both must point at the same conclusion. `irreversible-effect` keeps its code, severity and
+    // original text, and gains one sentence naming `verify`'s new default (D-12) — so a reader
+    // hits no contradiction wherever they start reading.
+    const irreversible = findingFor(r, "irreversible-effect")!;
+    expect(irreversible.severity).toBe("advisory");
+    expect(irreversible.because).toMatch(/must never auto-retry/); // unchanged
+    expect(irreversible.because).toMatch(/will not replay this capability's fixture/); // added
+    expect(irreversible.because).toMatch(/--sandbox/);
+  });
+
+  it("an irreversible capability that DOES carry a contract is not told to record one, and its fixture is still checked", () => {
+    // With a contract present, `no-contract-non-read` must not fire at all — the advisory is
+    // about the absence, not about the effect. The fixture-on-disk error still applies, because
+    // a contract pointing at a missing file is broken regardless of effect.
+    const r = diagnose(ir([tool({ effect: "irreversible", contract: { fingerprint: "sha256:x", probeFixture: "fixtures/gone.json" } })]), dir);
+    expect(codes(r)).not.toContain("no-contract-non-read");
+    expect(codes(r)).not.toContain("no-contract");
+    expect(codes(r)).toContain("missing-fixture-file");
+    expect(codes(r)).toContain("irreversible-effect");
+  });
+
+  it("an UNBOUND non-read capability gets neither contract advisory — there is nothing to verify yet", () => {
+    const r = diagnose(ir([tool({ effect: "write", connector: undefined })]), dir);
+    expect(codes(r)).not.toContain("no-contract-non-read");
+    expect(codes(r)).not.toContain("no-contract");
+    expect(codes(r)).toContain("unbound-capability");
+  });
+});
+
 describe("diagnose — what it makes you look at", () => {
   it("surfaces every irreversible effect for re-confirmation", () => {
     const r = diagnose(ir([tool({ effect: "irreversible" })]), dir);

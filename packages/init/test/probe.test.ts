@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { FetchLike } from "@archstone/provider-rest";
+import type { IR, IRTool } from "@archstone/compiler";
+import { fingerprintShape } from "@archstone/compiler";
 import { runInit } from "@archstone/init/loop";
+import { verifyRecorded } from "../src/probe";
 import { arrayOf, draftModel, inputField, objectNode, operation, property, scalarNode } from "./draft";
 import type { DecisionRecord } from "@archstone/init";
 
@@ -341,4 +344,76 @@ describe("record → write → the shipped `runVerify` is green (R-1)", () => {
     expect(fixture).toMatchObject({ capabilityId: "tourism.search", request: { destination: "Nice" } });
     ws.cleanup();
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------------------
+// #124 (ADD-124 D-8/D-9) — `runVerify` now declines to replay a non-`read` contract, and
+// `verifyRecorded` is its one internal consumer.
+// ---------------------------------------------------------------------------------------
+
+describe("verifyRecorded under the effect gate (#124, D-9)", () => {
+  const resources = {
+    Stay: [
+      { name: "name", required: true, type: { kind: "scalar", semantic: "text" } },
+      { name: "location", required: true, type: { kind: "scalar", semantic: "location" } },
+    ],
+  } as unknown as IR["resources"];
+
+  const body = { stays: [{ name: "Hotel A", location: "Nice" }] };
+
+  function irWith(effect: IRTool["effect"]): IR {
+    return {
+      version: "0",
+      company: { id: "acme" },
+      resources,
+      tools: [
+        {
+          id: "tourism.book",
+          description: "",
+          effect,
+          provider: "p",
+          policies: [],
+          lifecycle: "stable",
+          input: [],
+          output: [],
+          connector: { type: "rest", rest: { baseUrl: "https://x.test", method: "POST", path: "/book" } },
+          contract: { fingerprint: fingerprintShape(body), probeFixture: "fixture.json" },
+        },
+      ],
+    } as unknown as IR;
+  }
+
+  function withDir(fn: (dir: string) => Promise<void>): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-init-effectgate-"));
+    writeFileSync(join(dir, "fixture.json"), JSON.stringify({ capabilityId: "tourism.book", request: {} }));
+    return fn(dir).finally(() => rmSync(dir, { recursive: true, force: true }));
+  }
+
+  it("(a) an init-produced manifest is unaffected: a `read` contract is still replayed and lands green", async () => {
+    // D-9's claim made concrete. `recordContract` is reachable only through the probe gate,
+    // which refuses any non-`read` effect before recording (R-8), so every contract `init` can
+    // write is for a `read` capability — the new default skip is a no-op against init's own
+    // output. This is the negative control for (b) below.
+    await withDir(async (dir) => {
+      const net = countingFetch(body);
+      const { green, reports } = await verifyRecorded(irWith("read"), dir, { fetchImpl: net.fetchImpl });
+      expect(net.calls()).toBe(1);
+      expect(reports).toHaveLength(1);
+      expect(green.has("tourism.book")).toBe(true);
+    });
+  });
+
+  it("(b) a contract hand-added to a non-`read` capability between init runs is skipped here too — no carve-out for init", async () => {
+    // The residual case #124 exists to close, and init's incremental-amend path gets no
+    // exemption from it: no request is issued, the contract lands outside `green`, and the
+    // final emit drops it. Conservative and correct — `init` commits a contract only when it
+    // has watched the shipped verifier replay it.
+    await withDir(async (dir) => {
+      const net = countingFetch(body);
+      const { green, reports } = await verifyRecorded(irWith("irreversible"), dir, { fetchImpl: net.fetchImpl });
+      expect(net.calls()).toBe(0);
+      expect(reports).toEqual([]);
+      expect(green.has("tourism.book")).toBe(false);
+    });
+  });
 });

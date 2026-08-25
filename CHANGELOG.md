@@ -5,6 +5,75 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.15.0]
+
+Minor. Two P0 correctness fixes that are one bug seen from two commands (#124, #125,
+ADD-124): `archstone verify` replayed a `write`/`irreversible` binding's golden fixture
+against the **live** backend on every run, and `archstone doctor` recommended recording
+exactly that fixture in the same breath it warned the capability must never auto-retry. Both
+key on the one fact Archstone can actually assert — a capability's `effect` — because whether
+a backend is a sandbox stays unknowable to the compiler and neither fix pretends otherwise.
+**Breaking** for a programmatic caller of `@archstone/runtime/verify` — see below.
+
+### Fixed
+
+- **`archstone verify` skips a `write`/`irreversible` binding's fixture by default; a replay
+  is a real invocation (#124, ADD-124).** It replayed a binding's golden fixture against the
+  live backend regardless of the capability's `effect`, so a `contract:` on a `write`/
+  `irreversible` capability made every CI run repeat a real side effect — a real booking, a
+  real charge. `archstone init --probe` has refused exactly this since ADD-37; `verify` did
+  not, and the asymmetry inside our own codebase was the bug.
+
+  A skipped binding is reported, never silently dropped: `⏭` in the human report —
+  deliberately not one of `HEALTH_ICON`'s 🟢🟡🔴, because nothing was inspected and no colour
+  is earned — and a `skipped` array under `--json`. The human report also names the
+  mitigation once, as a pattern rather than a guessed capability id: a `write` capability's
+  `read` twin hits the same host, auth and serialization, catching most infrastructure and
+  schema drift at zero risk.
+
+  `--sandbox` re-includes them — an operator assertion, not a detected fact, since Archstone
+  cannot tell a sandbox tenant from production and does not try. Exit code semantics are
+  unchanged (`results` alone decides; an all-skipped run exits 0, same as today's
+  zero-contract-bearing case). An unrecognized `effect` fails closed — the deliberate
+  opposite of an unrecognized `lifecycle` (ADD-56), because a misread lifecycle costs a wrong
+  report line and a misread effect does not undo.
+
+  Worth calling out for anyone with `verify` wired into CI: a pipeline that previously
+  verified a `write` binding now skips it by default. That is the fix working, but it is a
+  behaviour change you will notice — pass `--sandbox` if `${VAR}` genuinely points at a
+  sandbox tenant.
+
+- **`archstone doctor` no longer tells you to record a fixture for a capability it also
+  tells you must never auto-retry (#125).** The `no-contract` advisory had no `effect` gate,
+  so it recommended exactly the action `irreversible-effect`, fifty lines below, warned
+  against — an advisory that recommends a dangerous action is worse than a missing check,
+  because it launders the action as reviewed. `no-contract` now fires only for `effect:
+  read` (byte-identical code, severity and prose to before); a bound `write`/`irreversible`
+  capability with no contract gets a new advisory instead, `no-contract-non-read` (severity
+  `advisory`, not `warning` — having no fixture is now the *correct* state, not a gap to
+  close), under a distinct `--json` code so a dashboard filtering on `no-contract` cannot
+  merge the two. `irreversible-effect` gains one sentence naming `verify`'s new default, so
+  the two advisories agree wherever a reader starts.
+
+### Breaking
+
+- **`runVerify` (`@archstone/runtime/verify`) now returns `VerifyRun {results, skipped}`
+  instead of a bare `ToolVerification[]` (#124, ADD-124 D-8).** `results` keeps the exact
+  shape and meaning it always had — a non-`read` binding is simply absent from it by
+  default — so `results.some(r => r.status === "red")` still means exactly what it always
+  meant; the break is the wrapper itself. **If you call `runVerify` directly, destructure
+  `.results`:**
+
+  ```diff
+  - const reports = await runVerify(tools, dir, resources);
+  + const { results: reports } = await runVerify(tools, dir, resources);
+  ```
+
+  `verifyTool` — the single-tool, ungated primitive — is unchanged. Both packages are
+  pre-1.0, so this ships as a minor per this repo's established practice for a pre-1.0
+  breaking change; this entry is deliberately explicit about it, per ADD-124 §R-3, because a
+  JS-only (non-TypeScript) consumer gets no compile error to force the read.
+
 ## [0.14.0]
 
 Minor. Additive provider drift stops being a mystery you have to investigate: `verify` names the

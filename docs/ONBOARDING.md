@@ -741,9 +741,18 @@ What it blocks on (exit 1): a `baseUrl` that interpolates caller-supplied data (
 set `allowedHosts`), a contract naming a fixture that is not on disk, and a committed
 `archstone.ir.json` that no longer matches a fresh build.
 
-What it warns about: capabilities declared but unbound, and bound capabilities with no contract
-fixture — `verify` has nothing to replay for those, so backend drift is found by an agent in
+What it warns about: capabilities declared but unbound, and on `read` capabilities, bound ones
+with no contract fixture — `verify` has nothing to replay for those, so backend drift is found by an agent in
 front of a customer instead of by CI.
+
+What it **advises** on `write` and `irreversible` capabilities: on a bound one with *no*
+contract fixture, the advisory tells you that this is the correct state rather than a gap — a
+fixture here would repeat the capability's effect against the live backend on every CI run, and
+`archstone verify` skips it by default for that reason. The alternative is to verify the same
+backend through a `read` capability if one exists — the quote half of a quote → commit pair, or
+a query before you commit — catching drift at zero risk. Not every write has one, and nothing in
+CDL declares the relationship, so Archstone cannot name it for you. Only if the binding genuinely
+points at a sandbox tenant is recording a fixture worthwhile, replayed with `archstone verify --sandbox`.
 
 What it makes you look at: every `irreversible` effect, every capability whose declared rate
 limit needs a counter wired, every capability requiring an authenticated caller (which `serve`
@@ -838,6 +847,49 @@ request itself failed. It exits non-zero on any 🔴, so it drops straight into 
 drift gate. It's the only Archstone command that makes a live network call outside a real
 tool invocation — on demand only, never triggered by `apply`/`serve`. Wiring it to a schedule
 (cron, a CI job) is your call, not Archstone's.
+
+#### Replaying write and irreversible capabilities safely
+
+A key discipline: **replaying a fixture is a real invocation.** A `write` capability that
+creates a booking or an `irreversible` capability that charges a card, replayed every CI run,
+repeats that effect against the live backend **every single time** — not acceptable in
+production.
+
+`archstone verify` **skips bindings whose capability `effect` is not `read` by default**. They
+are reported with a ⏭ (skip) icon:
+
+```
+archstone verify ./my-manifest-dir
+
+  🟢 tourism.search — unchanged
+  ⏭ tourism.hold — not replayed: effect is `write`, …
+  ⏭ tourism.pay — not replayed: effect is `irreversible`, …
+```
+
+This is the correct default. If a capability has a `read` counterpart that hits the same backend
+— the quote half of a quote → commit pair, or a query before you commit — **verify that one instead.**
+It hits the same host, auth and serialization, catching most infrastructure and schema drift at
+zero risk, without replaying the write or charge. Not every write has a twin, and CDL declares
+no relationship between them, so Archstone cannot name which one to verify instead; you choose.
+
+If a binding's `${VAR}` genuinely resolves to a **sandbox tenant** — a backend that is not
+production, where side effects are safe and expected in CI — opt in explicitly:
+
+```bash
+archstone verify ./my-manifest-dir --sandbox
+```
+
+The `--sandbox` flag is **an assertion by the operator**, not a toggle that makes the backend
+safe. Archstone cannot tell production from a sandbox (the deployment, not the manifest, decides);
+only you can. If you pass it, `verify` replays every binding, including the write and irreversible
+ones.
+
+In JSON output (`--json`), two new additive keys record the skip discipline:
+- `skipped` — the bindings that were not replayed, each with its `capabilityId`, its `effect`
+  and the reason. Today the effect gate is the only thing that puts a binding here.
+- `sandbox` — boolean, whether the `--sandbox` flag was asserted on this run. A dashboard can
+  tell "nothing dangerous was replayed by default" from "everything was replayed because the
+  operator asserted a sandbox."
 
 If the `contract:` also records a `shape:` — the response's paths and their types, never its
 values — `verify` can say *which* fields moved rather than only that the fingerprint did:

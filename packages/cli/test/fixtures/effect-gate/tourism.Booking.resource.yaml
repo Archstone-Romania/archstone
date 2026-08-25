@@ -1,0 +1,10 @@
+resource:
+  name: tourism.Booking
+  description: A held or paid-for reservation against a stay.
+  fields:
+    reference:
+      type: identifier
+      description: The booking reference the traveler quotes to the property.
+    total:
+      type: money
+      description: What the traveler is charged for the stay.

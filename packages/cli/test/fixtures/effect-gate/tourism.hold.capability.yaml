@@ -1,0 +1,18 @@
+capability:
+  id: tourism.hold
+  description: Place a temporary hold on a stay for a traveler's dates.
+  effect: write
+
+  input:
+    stay:
+      type: identifier
+    dates:
+      type: date-range
+    travelers:
+      type: party
+
+  output:
+    booking:
+      type: Booking
+
+  provider: booking-engine

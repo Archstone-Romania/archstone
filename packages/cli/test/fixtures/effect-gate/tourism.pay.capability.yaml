@@ -1,0 +1,16 @@
+capability:
+  id: tourism.pay
+  description: Charge the traveler's card and confirm the booking.
+  effect: irreversible
+
+  input:
+    booking:
+      type: identifier
+    amount:
+      type: money
+
+  output:
+    booking:
+      type: Booking
+
+  provider: booking-engine

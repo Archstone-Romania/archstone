@@ -273,7 +273,7 @@ async function withManifest<T>(
 
 describe("verifyTool — the third consumer (US-9, BR-37)", () => {
   it("denies a caller-less probe of an allow-gated capability, with zero fetches (S-US9.1)", async () => {
-    const reports = await withManifest({ policy: PROBER_ONLY }, async (dir) => {
+    const { results: reports } = await withManifest({ policy: PROBER_ONLY }, async (dir) => {
       const registry = buildRegistry(dir).registry!;
       return runVerify(registry.listCapabilities(), dir, registry.ir.resources, { fetchImpl: forbiddenFetch });
     });
@@ -307,7 +307,7 @@ describe("verifyTool — the third consumer (US-9, BR-37)", () => {
       called += 1;
       return new Response(JSON.stringify({ value: "ok" }), { status: 200 });
     };
-    const reports = await withManifest({ policy: PROBER_ONLY }, async (dir) => {
+    const { results: reports } = await withManifest({ policy: PROBER_ONLY }, async (dir) => {
       const registry = buildRegistry(dir).registry!;
       return runVerify(registry.listCapabilities(), dir, registry.ir.resources, {
         fetchImpl,
@@ -340,7 +340,7 @@ describe("health snapshot — an evaluator denial never becomes a listing hint (
       // redirected into the conventional snapshot file, then serve. Produced by the real
       // runVerify, not hand-written, so the whole chain is under test.
       const registry = buildRegistry(dir).registry!;
-      const results = await runVerify(registry.listCapabilities(), dir, registry.ir.resources, {
+      const { results } = await runVerify(registry.listCapabilities(), dir, registry.ir.resources, {
         fetchImpl: forbiddenFetch,
       });
       expect(results[0].status).toBe("red"); // the operator-facing report IS red (D-7)

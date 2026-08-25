@@ -40,6 +40,23 @@ describe("archstone CLI — no audit sink surface anywhere (BR-25, D-8, S-US7.4)
     expect(cliSource).toMatch(/createHttpHandler\(built\.registry,\s*\{\s*bearerToken:\s*token\s*\}\)/);
     expect(cliSource).toMatch(/runVerify\(registry\.listCapabilities\(\),\s*dir,\s*registry\.ir\.resources\)/);
   });
+
+  // #124 (ADD-124 D-3): `archstone verify` gained `--sandbox`, the CLI's first reason ever to
+  // pass `runVerify` anything past the third argument. The assertion above still covers the
+  // DEFAULT path unchanged; this one covers the new one, so the "no sink reaches a CLI-driven
+  // verify" guarantee holds on both rather than only on the one that happens to be commoner.
+  //
+  // The sandbox flag is a separate, narrowly-typed 5th parameter, not a field on the options
+  // bag, so the options slot is filled with a literal `undefined` — no object is constructed at
+  // this call site that a sink could later be added to without failing this test.
+  it("the --sandbox path also passes no invoke options — its opts slot is a literal undefined", () => {
+    expect(cliSource).toMatch(
+      /runVerify\(registry\.listCapabilities\(\),\s*dir,\s*registry\.ir\.resources,\s*undefined,\s*\{\s*includeNonRead:\s*true\s*\}\)/,
+    );
+    // …and the scope object carries exactly one boolean key. If it ever grows a field that
+    // could hold a sink or a callback, this fails.
+    expect(cliSource).not.toMatch(/includeNonRead:\s*true\s*,/);
+  });
 });
 
 describe("layer purity (BR-42, S-US9.4, S-US9.5)", () => {

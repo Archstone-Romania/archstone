@@ -3,7 +3,8 @@
 // `runVerify` replays a bound tool's golden fixture against the LIVE backend and
 // derives a health status. This is the only place outside a real MCP invocation that
 // makes a network call — always explicit, on demand (`archstone verify`), never
-// triggered by `apply`/`serve`. Reuses #12's `applyResponseMapping` verbatim (ADD-18
+// triggered by `apply`/`serve` — and, since #124/ADD-124, never for a `write`/`irreversible`
+// capability unless the operator asserts a sandbox. Reuses #12's `applyResponseMapping` verbatim (ADD-18
 // D-3/R-4): one mapper, so a probe VIOLATION is exactly what a real call would see.
 
 import { readFileSync } from "node:fs";
@@ -72,6 +73,63 @@ export interface ToolVerification {
    * `archstone verify --json` for free, since the CLI serialises this object directly.
    */
   drift?: ShapeDiff;
+}
+
+/**
+ * #124 (ADD-124 D-2): a contract-bearing binding that `runVerify` DECLINED to replay, because
+ * replaying it would repeat a non-`read` invocation against whatever `${VAR}` resolves to.
+ *
+ * Why this is not a fourth `HealthStatus` and not a `ToolVerification` at all: none of
+ * green/yellow/red is honest about something that was never attempted. `ProbeOutcome`'s
+ * `not-attempted` (one function over, in `recordContract`) already establishes the precedent —
+ * reporting a never-sent request as `red` asserts that the backend disagreed with the manifest,
+ * which did not happen. `policyDenied` (ADD-43 D-14) chooses `red` for the opposite reason: a
+ * legitimate attempt was BLOCKED by this run's configuration, which is operator-relevant. A
+ * default effect-skip is Archstone's own designed-in guardrail working exactly as documented,
+ * so it earns no colour and is pulled out of the status vocabulary entirely, into this list.
+ */
+export interface SkippedVerification {
+  capabilityId: string;
+  /** `"write" | "irreversible"` — `read` is the only effect a skip never applies to (D-5). */
+  effect: Exclude<IRTool["effect"], "read">;
+  /** Human-readable, mirrors `ToolVerification.detail`. */
+  detail: string;
+}
+
+/**
+ * `runVerify`'s return shape (#124 / ADD-124 D-2, D-8).
+ *
+ * BREAKING relative to the bare `ToolVerification[]` this function returned before v0.15:
+ * `@archstone/runtime/verify` is a published subpath, so a programmatic consumer must read
+ * `.results`. `results` keeps its shape and meaning exactly — non-`read` bindings are simply
+ * absent from it by default, which is what keeps every existing
+ * `results.some(r => r.status === "red")` gate meaning what it always meant (D-7).
+ */
+export interface VerifyRun {
+  results: ToolVerification[];
+  /** Empty when nothing was skipped — i.e. under `includeNonRead`, or on an all-`read` manifest. */
+  skipped: SkippedVerification[];
+}
+
+/**
+ * WHICH tools `runVerify` walks — deliberately NOT part of `InvokeOptions`, which says HOW to
+ * call one (ADD-124 D-3).
+ *
+ * Keeping the two apart is load-bearing, not tidiness: `InvokeOptions` carries `auditSink` and
+ * `onResponse`, and two tests (`cli/test/audit-surface.test.ts`,
+ * `cli/test/onresponse-surface.test.ts`) pin that the CLI hands `runVerify` no such bag. A
+ * filtering flag folded into that bag would have forced both to loosen, and they would have
+ * stopped protecting against a future sink riding along on the same object. This shape cannot
+ * carry a callback or a sink by construction.
+ */
+export interface VerifyScope {
+  /**
+   * Re-include `write`/`irreversible` contract-bearing tools in the live replay. The operator
+   * is asserting the backend is a sandbox (`archstone verify --sandbox`); Archstone cannot
+   * check that assertion and deliberately does not try (#124: the deployment, not the
+   * manifest, decides where `${VAR}` points).
+   */
+  includeNonRead?: boolean;
 }
 
 export interface GoldenFixture {
@@ -227,6 +285,21 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
  * reachable and still probing a retired capability if called on one on purpose) — only this
  * orchestrator, which is what `archstone verify`/the CLI gate actually walks.
  *
+ * #124 (ADD-124 D-1/D-5): the SAME filter now also splits on `effect`. A replay is an
+ * invocation — Axiom A-1 — so replaying a `write`/`irreversible` fixture creates a real booking
+ * or moves real money, on every CI run. `archstone init --probe` has refused exactly this since
+ * ADD-37 (R-8, the `effect-not-read` refusal); `verify` did not, and the asymmetry was the bug.
+ * Such a tool is NOT probed and NOT reported as a health status — it is returned in `skipped`
+ * (see `SkippedVerification`), so a dashboard cannot read it as green and an operator cannot
+ * miss it. `scope.includeNonRead` (the CLI's `--sandbox`) is the only way back in.
+ *
+ * The test is `effect === "read"`, not `effect !== "write" && effect !== "irreversible"`:
+ * anything this build does not recognise as a read is treated as unsafe to replay. That is the
+ * deliberate OPPOSITE of the unrecognized-`lifecycle` rule below (where the loud choice is to
+ * probe anyway), and for a reason that does not generalise: getting `lifecycle` wrong costs a
+ * misreported line in a report, getting `effect` wrong costs a real side effect on someone's
+ * production backend. Fail closed where the failure is irreversible.
+ *
  * `policyDenied` entries' gate handling is unchanged and explicitly out of scope for this fix
  * (see #54's PR description) — a separate decision, deferred.
  *
@@ -248,9 +321,36 @@ export async function runVerify(
   dir: string,
   resources: IRResourceRegistry,
   opts?: InvokeOptions,
-): Promise<ToolVerification[]> {
+  scope?: VerifyScope,
+): Promise<VerifyRun> {
   const contractBearing = tools.filter((t) => t.contract && lifecycleExposure(t.lifecycle).blockedReason !== "retired");
-  return Promise.all(contractBearing.map((t) => verifyTool(t, dir, resources, opts)));
+
+  // ⚠️ #54 (retired) and #124 (effect) BOTH live here, in the orchestrator, and neither belongs
+  // in `verifyTool`. Moving either one down would make it impossible to ever probe such a tool
+  // deliberately — a retired capability under investigation, a `write` capability against a
+  // scratch backend from a test. `runVerify` is where a DEFAULT policy belongs; `verifyTool`
+  // stays the ungated primitive. See ADD-124 D-1 and ADD-56/#54 before changing this.
+  // ONE decision, read twice — never two conditions that could drift apart and leave a tool both
+  // probed and reported as skipped.
+  const includeNonRead = scope?.includeNonRead === true;
+  const probeable = includeNonRead ? contractBearing : contractBearing.filter((t) => t.effect === "read");
+  const skipped: SkippedVerification[] = includeNonRead
+    ? []
+    : contractBearing
+        .filter((t) => t.effect !== "read")
+        .map((t) => ({
+          capabilityId: t.id,
+          effect: t.effect as Exclude<IRTool["effect"], "read">,
+          // Deliberately names no CLI flag. `runtime` is a published library — `--sandbox` is the
+          // CLI's spelling of `includeNonRead`, and an embedder calling `runVerify` directly
+          // would be told to pass an argument that does not exist in their program. The surface
+          // that owns the flag is the surface that names it.
+          detail:
+            `not replayed: effect is \`${t.effect}\`, and a replay is a real invocation — ` +
+            `it would repeat that effect against the live backend.`,
+        }));
+
+  return { results: await Promise.all(probeable.map((t) => verifyTool(t, dir, resources, opts))), skipped };
 }
 
 // ---------------------------------------------------------------------------------------

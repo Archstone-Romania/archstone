@@ -64,7 +64,18 @@ export function diagnose(ir: IR, manifestDir: string, opts: { builtIr?: string }
     }
 
     // --- contract / fixtures ----------------------------------------------------------
-    if (bound && !tool.contract) {
+    // #125 (ADD-124 D-10): one trigger condition (`bound && !tool.contract`), two answers,
+    // because the honest advice inverts with `effect`. Until this split, `doctor` told you to
+    // record a fixture for `tourism.pay` and, fifty lines below, that the same capability must
+    // never auto-retry — and `verify` wired into CI is an auto-retry, mechanically. An advisory
+    // that recommends a dangerous action is worse than a missing check: it launders the action
+    // as reviewed.
+    //
+    // The `read` branch is byte-identical to what shipped before — same code, same severity,
+    // same prose — so no dashboard filtering `no-contract` changes behaviour for a read
+    // capability. The non-read branch gets a DISTINCT code so one filtering on `no-contract`
+    // cannot silently merge the two (#125's DoD).
+    if (bound && !tool.contract && tool.effect === "read") {
       add({
         severity: "warning",
         code: "no-contract",
@@ -72,6 +83,19 @@ export function diagnose(ir: IR, manifestDir: string, opts: { builtIr?: string }
         message: "bound, but records no contract fixture",
         because:
           "`archstone verify` replays a recorded fixture against the live backend. With no fixture there is nothing to replay, so backend drift is found by an agent, in front of a customer, instead of by CI.",
+      });
+    }
+    if (bound && !tool.contract && tool.effect !== "read") {
+      add({
+        // `advisory`, not `warning`: on a `write`/`irreversible` capability, having no contract
+        // fixture is now the CORRECT state, not a gap to close. `warning` would keep asking for
+        // the thing this advisory exists to stop recommending.
+        severity: "advisory",
+        code: "no-contract-non-read",
+        capability: tool.id,
+        message: `bound and \`${tool.effect}\`, so it records no contract fixture — and should not`,
+        because:
+          "`archstone verify` replays a recorded fixture as a real invocation, so a fixture here would repeat this capability's effect against the live backend on every CI run. `verify` skips it by default for that reason. Where this capability has a `read` counterpart, cover the drift with that instead — the quote half of a quote → commit pair hits the same host, auth and serialization at zero risk. Not every write has one, and Archstone cannot tell you which capability it is: nothing in CDL declares that relationship. Only if this binding's `${VAR}` genuinely resolves to a sandbox tenant is recording one worthwhile, replayed with `archstone verify --sandbox`: the flag re-includes the binding, it does not make the backend safe.",
       });
     }
     if (tool.contract?.probeFixture) {
@@ -128,7 +152,11 @@ export function diagnose(ir: IR, manifestDir: string, opts: { builtIr?: string }
         capability: tool.id,
         message: "is declared `irreversible`",
         because:
-          "No API description states this, so it was a human judgement: an agent must confirm explicitly and must never auto-retry. Re-read it before go-live — `irreversible` is the difference between looking up a price and charging a card.",
+          // #125 (ADD-124 D-12) appends the last sentence — code and severity unchanged. Without
+          // it, this advisory and the contract advisory above land on the same capability saying
+          // opposite things ("never auto-retry" vs "wire it into CI"). Naming `verify`'s default
+          // here is what makes the two agree wherever a reader starts.
+          "No API description states this, so it was a human judgement: an agent must confirm explicitly and must never auto-retry. Re-read it before go-live — `irreversible` is the difference between looking up a price and charging a card. `archstone verify` applies the same judgement: it will not replay this capability's fixture against the live backend unless you assert a sandbox with --sandbox.",
       });
     }
 

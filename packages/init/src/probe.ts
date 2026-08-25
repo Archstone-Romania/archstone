@@ -177,7 +177,18 @@ export async function verifyRecorded(
   dir: string,
   opts?: RecordContractOptions,
 ): Promise<{ green: Set<string>; reports: { capabilityId: string; status: string; detail: string }[] }> {
-  const reports = await runVerify(ir.tools, dir, ir.resources, opts);
+  // #124 (ADD-124 D-8/D-9): `runVerify` now returns `{results, skipped}`, and it declines to
+  // replay a `write`/`irreversible` contract by default. NO `--sandbox`-equivalent opt-in is
+  // threaded through here, deliberately — uniform behaviour, no per-caller carve-out.
+  //
+  // In practice this is a no-op against `init`'s own output: `recordContract` is reachable only
+  // through the probe gate, which refuses any non-`read` effect before recording (R-8), so every
+  // fixture `init` can produce is for a `read` capability and `skipped` is always empty. The one
+  // case it does bite — a manifest hand-edited to carry a `contract:` on a non-`read` capability
+  // between `init` runs — is exactly the risk #124 exists to close. Such a contract lands outside
+  // `green` and is dropped from the final emit, which is the correct, conservative outcome: `init`
+  // commits a contract only when it has watched the shipped verifier replay it.
+  const { results: reports } = await runVerify(ir.tools, dir, ir.resources, opts);
   const green = new Set(reports.filter((r) => r.status !== "red").map((r) => r.capabilityId));
   return { green, reports: reports.map((r) => ({ capabilityId: r.capabilityId, status: r.status, detail: r.detail })) };
 }

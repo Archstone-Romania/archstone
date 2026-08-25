@@ -60,6 +60,50 @@ describe("buildRegistry — health-snapshot file (ADD-24)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // #124 (ADD-124 D-7): `archstone verify --json` now emits `{results, skipped, sandbox}`, and
+  // the documented ADD-24 D-8 workflow redirects that document straight into this file. Two
+  // things must hold, and both are silent if they break — nothing throws, no exit code changes,
+  // an agent just reads the wrong thing.
+  it("a snapshot carrying the new `skipped`/`sandbox` keys is still read: the extra keys are ignored", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-health-skip-"));
+    cpSync(join(manifests, "tourism"), dir, { recursive: true });
+    writeFileSync(
+      join(dir, HEALTH_SNAPSHOT_FILE),
+      JSON.stringify({
+        results: [{ capabilityId: "tourism.search", status: "red", detail: "drift" }],
+        skipped: [{ capabilityId: "tourism.pay", effect: "irreversible", detail: "not replayed" }],
+        sandbox: false,
+      }),
+    );
+    const r = buildRegistry(dir);
+    expect(r.ok).toBe(true);
+    // The real reading still lands, so the additive keys did not turn a working snapshot into a
+    // fail-open no-op.
+    expect(r.registry!.getExposure("tourism.search").hint?.level).toBe("deprecation");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a SKIPPED capability never becomes an agent-facing health hint — it is absent, not green and not red", () => {
+    // The skip must not travel onward as a health fact in EITHER direction: `red` would assert a
+    // failure that never happened (the same false-red `policyDenied` exists to prevent), and any
+    // hint at all would imply something was checked. Nothing was inspected, so the tool keeps
+    // lifecycle-only exposure — ADD-24 D-9's posture: absent health is never manufactured.
+    const dir = mkdtempSync(join(tmpdir(), "archstone-health-skip2-"));
+    cpSync(join(manifests, "booking"), dir, { recursive: true });
+    writeFileSync(
+      join(dir, HEALTH_SNAPSHOT_FILE),
+      JSON.stringify({
+        results: [],
+        skipped: [{ capabilityId: "tourism.book", effect: "write", detail: "not replayed" }],
+        sandbox: false,
+      }),
+    );
+    const r = buildRegistry(dir);
+    expect(r.ok).toBe(true);
+    expect(r.registry!.getExposure("tourism.book").hint).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("malformed JSON in the snapshot file fails open (no health data, no crash)", () => {
     const dir = mkdtempSync(join(tmpdir(), "archstone-health-bad-"));
     cpSync(join(manifests, "tourism"), dir, { recursive: true });

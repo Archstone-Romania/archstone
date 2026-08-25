@@ -144,7 +144,7 @@ describe("verifyTool/runVerify — onResponse pass-through, zero code change to 
     withFixture(async (dir) => {
       const calls: { capabilityId: string }[] = [];
       const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
-      const reports = await runVerify([tool(goldenFingerprint)], dir, resources, {
+      const { results: reports } = await runVerify([tool(goldenFingerprint)], dir, resources, {
         fetchImpl,
         onResponse: (info) => { calls.push(info); },
       });
@@ -172,7 +172,7 @@ describe("runVerify — filters to contract-bearing tools", () => {
       const withContract = tool(goldenFingerprint);
       const withoutContract: IRTool = { ...tool(goldenFingerprint), id: "tourism.other", contract: undefined };
       const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
-      const reports = await runVerify([withContract, withoutContract], dir, resources, { fetchImpl });
+      const { results: reports } = await runVerify([withContract, withoutContract], dir, resources, { fetchImpl });
       expect(reports).toHaveLength(1);
       expect(reports[0].capabilityId).toBe("tourism.search");
     }));
@@ -198,7 +198,7 @@ describe("runVerify — excludes retired capabilities from the contract gate (#5
         contract: { fingerprint: "sha256:does-not-match-anything", probeFixture: "fixture.json" },
       };
       const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
-      const reports = await runVerify([stable, retiredBroken], dir, resources, { fetchImpl });
+      const { results: reports } = await runVerify([stable, retiredBroken], dir, resources, { fetchImpl });
 
       expect(reports).toHaveLength(1);
       expect(reports[0].capabilityId).toBe("tourism.search");
@@ -221,7 +221,7 @@ describe("runVerify — excludes retired capabilities from the contract gate (#5
       // caught exactly as before this fix.
       const noPrice = { stays: [{ name: "Hotel A", location: "Nice" }] };
       const fetchImpl: FetchLike = async () => new Response(JSON.stringify(noPrice), { status: 200 });
-      const reports = await runVerify([brokenStable], dir, resources, { fetchImpl });
+      const { results: reports } = await runVerify([brokenStable], dir, resources, { fetchImpl });
 
       expect(reports).toHaveLength(1);
       expect(reports[0].status).toBe("red");
@@ -247,7 +247,7 @@ describe("runVerify — excludes retired capabilities from the contract gate (#5
       // report instead.
       const noPrice = { stays: [{ name: "Hotel A", location: "Nice" }] };
       const fetchImpl: FetchLike = async () => new Response(JSON.stringify(noPrice), { status: 200 });
-      const reports = await runVerify([unrecognizedLifecycle], dir, resources, { fetchImpl });
+      const { results: reports } = await runVerify([unrecognizedLifecycle], dir, resources, { fetchImpl });
 
       expect(reports).toHaveLength(1);
       expect(reports[0].capabilityId).toBe("tourism.unrecognized-lifecycle");
@@ -258,9 +258,110 @@ describe("runVerify — excludes retired capabilities from the contract gate (#5
     withFixture(async (dir) => {
       const experimental: IRTool = { ...tool(goldenFingerprint), id: "tourism.search", lifecycle: "experimental" };
       const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
-      const reports = await runVerify([experimental], dir, resources, { fetchImpl });
+      const { results: reports } = await runVerify([experimental], dir, resources, { fetchImpl });
       expect(reports).toHaveLength(1);
       expect(reports[0].status).toBe("green");
+    }));
+});
+
+// #124 (ADD-124 D-1/D-5): a replay IS an invocation (Axiom A-1), so `runVerify` must not replay
+// a `write`/`irreversible` binding's fixture against the live backend by default. Every test
+// below counts fetches rather than reading the report, because "no request was issued" is the
+// only claim that matters and a gate that reported a skip and then called anyway would pass an
+// assertion on the report.
+describe("runVerify — the effect gate (#124)", () => {
+  const counting = (): { fetchImpl: FetchLike; calls: () => number } => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return new Response(JSON.stringify(goldenBody), { status: 200 });
+    };
+    return { fetchImpl, calls: () => calls };
+  };
+
+  for (const effect of ["write", "irreversible"] as const) {
+    it(`does not probe a contract-bearing \`${effect}\` capability — zero fetches, and it is reported as skipped, not as a status`, () =>
+      withFixture(async (dir) => {
+        const nonRead: IRTool = { ...tool(goldenFingerprint), effect };
+        const net = counting();
+        const { results, skipped } = await runVerify([nonRead], dir, resources, { fetchImpl: net.fetchImpl });
+
+        expect(net.calls()).toBe(0);
+        expect(results).toEqual([]);
+        expect(skipped).toHaveLength(1);
+        expect(skipped[0].capabilityId).toBe("tourism.search");
+        expect(skipped[0].effect).toBe(effect);
+        expect(skipped[0].detail).toMatch(new RegExp(effect));
+        // D-2: a skip carries no green/yellow/red. Nothing was inspected, so no colour is
+        // earned, and a dashboard cannot read it as a pass.
+        expect((skipped[0] as unknown as { status?: unknown }).status).toBeUndefined();
+        // D-6: the CLI's actual gate expression, asserted directly — an all-skipped run exits 0,
+        // exactly like today's all-empty run.
+        expect(results.some((r) => r.status === "red")).toBe(false);
+      }));
+  }
+
+  it("still probes a `read` capability in the same registry — the gate filters, it does not disable verify", () =>
+    withFixture(async (dir) => {
+      const read = tool(goldenFingerprint);
+      const pay: IRTool = { ...tool(goldenFingerprint), id: "tourism.pay", effect: "irreversible" };
+      const net = counting();
+      const { results, skipped } = await runVerify([read, pay], dir, resources, { fetchImpl: net.fetchImpl });
+
+      expect(net.calls()).toBe(1); // exactly one — the read one
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ capabilityId: "tourism.search", status: "green" });
+      expect(skipped.map((s) => s.capabilityId)).toEqual(["tourism.pay"]);
+    }));
+
+  it("`includeNonRead` (the CLI's --sandbox) re-includes them, and empties `skipped`", () =>
+    withFixture(async (dir) => {
+      const pay: IRTool = { ...tool(goldenFingerprint), id: "tourism.pay", effect: "irreversible" };
+      const net = counting();
+      const { results, skipped } = await runVerify([pay], dir, resources, { fetchImpl: net.fetchImpl }, { includeNonRead: true });
+
+      expect(net.calls()).toBe(1);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe("green");
+      expect(skipped).toEqual([]);
+    }));
+
+  it("`includeNonRead` does not re-include a RETIRED capability — #54's filter is independent and still applies", () =>
+    withFixture(async (dir) => {
+      const retiredWrite: IRTool = { ...tool(goldenFingerprint), id: "tourism.retired-hold", effect: "write", lifecycle: "retired" };
+      const net = counting();
+      const { results, skipped } = await runVerify([retiredWrite], dir, resources, { fetchImpl: net.fetchImpl }, { includeNonRead: true });
+
+      expect(net.calls()).toBe(0);
+      expect(results).toEqual([]);
+      expect(skipped).toEqual([]); // never contract-bearing for this purpose at all — not "skipped for effect"
+    }));
+
+  it("an unrecognized `effect` value is NOT probed — the fail-closed direction, deliberately opposite to the lifecycle rule", () =>
+    withFixture(async (dir) => {
+      // Getting `lifecycle` wrong costs a misreported line (so ADD-56 probes anyway, loudly).
+      // Getting `effect` wrong costs a real side effect on someone's production backend, which
+      // does not undo. Anything this build cannot confirm is a read is treated as unsafe.
+      const bogus: IRTool = { ...tool(goldenFingerprint), effect: "sell-the-company" as IRTool["effect"] };
+      const net = counting();
+      const { results, skipped } = await runVerify([bogus], dir, resources, { fetchImpl: net.fetchImpl });
+
+      expect(net.calls()).toBe(0);
+      expect(results).toEqual([]);
+      expect(skipped).toHaveLength(1);
+    }));
+
+  it("`verifyTool` itself stays UNGATED — a caller can still probe a write capability on purpose (D-1)", () =>
+    withFixture(async (dir) => {
+      // Same reason #54 left it ungated: gating the primitive would make it impossible to ever
+      // deliberately probe such a tool — from a test, or against a scratch backend. The default
+      // policy belongs in the orchestrator, not in the primitive.
+      const pay: IRTool = { ...tool(goldenFingerprint), effect: "irreversible" };
+      const net = counting();
+      const r = await verifyTool(pay, dir, resources, { fetchImpl: net.fetchImpl });
+
+      expect(net.calls()).toBe(1);
+      expect(r.status).toBe("green");
     }));
 });
 

@@ -1,0 +1,29 @@
+# Fixture manifest for #124 (archstone verify replays a write/irreversible fixture against
+# whatever the environment points at) — packages/cli/test/verify.test.ts.
+#
+# It exists because the SHIPPED example manifests give this change zero natural coverage: the
+# only contract-bearing binding in the whole repo is tourism's, and its capability is
+# `effect: read`. A green suite would therefore prove nothing about the effect gate. Same
+# reason `fixtures/retired-gate/` exists for #54's lifecycle filter.
+#
+# Three contract-bearing capabilities, one per effect:
+#   tourism.search  (read)          — must still be replayed live, exactly as before #124
+#   tourism.hold    (write)         — must NOT be replayed by a bare `archstone verify`
+#   tourism.pay     (irreversible)  — must NOT be replayed by a bare `archstone verify`
+#
+# Every binding points at a DIFFERENT path on the mock backend, so the test asserts the fact
+# that actually matters — "no request was issued" — by counting requests per path, rather than
+# by trusting what the report says it did.
+
+company:
+  id: wanderlust-effect-gate-fixture
+  name: Wanderlust Travel (effect-gate fixture)
+  description: Fixture manifest proving `archstone verify` does not replay a non-read binding's contract against a live backend (#124).
+
+capabilities:
+  - tourism.search
+  - tourism.hold
+  - tourism.pay
+
+providers:
+  - booking-engine

@@ -1,0 +1,9 @@
+{
+  "capabilityId": "tourism.hold",
+  "recordedAt": "2026-08-25T00:00:00Z",
+  "request": {
+    "stay": "azur-01",
+    "dates": { "from": "2026-09-01", "to": "2026-09-05" },
+    "travelers": { "adults": 2 }
+  }
+}
