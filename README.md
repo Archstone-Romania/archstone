@@ -296,6 +296,11 @@ runs entirely inside this and owes us nothing.
 **No feature that is free today becomes paid.** New commercial value is added alongside the
 open core, or it is not added.
 
+Both commitments are ratified decisions, not release notes — the reasoning, and the alternatives
+that were considered and refused, are in [ADR-0005](docs/adr/0005-open-core-boundary-artifact-guarantee.md).
+Ranking is covered separately and just as permanently: position in any selection Archstone
+performs is not purchasable in any form ([ADR-0006](docs/adr/0006-marketplace-neutrality.md)).
+
 What we sell, when it exists, is the *operation* of these artifacts over time on our machines:
 hosted durable audit and retention, managed rate-limit counters, drift monitoring, and
 multi-tenant hosting for teams who would rather not run a node. The governance mechanisms

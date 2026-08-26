@@ -5,6 +5,36 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.17.0]
+
+Minor, documentation only — no code changed. Three commitments that were previously a sentence
+each in the README are now published decisions you can read and check.
+
+### Added
+
+- **The commitment ADRs are public** — `docs/adr/`. Archstone records every structural decision
+  as an ADR before merge; this directory holds the subset that constitutes commitments to the
+  people who use it, and publishing them is what turns a promise into something checkable:
+
+  - **[ADR-0005](docs/adr/0005-open-core-boundary-artifact-guarantee.md)** — the open-core
+    boundary is an artifact guarantee, not a feature list. What stays free, and why the
+    guarantee is about the artifact you build rather than a list of features that could be
+    re-drawn later.
+  - **[ADR-0006](docs/adr/0006-marketplace-neutrality.md)** — selection is never for sale.
+    Position in any selection Archstone performs is not purchasable, in any form.
+  - **[ADR-0008](docs/adr/0008-undeclared-provider-data-never-reaches-a-model.md)** — a field
+    your manifest does not name never reaches a model. No flag, no per-binding opt-in, no
+    trusted-provider mode. Your provider's payload very likely carries wholesale rates,
+    commissions or internal ids beside the fields you publish, and a backend deploy adding one
+    must not become a decision about what an assistant can say.
+
+  Each carries the alternatives that were considered and **refused**, which is the part that
+  distinguishes a decision from a slogan — and the part a business evaluating a dependency
+  actually needs.
+
+- **The README points at them.** The open-core and neutrality sentences now link to the
+  reasoning behind them rather than asking to be taken on trust.
+
 ## [0.16.0]
 
 Minor. `effect` reached the IR at compile time — `archstone init` refuses to write a manifest

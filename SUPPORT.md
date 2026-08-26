@@ -26,9 +26,9 @@ manifest, and it keeps working with no relationship to us.
 
 | Line | Version | Status |
 |---|---|---|
-| Current | `0.16.x` | ✅ Supported · `release/0.16.x` |
-| Maintenance | `0.15.x` | ✅ Security and fail-closed fixes · `release/0.15.x` |
-| LTS | `0.16.x` | 🟢 **Available for designation** under a support agreement — the current minor, so a line designated today starts at the newest code rather than one already superseded |
+| Current | `0.17.x` | ✅ Supported · `release/0.17.x` |
+| Maintenance | `0.16.x` | ✅ Security and fail-closed fixes · `release/0.16.x` |
+| LTS | `0.17.x` | 🟢 **Available for designation** under a support agreement — the current minor, so a line designated today starts at the newest code rather than one already superseded |
 | End of life | `≤ 0.11.x` | ⛔ |
 
 ---
