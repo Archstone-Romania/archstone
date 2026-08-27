@@ -30,11 +30,21 @@ export default tseslint.config(
     },
   },
   {
-    // Plain Node scripts (demo fixtures, no tsconfig coverage) — declare the Node globals
-    // they use so `no-undef` doesn't false-positive outside the TS type-checked surface.
+    // Plain Node scripts (demo fixtures and the release tooling under scripts/, no tsconfig
+    // coverage) — declare the Node globals they use so `no-undef` doesn't false-positive
+    // outside the TS type-checked surface. The release tooling reached this workspace with
+    // ADR-0010 (it used to live outside the linted tree entirely, which is why these were
+    // never declared before): npm-readback talks to the registry over `fetch` with an
+    // `AbortSignal` timeout, and both it and the gate pace retries with `setTimeout`.
     files: ["**/*.mjs"],
     languageOptions: {
-      globals: { process: "readonly", console: "readonly" },
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        fetch: "readonly",
+        AbortSignal: "readonly",
+        setTimeout: "readonly",
+      },
     },
   },
 );
