@@ -1,0 +1,105 @@
+name: Dependency audit
+
+# Dependabot watches the PUBLIC mirror (Archstone-Romania/archstone), but the lockfile it
+# flags is generated here, on the private source of truth — so Dependabot can never open a
+# remediation PR where the fix actually has to land. Remediation is permanently manual from
+# this side (see the audit workflow's own history). This workflow is the missing half: it surfaces the
+# same advisories on the private repo, before a release carries them into the mirror.
+#
+# Two tiers, deliberately:
+#
+#   1. BLOCKING — `--prod`, high+. `--prod` is workspace-wide (it walks every importer in
+#      the lockfile, not just the root package.json, which declares devDependencies only)
+#      while still excluding dev trees. That makes it a close proxy for "what reaches a
+#      consumer of a published @archstone/* package" — the surface where a vulnerability is
+#      our problem rather than our toolchain's.
+#
+#   2. ADVISORY — everything, moderate+, reported into the run summary and never failing.
+#      This is where eslint's js-yaml and wrangler/miniflare's undici + sharp land: worth
+#      patching to keep the mirror's alert list quiet, but not worth a red build, because a
+#      dev-only advisory blocking a merge trains people to ignore the gate.
+#
+# The blocking tier only runs on PRs that touch dependency manifests, plus on a weekly
+# schedule. That matters: advisories appear against an unchanged lockfile all the time, and
+# a newly-published HIGH with no upstream patch yet must not wall off every unrelated PR.
+# The schedule is what catches that drift; the PR trigger only holds you responsible for
+# dependency changes you are actually making.
+
+on:
+  pull_request:
+    paths:
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - "packages/*/package.json"
+      - "providers/*/package.json"
+      - "examples/demo/remote-mcp-worker/package.json"
+  schedule:
+    - cron: "0 6 * * 1"     # Mondays 06:00 UTC — drift, not change, is the thing this catches
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.13.1       # matches release.yml — no packageManager field at repo root to infer from
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # No `pnpm install` on purpose: `pnpm audit` resolves the advisory set from the
+      # lockfile alone, so installing would only add a minute of CI for nothing.
+
+      - name: Advisory report (all dependencies, moderate and above)
+        id: advisory
+        run: |
+          {
+            echo "## Dependency audit"
+            echo
+            echo "### Advisory — all dependencies, moderate+"
+            echo
+            echo '```'
+            pnpm audit --audit-level moderate --ignore-registry-errors 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Gate — production dependencies, high and above
+        run: |
+
+          # --ignore-registry-errors: a flaky advisory registry must not read as a
+          # vulnerability. Note we deliberately do NOT pass --ignore-unfixable — a HIGH in
+          # the shipped tree with no patch yet is precisely what we want to hear about, even
+          # though the immediate response is a decision rather than a version bump.
+          set +e
+          OUT=$(pnpm audit --prod --audit-level high --ignore-registry-errors 2>&1)
+          STATUS=$?
+          set -e
+
+          echo "$OUT"
+
+          {
+            echo
+            echo "### Gate — production dependencies, high+"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::High-severity advisories in the shipped dependency tree. These reach consumers of the published @archstone/* packages. Remediate in pnpm-lock.yaml, preferring a natural resolution (pnpm update) over a forced override."
+            exit 1
+          fi
+
+          echo "No high-severity advisories in the shipped dependency tree."

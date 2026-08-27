@@ -1,4 +1,4 @@
-# Doc fixtures (#57)
+# Doc fixtures (dev-57)
 
 Support files for `scripts/verify-doc-snippets.mjs` — the check that compiles every
 `archstone-fixture`-annotated ` ```yaml ` block published in `README.md`, `CASE-STUDY.md` and

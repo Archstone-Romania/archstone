@@ -1,0 +1,50 @@
+name: Verify published doc snippets
+
+# #57 — published CDL is a de facto second specification of the language (Rule #11: a
+# shipped primitive is permanent, so a wrong published example is as load-bearing as the real
+# grammar). This runs whenever a PR touches one of the three docs a copy-pasted CDL snippet
+# is most likely to live/rot in, or the fixture-directory mechanism that completes those
+# snippets into compilable manifests, and fails the check if any annotated snippet no longer
+# compiles.
+#
+# Same check also runs unconditionally as part of `pnpm test` (scripts/verify-doc-snippets.
+# test.ts) and again, explicitly, in release.yml's Build gate step before every tagged
+# release — this workflow is the fast, PR-scoped signal so a doc-only PR doesn't have to wait
+# for a release to find out it broke.
+
+on:
+  pull_request:
+    paths:
+      - "README.md"
+      - "CASE-STUDY.md"
+      - "docs/ONBOARDING.md"
+      - "examples/doc-fixtures/**"
+      - "scripts/verify-doc-snippets.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-doc-snippets-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.13.1       # matches release.yml — no packageManager field at repo root to infer from
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: cd archstone && pnpm install --frozen-lockfile
+
+      - name: Compile every archstone-fixture= annotated CDL snippet in the published docs
+        run: cd archstone && node scripts/verify-doc-snippets.mjs

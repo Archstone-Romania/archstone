@@ -209,7 +209,7 @@ binding.
 
 ## 7. Status of primitives
 
-**Every primitive in this document is Canonical** (Rule #11,
+**Every primitive in this document is Canonical** (Rule 11,
 ADR-0007, 2026-08-23): frozen in
 meaning, and neither removable nor redefinable. A manifest that compiles against CDL 1.0
 compiles against every later 1.x.
@@ -221,7 +221,7 @@ graduate too — what freezes is *meaning*, not *usage*, and a two-tier grammar 
 reader unable to tell which half of a normative document they may rely on.
 
 **Additions remain possible and are not breaking.** A new primitive earns its place under
-Rule #10 or it does not enter; either way an existing manifest is
+Rule 10 or it does not enter; either way an existing manifest is
 unaffected, which is why RQ-001 and
 RQ-002 can stay open across a 1.0.
 

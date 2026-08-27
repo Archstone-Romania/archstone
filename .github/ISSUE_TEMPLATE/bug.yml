@@ -1,0 +1,117 @@
+name: Bug
+description: Something broken or incorrect in shipped / in-tree code.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill every section. Incomplete bugs get closed or bounced back.
+        Prefer paths under `archstone/` and a failing test or repro command when possible.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what is wrong?
+      placeholder: executeCapability rejects sanitized tool names returned by tools()…
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro steps
+      description: Minimal steps someone else can follow. Include commands if relevant.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      placeholder: What should happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      placeholder: What happens instead? Paste error text if any.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: Packages, files, or modules involved.
+      placeholder: |
+        - archstone/packages/agent/src/execute.ts
+        - …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Blocker (breaks a demo, pilot, or release path)
+        - High (wrong behaviour on a main path)
+        - Medium (edge case / workaround exists)
+        - Low (cosmetic / docs / rare)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority label (apply on the issue)
+      description: After create, ensure exactly one of P0–P3 is on the issue (forms cannot auto-apply these). Agents using `gh` must `--add-label` the matching label.
+      options:
+        - P0 — Do now (blocker / broken main path)
+        - P1 — Next serious increment
+        - P2 — After P0/P1 (or blocked waiting)
+        - P3 — Later / backlog
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone (assign on the issue)
+      description: One milestone only. Use M* for near-term ship; V* for Vision backlog (may be empty). `gh issue edit N --milestone "…"`.
+      options:
+        - M1 — Agent execute hardens
+        - M2 — Caller identity (pre-bank)
+        - M3 — Follow-ups (unblocked)
+        - M4 — Distribution (parked)
+        - V3 — Governance
+        - V4 — Codegen
+        - V5 — Platform
+        - V6 — Every surface
+        - (none / ask founder)
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested fix (optional)
+      description: Ideas only — not a commitment. Alternatives welcome.
+      placeholder: e.g. reverse-index sanitized names in Registry.getCapability…
+
+  - type: textarea
+    id: refs
+    attributes:
+      label: References
+      description: Related issues, ADDs, RFCs, PRs, dogfood notes.
+      placeholder: |
+        - #28
+        - Found during ArtVinci dogfood

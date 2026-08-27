@@ -1,0 +1,82 @@
+name: Deploy demo remote-MCP Worker
+
+# Growth/demo-only infra (examples/demo/remote-mcp-worker) — see that folder's
+# README. NOT part of the product release flow in release.yml; this tracks private main
+# directly, same as archstone-website tracks its own main for Cloudflare Pages.
+#
+# One-time setup: a repo secret CLOUDFLARE_API_TOKEN, scoped to Workers Scripts:Edit on the
+# account that owns archstone-demo-tourism-mcp (and, if the account has more than one,
+# CLOUDFLARE_ACCOUNT_ID too). Create the token in the Cloudflare dashboard — do not paste a
+# token value into a workflow file or a PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/demo/remote-mcp-worker/**"
+      - "examples/manifests/tourism/**"
+      - "packages/**"
+      - "providers/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-demo-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Require Cloudflare token (fail fast, before any build)
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN secret is not set. See examples/demo/remote-mcp-worker/README.md."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.13.1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        # --no-frozen-lockfile: pnpm defaults frozen-lockfile to true whenever it detects a CI
+        # environment, regardless of the flag passed — so this needs to be explicit, not just
+        # omitted. This workflow intentionally tracks main directly, and other in-flight work in
+        # this monorepo may commit package.json changes on its own schedule without this
+        # workflow's commit also re-syncing pnpm-lock.yaml; letting pnpm patch the lockfile for
+        # this run avoids a hard failure on that drift.
+        run: |
+                    pnpm install --no-frozen-lockfile
+
+      - name: Build workspace packages
+        # Since #13, @archstone/{schema,compiler,runtime,provider-rest} resolve strictly via
+        # package.json "exports" -> ./dist/index.js (no dev-mode src fallback). tsx-based steps
+        # like build:ir below resolve fine via tsconfig paths straight to source, but wrangler's
+        # esbuild bundler follows Node exports resolution and needs dist/ to actually exist.
+        run: |
+                    pnpm -r run build
+
+      - name: Build IR (real pipeline, from the tourism example)
+        run: |
+          cd examples/demo/remote-mcp-worker
+          pnpm build:ir
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: examples/demo/remote-mcp-worker
+          command: deploy

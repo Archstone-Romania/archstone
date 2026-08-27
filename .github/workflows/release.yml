@@ -1,0 +1,387 @@
+# Release pipeline for Archstone (the public repository — ADR-0010).
+#
+# Tagging THIS repo with vX.Y.Z publishes the 8 @archstone/* packages to npm and creates the
+# GitHub Release. The tag is the single source of what ships: versions are stamped by the
+# release-prepare PR before tagging, and this workflow verifies that instead of pushing a
+# bump commit (main is protected).
+#
+# npm authenticates via Trusted Publishing (OIDC) — no NPM_TOKEN secret exists. Each
+# package's Trusted Publisher on npmjs.com must point at THIS repo + this workflow file.
+#
+# Backports: the classify step resolves the tag against origin/main and origin/release/X.Y.x,
+# so a backport can only ship after its release/X.Y.x branch has been pushed here.
+
+name: Release
+
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >
+          Resume a release that already has a vX.Y.Z tag on this repo (no leading "v",
+          e.g. 0.7.0). This does NOT create a release — it re-runs the pipeline for a tag
+          that was already pushed, for when a prior tag-triggered run stopped partway
+          through. The tag must already exist on origin and be an ancestor of main.
+        required: true
+        type: string
+
+permissions:
+  # `write` is for the GitHub Release object created after a confirmed publish — it grants
+  # no way past branch protection, and nothing in this workflow pushes to any branch.
+  contents: write
+  id-token: write        # OIDC token for npm Trusted Publishing (no NPM_TOKEN secret)
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the tagged commit (full history)
+        # #93 / A-6 §6 M-2. This used to check out `ref: main` unconditionally, which made a
+        # backport impossible to ship: tagging v0.11.7 after 0.12.0 had landed would have
+        # published MAIN's content under a patch of the older line — newer code, possibly with
+        # breaking changes, delivered to the one customer who asked to be frozen. Checking out
+        # the tag makes the tag the single source of what ships, for mainline and backport
+        # alike, and it is also what makes the release gate (M-4) exercise the right tree
+        # without any further change.
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true    # the classify step below resolves the tag against main and the
+                              # release branches; don't rely on actions/checkout's default.
+          token: ${{ github.token }}
+
+      - name: Derive and validate version
+        id: v
+        env:
+          DISPATCH_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
+        run: |
+          # workflow_dispatch has no tag ref to read (GITHUB_REF_NAME would just be
+          # whatever branch/tag was picked in the dispatch UI, which is not reliable as a
+          # version source), so it supplies the version explicitly via input instead. A
+          # tag push keeps deriving it from the ref, unchanged.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="$DISPATCH_VERSION"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [ -z "$V" ] || ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version is missing or malformed: '$V' (event=${{ github.event_name }}, ref=$GITHUB_REF_NAME, input='$DISPATCH_VERSION'). Expected X.Y.Z with no leading v."
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # A release is a tag (see _repo-topology.md). Dispatch resumes an existing
+            # release; it must not be usable to publish a version that was never tagged.
+            if ! git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+              echo "::error::no tag v$V found on origin. workflow_dispatch resumes an already-tagged release — push the tag first (git tag -a v$V && git push origin v$V), or use the correct version."
+              exit 1
+            fi
+            # The old "is the tag an ancestor of HEAD?" check lived here and became vacuous
+            # once HEAD *is* the tag (#93 / M-2 — see the checkout step). The real question —
+            # is this tag reachable from a line we are allowed to publish — is stronger and is
+            # asked by "Classify the release line" below, for tag pushes and dispatches alike.
+            :
+          fi
+
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Classify the release line (mainline or backport)
+        id: line
+        # #93 / A-6 §6 M-2. Every later step branches on this, so it is deliberately the
+        # narrowest possible question with the loudest possible failure: a tag that belongs to
+        # no publishable line stops the release here, before any mutation.
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          git fetch -q origin '+refs/heads/*:refs/remotes/origin/*'
+          TAG="refs/tags/v$V"
+          LINE="release/${V%.*}.x"          # 0.11.7 -> release/0.11.x
+
+          if git merge-base --is-ancestor "$TAG" origin/main; then
+            # Mainline: the tag is reachable from main, i.e. this is the newest line.
+            IS_BACKPORT=false
+            TARGET_BRANCH=main
+            DIST_TAG=latest
+            echo "mainline release: v$V is reachable from origin/main"
+          elif git rev-parse -q --verify "origin/$LINE" >/dev/null && git merge-base --is-ancestor "$TAG" "origin/$LINE"; then
+            # Backport: not on main, but reachable from its own release branch.
+            IS_BACKPORT=true
+            TARGET_BRANCH="$LINE"
+            DIST_TAG="lts-${V%.*}"          # 0.11.7 -> lts-0.11, NEVER latest (see below)
+            echo "backport release: v$V is reachable from origin/$LINE but not from origin/main"
+          else
+            echo "::error::tag v$V is reachable from neither origin/main nor origin/$LINE. A release must sit on a line we publish: cut $LINE from the last tag of that line first (A-6 §2), or tag on main for a mainline release. Refusing to publish an orphan tag."
+            exit 1
+          fi
+
+          {
+            echo "is_backport=$IS_BACKPORT"
+            echo "target_branch=$TARGET_BRANCH"
+            echo "dist_tag=$DIST_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.13.1       # >=11.13.0: pnpm publish fix for sending README metadata to the registry
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Build gate (lint + typecheck + tests)
+        run: |
+          # Repo-root CI tooling first, BEFORE any mutation (ADD-37 Amendment 1 O-19). Its
+          # package-list tripwire also runs inside `scripts/release-gate.mjs` later, but that
+          # is after the version stamp has already been committed and pushed to main — the
+          # worst available moment to discover that release.yml omits a publishable package.
+          # `npm-readback.test.mjs` and `publish-loop.test.mjs` (#123) are here for the same
+          # reason: the publish step's readback decides whether a release passes or fails, and a
+          # bug in ITS timeout/retry logic — or in the loop wiring that calls it — must surface
+          # before this run touches anything, not on a tag at publish time. `publish-loop` runs
+          # THIS FILE's publish step against stubbed binaries, so it is a test of the shell
+          # below, not of a copy of it.
+          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          # #57 — published CDL is a second, unverified specification of the language.
+          # `pnpm test` above already runs scripts/verify-doc-snippets.test.ts (vitest), which
+          # exercises this same check plus the regression fixtures; this direct invocation is
+          # the explicit, greppable "a release cannot ship docs that do not compile" gate.
+          node scripts/verify-doc-snippets.mjs
+
+      - name: Assert the tagged commit is stamped
+        # The internal pipeline stamped versions here and pushed the bump back to main. This
+        # repository's main is protected (required checks + review), so the workflow does not
+        # write to it — and should not: the tag must be the single source of what ships.
+        # Versions are stamped by the release-prepare PR (the release/prepare-X.Y.Z pattern
+        # already in use); this step only VERIFIES the tagged commit agrees with itself. A
+        # mismatch means the tag was cut before the prepare PR merged — delete the tag, merge,
+        # re-tag. Nothing has been published when this fails.
+        #
+        # The package list is NOT free-form: `scripts/release-gate.mjs` parses it out of this
+        # very step and asserts, set-equal, that it is exactly the set of `private: false`
+        # workspace packages (ADD-33 R-4). Same tripwire, same reason, as the publish loop.
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          FAIL=0
+          ROOT_V=$(node -p "require('./package.json').version")
+          [ "$ROOT_V" = "$V" ] || { echo "::error::root package.json is $ROOT_V but the tag says $V"; FAIL=1; }
+          for p in packages/schema packages/compiler packages/emitter-support providers/rest packages/runtime packages/agent packages/init packages/cli; do
+            PV=$(node -p "require('./$p/package.json').version")
+            [ "$PV" = "$V" ] || { echo "::error::$p is at $PV but the tag says $V"; FAIL=1; }
+          done
+          if [ "$FAIL" = 1 ]; then
+            echo "::error::the tagged commit is not stamped to $V. Merge the release-prepare PR that stamps every package (and server.json), re-tag, and run again. Nothing was published."
+            exit 1
+          fi
+          echo "✓ root and all 8 packages are stamped to $V"
+      - name: "Release gate: build+verify examples against packed artifacts"
+        # #33/ADD-33 — packs every private:false @archstone/* package (now stamped to this
+        # tag's real version), publishes to an ephemeral local registry, does a real
+        # `npm install @archstone/cli@<version>` into a scratch consumer (no workspace, no
+        # tsx/TS), then runs `archstone build`/`archstone verify` against every manifest
+        # under examples/manifests/* using that installed CLI — never workspace source. A
+        # non-zero exit here blocks both downstream publish steps (GitHub Actions' default
+        # fail-fast; no conditional logic needed). `artvinci`'s verify leg has no CI-safe
+        # backend yet (real external partner API, no mock/secret) and is reported as an
+        # explicit "pending" entry — visible, not gating, never silently skipped.
+        # Also runs a live MCP `serve`/lifecycle-listing smoke probe (#24 follow-up) against
+        # the same packed/installed CLI — the only check in this pipeline that actually
+        # starts the MCP server and speaks the protocol with a real client.
+        run: node scripts/release-gate.mjs
+
+      - name: Publish packages to npm
+        # Authenticates via npm Trusted Publishing (OIDC) — each of the 8 packages has a
+        # Trusted Publisher configured for this repo/workflow on npmjs.com, so no NPM_TOKEN
+        # secret exists or is needed. Requires a recent npm CLI (OIDC support).
+        #
+        # ⚠ ONE-TIME MANUAL STEP FOR A NEW PACKAGE, and it cannot be done from here:
+        # `@archstone/init` is new in this list (ADD-37) and needs its own Trusted Publisher
+        # configured on npmjs.com for this repo + workflow before its first publish. Until
+        # that exists this step fails on `@archstone/init` with an auth error — and because
+        # `@archstone/cli` depends on it, a partial publish leaves the CLI uninstallable for
+        # everyone. The release gate cannot catch this: it publishes to an ephemeral local
+        # registry that does not check OIDC at all.
+        #
+        # Published per-package (not `pnpm -r publish`) and version-checked first, so a
+        # resumed run that lands here after a prior run already published some subset of
+        # the 8 packages does not fail on "cannot publish over previously published
+        # version" — it skips exactly the packages already on the registry and publishes
+        # the rest.
+        #
+        # ── #123: POST-PUBLISH READBACK, and why it is shaped like this ────────────────────
+        #
+        # `pnpm publish` exiting 0 is not evidence that a version reached the registry. At
+        # v0.15.0 (run 32863148469) this step logged "✅ Published package @archstone/init@
+        # 0.15.0", exited 0, and the job went green — while the registry's packument still
+        # ended at 0.14.0, with no 0.15.0 in `versions` at all. `@archstone/cli@0.15.0`
+        # published moments later pinning `"@archstone/init": "0.15.0"` exactly, so the CLI was
+        # on the registry and resolvable by nobody (`npm error code ETARGET`) for every user
+        # until a dispatch resume republished the one missing package. The publish ORDER below
+        # was correct and held throughout: ordering protects against a race between two
+        # publishes, never against a publish that lies about having happened.
+        #
+        # So each publish is now followed by a bounded poll of the registry, and the SAME check
+        # answers the idempotence question — one witness, one source. `npm view` is deliberately
+        # no longer that witness: it is answered out of npm's local `_cacache` for as long as
+        # the cached packument is inside its `max-age` (registry packuments send 300s), so it
+        # can repeat a five-minute-old answer and is therefore blind to BOTH states in this
+        # issue's title. `scripts/npm-readback.mjs` fetches the abbreviated packument over plain
+        # HTTP — the exact document `npm install` resolves a version against — with no CLIENT
+        # cache in the path. It cannot compel npm's CDN not to serve a stale edge copy, but a
+        # stale copy can only ever under-report (it cannot contain a version published after
+        # the snapshot), so it costs a retry and never a false confirmation.
+        #
+        # TIMEOUT — 10 minutes, and chosen against a measured benign case rather than a guess.
+        # At v0.14.0 an entirely SUCCESSFUL publish took roughly five minutes to appear in the
+        # packument. A readback impatient enough to fail that would turn healthy releases red
+        # forever — the other half of this issue, and a strictly worse regression than the bug
+        # being fixed here, because it would fire on the releases that are fine. 10 minutes is
+        # about twice the worst benign lag we have actually observed. The asymmetry justifies
+        # the generosity: being too patient costs ten minutes of a release that is already
+        # broken; being too impatient costs a false failure on a release that is not. In the
+        # healthy case this adds seconds — the first probe normally passes outright.
+        #
+        # FAIL-FAST — an unconfirmed package stops the loop (exit 1); it does not carry on with
+        # the rest. That is the entire lesson of the incident: the list below is a dependency
+        # order, so continuing past an unconfirmed package publishes a dependent whose
+        # dependency nobody can resolve — precisely what shipped at v0.15.0. Stopping leaves a
+        # PREFIX of the ordered list on the registry, which by construction is the harmless
+        # partial state (dependencies present, dependents absent — nothing installable is
+        # broken by it), and `workflow_dispatch` with the same version resumes from there: the
+        # idempotence branch skips whatever is already confirmed present.
+        #
+        # EVERY PACKAGE, not only the ones something else depends on. Restricting the check
+        # would mean keeping a second, hand-maintained copy of the dependency graph in this
+        # file — and a stale second copy of exactly that graph is the failure ADD-37
+        # Amendment 1 O-19 caught (`packages/init` became a `@archstone/cli` dependency while
+        # both loops here still predated it). It is also wrong on its own terms: `@archstone/
+        # cli` is depended on by nothing and is the package every user actually installs. The
+        # uniform rule costs seconds, cannot drift, and needs no reasoning at the call site.
+        #
+        # AN UNREACHABLE REGISTRY IS NOT EVIDENCE OF A FAILED PUBLISH. npm-readback.mjs
+        # separates "the registry answered and does not list it" from "the registry did not
+        # answer" (5xx, 429, a dropped connection, an unparseable body) and only ever retries
+        # the second — a blip must never be reported as a broken release. If the deadline
+        # passes having never got an answer the step still fails, because an unconfirmed
+        # publish is the thing this issue is about, but the log names which of the two it was
+        # so the operator knows whether to look at npm's status page or at our own publish.
+        env:
+          V: ${{ steps.v.outputs.version }}
+          DIST_TAG: ${{ steps.line.outputs.dist_tag }}
+          READBACK_TIMEOUT_S: 600   # see TIMEOUT above — measured against v0.14.0's ~5min lag
+          READBACK_GRACE_S: 20      # how long an UNANSWERED probe is retried, see below
+        run: |
+          npm install -g npm@latest
+
+          # Both budgets come from this step's `env:` above. Refuse to run on an empty one
+          # rather than defaulting: a silently-0 timeout would disable the readback entirely
+          # and restore the exact v0.15.0 blind spot, quietly and while still going green.
+          : "${READBACK_TIMEOUT_S:?must be set in this step's env: — see the TIMEOUT note above}"
+          : "${READBACK_GRACE_S:?must be set in this step's env: — see the readback notes above}"
+
+          # Check the readback exists BEFORE publishing anything. Discovering it was renamed
+          # after package 1 of 8 has already shipped is the worst available moment. The build
+          # gate's "every script it shells out to actually exists" test catches this earlier
+          # still; this is the second line of defence, for anything that reaches here anyway.
+          READBACK="$GITHUB_WORKSPACE/scripts/npm-readback.mjs"
+          [ -f "$READBACK" ] || { echo "::error::$READBACK is missing — refusing to publish without the post-publish registry readback (#123)."; exit 1; }
+
+          # The single "is it really on the registry?" witness, used in both directions below.
+          # $3 is the wait budget: 0 for the idempotence question (answer now), the full
+          # timeout for the post-publish confirmation.
+          on_registry() {
+            node "$READBACK" "$1" "$2" --timeout-seconds "$3" --unknown-grace-seconds "$READBACK_GRACE_S"
+          }
+
+          # ORDER IS LOAD-BEARING, and only in one direction: a package must be on the
+          # registry before anything that depends on it, or a consumer who installs the
+          # dependent between the two publishes gets an unresolvable tree. `packages/init`
+          # therefore sits immediately before `packages/cli`, which depends on it.
+          #
+          # Like the stamp loop above, this list is parsed and set-checked by
+          # `scripts/release-gate.mjs` against the discovered `private: false` packages —
+          # BOTH loops, since omitting a package from either one breaks a release in its own
+          # way (unstamped/stale version vs. never published at all).
+          for p in packages/schema packages/compiler packages/emitter-support providers/rest packages/runtime packages/agent packages/init packages/cli; do
+            NAME=$(node -p "require('./$p/package.json').name")
+            # Idempotence, asked with a 0s budget: absence is answered on the first probe, so a
+            # normal release does not stall on 8 packages that are legitimately not there yet.
+            # An UNANSWERED probe is retried for READBACK_GRACE_S and, if still unanswered,
+            # falls through to publish — never to skip. The two mistakes are not symmetric:
+            # publishing something already published fails loudly and harmlessly ("cannot
+            # publish over previously published version"), while skipping something that was
+            # never published is the O-19 catastrophe below. When in doubt, publish.
+            if on_registry "$NAME" "$V" 0; then
+              echo "✓ $NAME@$V already on npm — skipping (idempotent)."
+            else
+              # #93 / A-6 §6: the dist-tag is explicit and load-bearing. npm marks whatever
+              # was published LAST as `latest`, so a backport published with the default tag
+              # would hijack `latest` — `npm install @archstone/cli` would start resolving to
+              # 0.11.7 after 0.12.0 shipped, for everyone. Mainline publishes `latest`;
+              # a backport publishes `lts-<major>.<minor>` and never touches it.
+              ( cd "$p" && pnpm publish --access public --no-git-checks --tag "$DIST_TAG" )
+              echo "✓ pnpm publish reported success for $NAME@$V (dist-tag: $DIST_TAG) — confirming with the registry before continuing"
+              if ! on_registry "$NAME" "$V" "$READBACK_TIMEOUT_S"; then
+                echo "  Release state: every package listed BEFORE $p is on the registry and confirmed."
+                echo "  $p was published but is UNCONFIRMED. Everything after it was not published at"
+                echo "  all — deliberately, see this step's FAIL-FAST note. That is the safe direction"
+                echo "  (dependencies without dependents), so nothing a user can install is broken by"
+                echo "  stopping here; the risk was in continuing."
+                echo "  Check the registry yourself (npm view would be a cached, unreliable witness):"
+                echo "    curl -s https://registry.npmjs.org/$NAME | jq '.\"dist-tags\", (.versions | keys)'"
+                echo "  If $V is there now, this was propagation and the release is fine: re-run this"
+                echo "  workflow via workflow_dispatch with version=$V. It is idempotent — it skips"
+                echo "  every package already confirmed and publishes only the remainder."
+                echo "  If $V is NOT there, the publish silently did not take (the #123 failure mode)."
+                echo "  Check https://status.npmjs.org, and — if $NAME is newly added to this loop —"
+                echo "  that it has a Trusted Publisher configured on npmjs.com for this repo+workflow."
+                echo "::error::$NAME@$V was published but the registry never confirmed it within ${READBACK_TIMEOUT_S}s. Refusing to publish the packages after it, whose dependency on $NAME would be unresolvable (#123). Recovery instructions are in the log immediately above this annotation."
+                exit 1
+              fi
+              echo "✓ published $NAME@$V (dist-tag: $DIST_TAG)"
+            fi
+          done
+
+      - name: Create the GitHub Release
+        # Runs only after every package is CONFIRMED on the registry — a GitHub Release is an
+        # announcement, and announcing an unconfirmed publish is the #123 failure with a
+        # megaphone. Idempotent: a resumed run skips it if the release already exists.
+        #
+        # A backport is explicitly --latest=false: GitHub, like npm, marks the newest release
+        # "Latest" by default, so a 0.11.7 cut after 0.12.0 would replace the banner everyone
+        # sees — the same hijack the npm dist-tag logic above refuses, refused here too.
+        env:
+          V: ${{ steps.v.outputs.version }}
+          IS_BACKPORT: ${{ steps.line.outputs.is_backport }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "release v$V already exists — skipping (idempotent)."
+            exit 0
+          fi
+          # The CHANGELOG section for this version is the release body. If it is missing,
+          # that is a release-prepare defect worth failing on: the prepare PR owns the
+          # CHANGELOG, and a release with an empty body announces nothing.
+          awk -v v="$V" 'index($0, "## [" v "]") == 1 {found=1; next} found && /^## \[/ {exit} found {print}' CHANGELOG.md > /tmp/notes.md
+          if ! [ -s /tmp/notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $V — the release-prepare PR should have added it. Refusing to create a release with an empty body."
+            exit 1
+          fi
+          if [ "$IS_BACKPORT" = "true" ]; then LATEST_FLAG="--latest=false"; else LATEST_FLAG="--latest"; fi
+          gh release create "v$V" --title "v$V" --notes-file /tmp/notes.md --verify-tag $LATEST_FLAG
+          echo "✓ GitHub Release v$V created"

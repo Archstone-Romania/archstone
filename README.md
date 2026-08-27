@@ -337,6 +337,33 @@ reports go through [`SECURITY.md`](SECURITY.md), never a public issue.
 
 ---
 
+## How this project uses generative AI
+
+Archstone is written with substantial AI assistance. It says so here rather than leaving you to
+infer it from the commit log. The model is Anthropic's Claude — `claude-opus-5` at the time of
+writing — used through Claude Code.
+
+**Where it is used:** implementation and refactoring across the compiler, emitters, runtime and
+CLI; tests; documentation and changelog prose.
+
+**What is not generated: the decisions.** Every structural choice — what enters CDL, what the
+compiler guarantees, where a boundary sits — is written as an ADR before merge, with the
+alternatives that were considered and refused, and ratified by a person who is accountable for
+it. The decisions that constitute commitments to you are published in [`docs/adr/`](docs/adr/),
+so you can read the reasoning instead of taking a claim on trust. A patch nobody can explain does
+not merge, whatever wrote it.
+
+**Provenance:** commits carrying generated code name the model in their co-authorship trailer.
+Contributors are asked to do the same — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md#generative-ai).
+
+This disclosure exists because the alternative is worse. A compiler asks you to trust its output
+about things you cannot easily check by hand: that an `effect` is right, that a field you never
+declared did not leave your backend. You are entitled to know how it was built before deciding
+how much of that to trust.
+
+---
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the

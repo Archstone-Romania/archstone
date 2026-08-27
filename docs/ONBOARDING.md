@@ -559,7 +559,7 @@ spec:
 - **`spec.constraints` remains rejected at `archstone apply`**, naming the file, rather than
   silently accepted — there is no grammar for it yet, and a manifest never advertises a control
   that does not exist.
-- **`spec.rateLimit` is enforced (#45).** `maxInvocations` and `windowSeconds` are required
+- **`spec.rateLimit` is enforced (dev-45).** `maxInvocations` and `windowSeconds` are required
   **together** — a document declaring only one is refused at `archstone apply`, same discipline
   as everything else on this page. See "Rate limiting" below for how to wire it up.
 
@@ -589,7 +589,7 @@ capability. (The `rate-limited` CDL *token* is a separate vocabulary from the `s
 alone still does nothing.) The warnings never block anything. They exist so a `policies:` list is
 never mistaken for a list of shipped guarantees by someone reading your manifest as evidence.
 
-#### Rate limiting (`spec.rateLimit`, #45)
+#### Rate limiting (`spec.rateLimit`, dev-45)
 
 Rate limiting needs to count prior invocations, which is **state** — and Archstone's evaluation
 point is otherwise a pure function (ADD-43). So it is a *deliberate* second, sibling step,
@@ -1218,7 +1218,7 @@ separation ensures that consumers who only ever call `tools()`/`execute()` never
 MCP SDK into their bundle (RFC-0008, Architecture Challenge R-1).
 
 The bearer token is **required** and checked at handler construction, not on the first request
-(Rule #7 — core never ships open by default). If you're running in an environment without
+(Rule 7 — core never ships open by default). If you're running in an environment without
 secrets (e.g., a public demo), you must explicitly provide one anyway, even if it's a dummy
 value.
 

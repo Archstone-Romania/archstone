@@ -261,6 +261,100 @@ function runServeHttp(dir: string, port: number, token: string | undefined): voi
 const MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
 
 /**
+ * Bounds on the "lingering close" that `refuseOversizedBody` performs: how many bytes of an
+ * already-refused body are read and thrown away, and how long the socket is kept around, before
+ * the client is cut off for good.
+ *
+ * Both exist to bound a courtesy, not a capability. Nothing here is ever buffered — the bytes
+ * are discarded as they arrive and `chunks` is emptied the moment the cap trips — so the
+ * allocation bound #50 established is untouched. What is being spent is socket time on a client
+ * that already misbehaved, so it is capped rather than run to completion.
+ */
+const MAX_REFUSED_BODY_DRAIN_BYTES = 64 * 1024 * 1024;
+const REFUSED_BODY_LINGER_MS = 5_000;
+
+/**
+ * Refuse an oversized body with a 413 the client will actually receive, then let go of the
+ * socket.
+ *
+ * Refusing turned out not to be the same as being heard. Ending the response the ordinary way
+ * sets `Connection: close`, and Node then calls `destroySoon()` as soon as the response has
+ * flushed — without waiting on the read side. The client is still mid-upload, so megabytes of
+ * its body are sitting unread in this process's receive buffer, and a socket closed with unread
+ * data does not send FIN, it sends RST. An RST makes the peer's stack DISCARD whatever is
+ * already in its own receive buffer — the just-delivered 413 included. Measured against the
+ * real CLI: 7 of 25 chunked oversize uploads ended in ECONNRESET/EPIPE with the response
+ * destroyed in flight, and the rate climbed with machine load. The caller could not tell "your
+ * body is too large" apart from "the server fell over" (measured 2026-08-26).
+ *
+ * Draining the body before closing is the obvious repair and it is not enough: under load the
+ * event loop drains slower than the client fills, so the buffer is still dirty at close. It cut
+ * the loss from 7/25 to 3/40 idle, and it was still 8/40 at load average 44.
+ *
+ * What is sufficient is to never call close() with the read side dirty. So the socket is taken
+ * over from the response, the 413 is written by hand, and `socket.end()` issues a bare
+ * shutdown(WR): the response and the FIN leave together, the read side stays open, and no RST
+ * is ever generated. The remaining upload is then read and dropped until the client gives up,
+ * the byte budget is spent, or the linger expires. This is nginx's `lingering_close`, and it is
+ * why the caller may go on streaming without ever costing this process memory. Measured on the
+ * same machine at load average 44: 60 of 60 uploads received their 413, including the
+ * pathological client that never stops writing and never terminates its chunked body.
+ *
+ * Both refusal paths use this — the streaming guard and the declared-Content-Length fast path.
+ * The fast path still decides on the header alone, before reading a byte; lingering afterwards
+ * does not change what the decision was made from, only whether the caller gets to hear it.
+ *
+ * What this does NOT add is a cap on how many sockets may be lingering at once. Stated out
+ * loud rather than left implicit, because #49/#50 treated this file's unauthenticated surface
+ * carefully: a flood can now hold a refused connection for up to the bounds above where it
+ * used to be dropped near-instantly. The exposure is file descriptors and time, never memory,
+ * and it is what buys a caller the ability to learn why it was refused. If a global cap is
+ * ever wanted it belongs at the server, alongside `maxConnections`, not here.
+ *
+ * Writing the status line by hand is deliberate. `res.detachSocket()` is the supported way to
+ * take a socket out of Node's response machinery (it is what an HTTP upgrade does), and once
+ * detached the ServerResponse must not be used — it no longer owns anything to write through.
+ */
+function refuseOversizedBody(res: ServerResponse): void {
+  const socket = res.socket;
+  // No socket to linger on, or the response is already committed: fall back to the ordinary
+  // ending. It may be lost to an RST, which is strictly better than throwing from here (#49).
+  if (!socket || res.headersSent || res.writableEnded || res.destroyed || socket.destroyed) {
+    endResponseQuietly(res, 413, { closeConnection: true });
+    return;
+  }
+  try {
+    res.detachSocket(socket);
+    // No `Date`, which Node's ServerResponse would have added. Deliberate, and the only header
+    // that differs from the old path: RFC 9110 recommends rather than requires it, and this
+    // connection closes immediately, so nothing downstream can cache or age the response.
+    socket.write("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    socket.end(); // shutdown(WR) only — the read side deliberately stays open.
+
+    let discarded = 0;
+    socket.on("data", (chunk: Buffer) => {
+      discarded += chunk.length;
+      if (discarded > MAX_REFUSED_BODY_DRAIN_BYTES) socket.destroy();
+    });
+    socket.resume();
+    // Client faults are never logged (#49 BF-1) and a dead peer must not leak a socket, so the
+    // two remaining exits are silent: the budget above, and this deadline.
+    socket.on("error", () => socket.destroy());
+    const linger = setTimeout(() => socket.destroy(), REFUSED_BODY_LINGER_MS);
+    linger.unref();
+    socket.on("close", () => clearTimeout(linger));
+  } catch {
+    // The socket went away between the guard above and the write. Nothing to say, no one to
+    // say it to — same contract as endResponseQuietly.
+    try {
+      socket.destroy();
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
  * Terminate a response without ever throwing (#49). Every exit path out of the adapter goes
  * through here, including the ones reached after the client is already gone: on an aborted
  * connection the socket is destroyed, and a naive `res.end()` there is at best pointless and
@@ -322,7 +416,14 @@ async function handleHttpRequest(
   // BF-1).
   const declared = Number(req.headers["content-length"]);
   if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
-    endResponseQuietly(res, 413, { closeConnection: true });
+    // Refused on the header, without reading a byte — then handed to the same lingering close
+    // as the streaming guard below. Which bytes the SERVER chose to read is not what decides
+    // whether the 413 survives: the RST is triggered by bytes sitting unread in the KERNEL
+    // receive buffer when the write side closes, and a client that declares N and then sends N
+    // — i.e. every real HTTP library — puts them there whether or not this function ever
+    // looked. Measured on a warm server: 18/25 of these lost their 413 before this line
+    // changed. (A fresh server loses none, which is why the test suite never caught it.)
+    refuseOversizedBody(res);
     return;
   }
 
@@ -333,10 +434,11 @@ async function handleHttpRequest(
       const buf = chunk as Buffer;
       received += buf.length;
       if (received > MAX_REQUEST_BODY_BYTES) {
-        // Returning from inside `for await` calls the iterator's `return()`, which tears the
-        // request stream down — so the remaining bytes are never buffered, and the client is
-        // not left streaming into a socket nobody drains.
-        endResponseQuietly(res, 413, { closeConnection: true });
+        // Nothing downstream will ever read these; drop them before handing the socket over.
+        chunks.length = 0;
+        // Takes the socket out of `res` and answers on it directly, so returning here (which
+        // tears the request stream down) can no longer cost the client its 413.
+        refuseOversizedBody(res);
         return;
       }
       chunks.push(buf);

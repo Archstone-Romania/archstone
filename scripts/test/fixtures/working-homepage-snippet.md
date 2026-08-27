@@ -1,5 +1,5 @@
 <!--
-Regression fixture (#57) — the corrected, compiling counterpart to
+Regression fixture (dev-57) — the corrected, compiling counterpart to
 broken-homepage-snippet.md in this same directory. Real flow-mapping CDL (a field is
 `{ type: ... }`, not a bare type name; a collection output is `collection: <ResourceName>`,
 not `collection<ResourceName>`), same shape as docs/ONBOARDING.md's own Step 2 snippet and the

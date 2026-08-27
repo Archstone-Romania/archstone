@@ -1,0 +1,122 @@
+name: Enhancement
+description: New behaviour, increment, or roadmap item (use label roadmap if parked).
+title: "[enhancement] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for features, increments, and spikes.
+        **Roadmap / Vision-only (parked):** still use this form, then add the `roadmap` label after creating (or ask the opener to add it).
+        Keep the MVP slice narrow. Layer purity: IR neutral · MCP only in emitter/transport · HTTP only in `providers/*`.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Increment (build soon — clear DoD)
+        - Spike / investigation (answer a question, then file follow-ups)
+        - Roadmap (Vision-level — parked, not scheduled)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority label (apply on the issue)
+      description: After create, ensure exactly one of P0–P3 is on the issue. Roadmap items are usually P3 + label `roadmap`. Agents using `gh` must `--add-label` the matching label.
+      options:
+        - P0 — Do now (blocker / broken main path)
+        - P1 — Next serious increment
+        - P2 — After P0/P1 (or blocked waiting)
+        - P3 — Later / backlog (typical for roadmap)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone (assign on the issue)
+      description: One milestone only. M* = near-term ship; V* = Vision backlog (ok if empty). Roadmap often M4 or V3–V6.
+      options:
+        - M1 — Agent execute hardens
+        - M2 — Caller identity (pre-bank)
+        - M3 — Follow-ups (unblocked)
+        - M4 — Distribution (parked)
+        - V3 — Governance
+        - V4 — Codegen
+        - V5 — Platform
+        - V6 — Every surface
+        - (none / ask founder)
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why (priority / breaking point)
+      description: Who hurts without this? What does it unblock? Why now?
+      placeholder: Banking “my accounts” story cannot go to production without caller credential propagation…
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current state
+      description: What exists today? Observations with paths / RFCs where possible.
+      placeholder: |
+        - REST auth is env `${VAR}` headers only (providers/rest)…
+        - policies: [authenticated] is authored but not enforced…
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal (MVP slice)
+      description: The smallest shippable outcome. Numbered. No Phase-2 creep.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Explicit non-goals for this issue (defer to follow-ups).
+      placeholder: |
+        - Full OAuth AS / OIDC broker
+        - Dashboard / KPI
+        - …
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance / Definition of Done
+      description: Checkable outcomes. Include tests and docs if behaviour changes.
+      placeholder: |
+        - [ ] …
+        - [ ] Tests cover …
+        - [ ] Docs note …
+        - [ ] Layer purity preserved (IR / MCP / HTTP)
+    validations:
+      required: true
+
+  - type: textarea
+    id: refs
+    attributes:
+      label: References
+      description: Related issues, docs, or examples.
+      placeholder: |
+        - a related issue
+        - a section of the CDL specification
+        - an example manifest
+    validations:
+      required: true
