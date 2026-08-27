@@ -15,6 +15,12 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.18.0]
+
+Patch-sized minor, and the first release cut from this repository rather than
+snapshotted into it (ADR-0010): development, CI and releases now live here.
+No compiler, language or API surface changed.
+
 ### Fixed
 
 - **`archstone serve --http` now delivers the `413` it already decided on.** An oversized
