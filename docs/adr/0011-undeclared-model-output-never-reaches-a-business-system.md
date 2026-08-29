@@ -1,6 +1,6 @@
 # ADR-0011: Undeclared Model Output Never Reaches a Business System
 
-**Status:** 📋 Proposed (2026-08-29)
+**Status:** ✅ Accepted (2026-08-29)
 **Date:** 2026-08-29
 **Deciders:** Adrian Bratulescu
 **Related:** [ADR-0008](0008-undeclared-provider-data-never-reaches-a-model.md) · [ADR-0005](0005-open-core-boundary-artifact-guarantee.md) · [CDL Specification](../cdl-specification.md) · [RFC-0002](../rfc/0002-cdl-v0.2.md)
