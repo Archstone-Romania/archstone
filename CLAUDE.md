@@ -33,6 +33,25 @@ The hosted commercial product will live in its own separate repository and depen
 the mechanical form of the open-core commitment in
 [`docs/adr/0005-open-core-boundary-artifact-guarantee.md`](docs/adr/0005-open-core-boundary-artifact-guarantee.md).
 
+## Branches
+
+Every change goes through a branch and a pull request, including a one-line edit. Name the branch
+for what the task **is**, with one of exactly three prefixes:
+
+| Prefix | For |
+|---|---|
+| `feature/` | new capability, new docs, a decision record, a refactor — anything additive or structural |
+| `bug/` | a defect in shipped behaviour, fixed on the normal review cadence |
+| `hotfix/` | a defect fixed *out of cadence*, because something is broken for users now |
+
+`bug/` and `hotfix/` are separated by urgency, not severity: the same defect is a `bug/` when it
+can wait for review and a `hotfix/` when it cannot.
+
+**Never `claude/`, or any other prefix naming the tool that wrote the change.** What wrote it is
+already in the commit trailer and the PR author. A branch name exists so a reader can decide
+whether the change is on their path, and a prefix that sorts every agent's work into one bucket
+regardless of what it does tells them nothing.
+
 ## Commands
 
 ```bash
