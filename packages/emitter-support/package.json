@@ -45,6 +45,7 @@
   },
   "devDependencies": {
     "@archstone/schema": "workspace:*",
+    "ajv": "^8.17.1",
     "tsup": "^8.5.1"
   }
 }

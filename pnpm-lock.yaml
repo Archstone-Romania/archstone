@@ -133,6 +133,9 @@ importers:
       '@archstone/schema':
         specifier: workspace:*
         version: link:../schema
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)(yaml@2.9.0)
