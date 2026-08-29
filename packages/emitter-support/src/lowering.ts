@@ -79,7 +79,18 @@ function fieldJsonSchema(f: IRField, resources: IRResourceRegistry, visited: Rea
     if (f.type.identity) return { ...base, type: "string" };
     return { ...base, ...resourceJsonSchema(f.type.name, resources, visited) };
   }
-  return { ...base, ...semanticJsonSchema(f.type.semantic, f.type.values) };
+  // The AUTHORED description wins. A semantic type's generic text ("A place — city, region, or
+  // address.") is a fallback for a field that declares none — never a replacement for one that
+  // does. Before this, the spread order silently discarded the manifest's own sentence for any
+  // semantic type that carries a description — `location` is the only one today, which is exactly
+  // why this went unnoticed: it looks correct on every other field. Tolerable while a description
+  // is documentation; not once it is the instruction a model extracts against. The precedence is
+  // fixed for the rule, not for the one case, so a semantic type that gains a description later
+  // cannot reintroduce it. Re-asserting the key rather than reversing the spread keeps every OTHER key
+  // (type, format, properties, required, enum) semantic-owned, and keeps emitted key order
+  // byte-identical for the fields this does not change.
+  const semantic = semanticJsonSchema(f.type.semantic, f.type.values);
+  return f.description ? { ...base, ...semantic, description: f.description } : { ...base, ...semantic };
 }
 
 /** Lower an IR field list to a JSON Schema object, resolving resource/collection field

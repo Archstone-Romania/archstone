@@ -100,3 +100,46 @@ describe("objectJsonSchema — resource cycle guard", () => {
     expect(root.properties.next.properties).toBeUndefined();
   });
 });
+
+describe("#8: a semantic type's description never overwrites the authored one", () => {
+  // `location` is the only semantic type that ships a description today, which is why this
+  // defect looked like working code on every other field. The assertions below pin the RULE,
+  // not the one case: the second test proves the fallback still applies, so a semantic type
+  // that gains a description later is covered in both directions.
+  const described: IRField[] = [
+    {
+      name: "location",
+      required: true,
+      description: "Where the stay is — city, region, or address.",
+      type: { kind: "scalar", semantic: "location" },
+    },
+  ];
+
+  it("keeps the manifest's own sentence", () => {
+    const schema = objectJsonSchema(described) as { properties: Record<string, { description: string }> };
+    expect(schema.properties.location.description).toBe("Where the stay is — city, region, or address.");
+  });
+
+  it("falls back to the semantic type's text when the field declares none", () => {
+    const bare: IRField[] = [{ name: "location", required: true, type: { kind: "scalar", semantic: "location" } }];
+    const schema = objectJsonSchema(bare) as { properties: Record<string, { description?: string }> };
+    expect(schema.properties.location.description).toBe("A place — city, region, or address.");
+  });
+
+  it("overrides the description only — every other key stays semantic-owned", () => {
+    const money: IRField[] = [
+      { name: "price", required: true, description: "What the guest pays.", type: { kind: "scalar", semantic: "money" } },
+    ];
+    const schema = objectJsonSchema(money) as {
+      properties: Record<string, { description: string; type: string; required: string[] }>;
+    };
+    expect(schema.properties.price.description).toBe("What the guest pays.");
+    expect(schema.properties.price.type).toBe("object"); // not clobbered by `base`
+    expect(schema.properties.price.required).toEqual(["amount", "currency"]);
+  });
+
+  it("emits `description` first, so key order is unchanged for fields this does not affect", () => {
+    const schema = objectJsonSchema(described) as { properties: Record<string, object> };
+    expect(Object.keys(schema.properties.location)).toEqual(["description", "type"]);
+  });
+});
