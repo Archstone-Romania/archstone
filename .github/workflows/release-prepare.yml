@@ -133,22 +133,14 @@ jobs:
         run: node scripts/release-prepare.mjs "$V"
 
       - name: Verify the stamp is complete and in lockstep
-        # The same assertion release.yml makes after the tag exists, made here instead. The
-        # package list is discovered, not listed, so a package added since the last release
-        # is caught by the script's own tripwire rather than by silence.
+        # The same check release-tag.yml runs before tagging, and the same discovery the
+        # stamper just used — so "did it stamp everything" is asked by the code that knows
+        # what everything is, rather than by a shell approximation of it here.
         env:
           V: ${{ steps.v.outputs.version }}
         run: |
           node --test scripts/release-prepare.test.mjs
-          FAIL=0
-          ROOT_V=$(node -p "require('./package.json').version")
-          [ "$ROOT_V" = "$V" ] || { echo "::error::root package.json is $ROOT_V, expected $V"; FAIL=1; }
-          if ! grep -q "^## \[$V\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no ## [$V] section after stamping."
-            FAIL=1
-          fi
-          [ "$FAIL" = 0 ] || exit 1
-          echo "✓ tree is stamped to $V"
+          node scripts/release-prepare.mjs --verify "$V"
 
       - name: Push the prepare branch
         env:

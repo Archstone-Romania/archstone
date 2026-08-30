@@ -12,8 +12,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   parseVersion,
@@ -22,6 +23,8 @@ import {
   stampPackageJson,
   stampServerJson,
   stampChangelog,
+  stampTree,
+  verifyStamp,
 } from "./release-prepare.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -166,5 +169,143 @@ test("the real tree is in lockstep: root, every package and server.json agree", 
   assert.equal(server.version, root, "server.json root version drifted");
   for (const p of server.packages ?? []) {
     assert.equal(p.version, root, `server.json packages[${p.identifier}] drifted`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------
+// verifyStamp — the pre-tag gate. Each case below is a way to reach a tag that publishes
+// eight packages and then fails, or publishes them under an empty release.
+// ---------------------------------------------------------------------------------------
+
+/** A minimal but structurally real tree: root, two publishable packages, one private one,
+ *  server.json with two entries, and a CHANGELOG. */
+function fixtureTree(version, { changelogBody = "\n\n### Fixed\n\n- a thing\n" } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "release-prepare-"));
+  const pkg = (name, extra = {}) =>
+    JSON.stringify({ name, version, private: false, ...extra }, null, 2) + "\n";
+
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", version }, null, 2) + "\n");
+  for (const [group, name] of [
+    ["packages", "schema"],
+    ["packages", "cli"],
+    ["providers", "rest"],
+  ]) {
+    mkdirSync(join(dir, group, name), { recursive: true });
+    writeFileSync(join(dir, group, name, "package.json"), pkg(`@archstone/${name}`));
+  }
+  // A private package must be ignored by both stamping and verification.
+  mkdirSync(join(dir, "packages", "internal"), { recursive: true });
+  writeFileSync(
+    join(dir, "packages", "internal", "package.json"),
+    JSON.stringify({ name: "internal", version: "0.0.0", private: true }, null, 2) + "\n",
+  );
+
+  writeFileSync(
+    join(dir, "server.json"),
+    JSON.stringify(
+      { name: "io.github.archstone/archstone", version, packages: [{ identifier: "@archstone/cli", version }] },
+      null,
+      2,
+    ) + "\n",
+  );
+  writeFileSync(join(dir, "CHANGELOG.md"), `# Changelog\n\n## [Unreleased]\n\n## [${version}]${changelogBody}\n## [0.0.1]\n\n- old\n`);
+  return dir;
+}
+
+test("verifyStamp: a fully stamped tree with notes has no complaints", () => {
+  const dir = fixtureTree("0.19.1");
+  try {
+    assert.deepEqual(verifyStamp("0.19.1", dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyStamp: names every package left behind, not just the first", () => {
+  const dir = fixtureTree("0.19.1");
+  try {
+    writeFileSync(
+      join(dir, "packages", "cli", "package.json"),
+      JSON.stringify({ name: "@archstone/cli", version: "0.19.0", private: false }, null, 2) + "\n",
+    );
+    writeFileSync(
+      join(dir, "providers", "rest", "package.json"),
+      JSON.stringify({ name: "@archstone/rest", version: "0.18.0", private: false }, null, 2) + "\n",
+    );
+    const problems = verifyStamp("0.19.1", dir);
+    assert.equal(problems.length, 2, problems.join("; "));
+    assert.ok(problems.some((p) => p.includes("packages/cli/package.json") && p.includes("0.19.0")));
+    assert.ok(problems.some((p) => p.includes("providers/rest/package.json") && p.includes("0.18.0")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyStamp: catches server.json drift in the root and in packages[]", () => {
+  const dir = fixtureTree("0.19.1");
+  try {
+    writeFileSync(
+      join(dir, "server.json"),
+      JSON.stringify(
+        { version: "0.19.0", packages: [{ identifier: "@archstone/cli", version: "0.18.0" }] },
+        null,
+        2,
+      ) + "\n",
+    );
+    const problems = verifyStamp("0.19.1", dir);
+    assert.equal(problems.length, 2, problems.join("; "));
+    assert.ok(problems.some((p) => p.includes(".version")));
+    assert.ok(problems.some((p) => p.includes("packages[0]")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The case that costs the most to discover late: release.yml's own CHANGELOG check runs in
+// "Create the GitHub Release", AFTER "Publish packages to npm".
+test("verifyStamp: refuses a version with no CHANGELOG section", () => {
+  const dir = fixtureTree("0.19.1");
+  try {
+    writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## [0.19.0]\n\n- older\n");
+    const problems = verifyStamp("0.19.1", dir);
+    assert.equal(problems.length, 1, problems.join("; "));
+    assert.match(problems[0], /no ## \[0\.19\.1\] section/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyStamp: refuses a CHANGELOG section that exists but is empty", () => {
+  const dir = fixtureTree("0.19.1", { changelogBody: "\n\n" });
+  try {
+    const problems = verifyStamp("0.19.1", dir);
+    assert.equal(problems.length, 1, problems.join("; "));
+    assert.match(problems[0], /section is empty/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyStamp: rejects a malformed version before reading anything", () => {
+  assert.deepEqual(verifyStamp("v0.19.1", "/nonexistent"), [
+    'version must be X.Y.Z with no leading "v": got "v0.19.1"',
+  ]);
+});
+
+// stampTree and verifyStamp must agree about what "everywhere" means — that is the whole
+// reason they share discoverPublishablePackages rather than each carrying a list.
+test("stampTree then verifyStamp: the stamper's output satisfies the verifier", () => {
+  const dir = fixtureTree("0.19.0");
+  try {
+    // Put the notes under [Unreleased] so stampTree has something to promote.
+    writeFileSync(
+      join(dir, "CHANGELOG.md"),
+      "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- a thing\n\n## [0.19.0]\n\n- older\n",
+    );
+    const changed = stampTree("0.19.1", dir);
+    assert.equal(changed.length, 6, `expected root + 3 packages + server.json + CHANGELOG, got ${changed}`);
+    assert.deepEqual(verifyStamp("0.19.1", dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
