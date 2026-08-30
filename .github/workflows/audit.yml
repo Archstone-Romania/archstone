@@ -64,7 +64,12 @@ jobs:
           # only when the lockfile hash is new, which is to say only on exactly the PRs this
           # workflow exists to run on. A dependency-changing PR was the one thing it could not
           # survive, and a lockfile-unchanged run reusing a warm cache hid it.
-          cache: false
+          #
+          # It must be `package-manager-cache`, not `cache`. `cache` names WHICH package
+          # manager to cache for and accepts only npm/yarn/pnpm; `cache: false` is not
+          # "off", it is an unsupported value, and the action fails the job outright with
+          # "Caching for 'false' is not supported".
+          package-manager-cache: false
 
       # No `pnpm install` on purpose: `pnpm audit` resolves the advisory set from the
       # lockfile alone, so installing would only add a minute of CI for nothing.
