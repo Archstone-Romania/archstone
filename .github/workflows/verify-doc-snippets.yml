@@ -44,7 +44,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install
-        run: cd archstone && pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Compile every archstone-fixture= annotated CDL snippet in the published docs
-        run: cd archstone && node scripts/verify-doc-snippets.mjs
+        run: node scripts/verify-doc-snippets.mjs

@@ -303,12 +303,13 @@ jobs:
 // out to must therefore exist, checked here (in the pre-mutation build gate) rather than
 // discovered on a tag.
 //
-// Resolved against BOTH roots deliberately: some steps run from the repo root
-// (`node scripts/check-boundary.mjs`) and some `cd archstone` first
-// (`node scripts/verify-doc-snippets.mjs`), and a regex over YAML cannot know the cwd of the
-// line it matched. So this catches the failure that actually happens — a script renamed or
-// deleted while release.yml still calls it — and deliberately does not try to catch one that
-// moved between the two roots.
+// Resolved against BOTH roots, now as pure tolerance rather than because a step needs it. The
+// tree used to live under `archstone/` in the private development repository, so some steps ran
+// from the repo root and some `cd archstone` first; since ADR-0010 the checkout IS the root and
+// the last surviving `cd archstone` (verify-doc-snippets.yml) is gone. The second root is kept
+// because a regex over YAML still cannot know the cwd of the line it matched, and this test's
+// job is to catch the failure that actually happens — a script renamed or deleted while
+// release.yml still calls it — not to police where it is called from.
 test("release.yml: every script it shells out to actually exists", () => {
   const workflowText = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
   const referenced = [...workflowText.matchAll(/(?:^|[/"\s])(scripts\/[\w.-]+\.(?:mjs|sh))/g)].map((m) => m[1]);
