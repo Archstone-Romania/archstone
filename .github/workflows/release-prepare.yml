@@ -1,0 +1,195 @@
+# The half of the release that release.yml deliberately refuses to do.
+#
+# release.yml treats the tag as the single source of what ships: it VERIFIES that the tagged
+# commit is already stamped to the tag's version and refuses to publish otherwise, rather
+# than stamping and pushing a bump commit itself. main is protected, and a release that can
+# write to main is a release that can ship something nobody reviewed. So the stamping has to
+# happen before the tag, in a reviewed PR — and until now that PR was assembled by hand:
+# eleven version strings across ten files, plus the CHANGELOG heading, judged after the fact
+# by three separate gates. A miss costs a deleted tag and a re-tag.
+#
+# This workflow does the mechanical part and stops. It pushes `release/prepare-X.Y.Z` and
+# prints a link. It does NOT open the pull request, and that is a decision, not an omission:
+# a PR opened with the default GITHUB_TOKEN does not raise `pull_request` events, so ci.yml
+# and verify-doc-snippets.yml would never run on it and a required check would leave it
+# permanently unmergeable. The alternatives are a PAT or a GitHub App token — a new secret to
+# hold and rotate in a repository that deliberately holds none (npm publishing is OIDC; there
+# is no NPM_TOKEN either). A human opening the PR costs one click and keeps that true.
+#
+# So the full release is three acts, two of them human:
+#
+#   1. dispatch this workflow      -> branch release/prepare-X.Y.Z, stamped
+#   2. open and merge the PR       -> main is stamped, checks have run   [human]
+#   3. tag vX.Y.Z and push it      -> release.yml publishes to npm + GitHub Releases  [human]
+
+name: Release prepare
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which level to bump from the current root version."
+        required: true
+        default: minor
+        type: choice
+        options: [patch, minor, major]
+      version:
+        description: >
+          Optional exact version (no leading "v", e.g. 0.19.0). Overrides `bump` when set.
+          Use it when the next version is not simply the next bump — the first 1.0.0, or
+          re-preparing a version whose branch was deleted.
+        required: false
+        type: string
+
+permissions:
+  # Enough to push the prepare branch. Not enough to reach main, which is protected, and
+  # nothing below tries: this workflow's whole output is one branch and a summary.
+  contents: write
+
+concurrency:
+  # Two prepares racing would produce two branches stamped to the same version off different
+  # commits. Never cancel one in flight — it may already have pushed.
+  group: release-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to prepare from anything but main
+        # A release line starts on main (release.yml's classify step will only publish a tag
+        # reachable from main or from an existing release/X.Y.x). Preparing from a feature
+        # branch would produce a branch that looks releasable and is not.
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Release prepare must be dispatched against main, got ${{ github.ref }}."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.13.1       # matches release.yml — no packageManager field at repo root to infer from
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false    # nothing here installs; see audit.yml for the same reason
+
+      - name: Test the stamping script before letting it write anything
+        # Its output is judged by release.yml's stamp assertion and by release-gate.mjs, both
+        # of which run after a tag exists. A bug found here costs a re-dispatch.
+        run: node --test scripts/release-prepare.test.mjs
+
+      - name: Resolve the version
+        id: v
+        env:
+          BUMP: ${{ inputs.bump }}
+          EXPLICIT: ${{ inputs.version }}
+        run: |
+          if [ -n "$EXPLICIT" ]; then
+            V="${EXPLICIT#v}"
+          else
+            V=$(node -e '
+              import("./scripts/release-prepare.mjs").then(async (m) => {
+                const { readFileSync } = await import("node:fs");
+                const cur = JSON.parse(readFileSync("package.json", "utf8")).version;
+                process.stdout.write(m.nextVersion(cur, process.env.BUMP));
+              });
+            ')
+          fi
+
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::resolved version '$V' is not X.Y.Z."
+            exit 1
+          fi
+
+          CUR=$(node -p "require('./package.json').version")
+          echo "current=$CUR" >> "$GITHUB_OUTPUT"
+          echo "version=$V"   >> "$GITHUB_OUTPUT"
+          echo "branch=release/prepare-$V" >> "$GITHUB_OUTPUT"
+          echo "Preparing $CUR -> $V"
+
+      - name: Refuse if the version is already tagged or already being prepared
+        env:
+          V: ${{ steps.v.outputs.version }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "::error::tag v$V already exists. That version has shipped (or a tag is stuck); pick the next one."
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "::error::branch $BRANCH already exists on origin. Merge or delete it before preparing $V again."
+            exit 1
+          fi
+
+      - name: Stamp the tree
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: node scripts/release-prepare.mjs "$V"
+
+      - name: Verify the stamp is complete and in lockstep
+        # The same assertion release.yml makes after the tag exists, made here instead. The
+        # package list is discovered, not listed, so a package added since the last release
+        # is caught by the script's own tripwire rather than by silence.
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          node --test scripts/release-prepare.test.mjs
+          FAIL=0
+          ROOT_V=$(node -p "require('./package.json').version")
+          [ "$ROOT_V" = "$V" ] || { echo "::error::root package.json is $ROOT_V, expected $V"; FAIL=1; }
+          if ! grep -q "^## \[$V\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no ## [$V] section after stamping."
+            FAIL=1
+          fi
+          [ "$FAIL" = 0 ] || exit 1
+          echo "✓ tree is stamped to $V"
+
+      - name: Push the prepare branch
+        env:
+          V: ${{ steps.v.outputs.version }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore(release): stamp $V
+
+          Stamped by .github/workflows/release-prepare.yml. Versions only — no behaviour
+          change. Merging this makes main's tree agree with the tag that follows, which is
+          what release.yml asserts before it publishes anything."
+          git push origin "$BRANCH"
+
+      - name: Say what to do next
+        env:
+          V: ${{ steps.v.outputs.version }}
+          CUR: ${{ steps.v.outputs.current }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "## Release prepare — \`$CUR\` → \`$V\`"
+            echo
+            echo "Branch \`$BRANCH\` is pushed and stamped. Two human steps remain."
+            echo
+            echo "**1. Open and merge the PR** (this workflow does not open it — a PR from"
+            echo "\`GITHUB_TOKEN\` raises no \`pull_request\` event, so CI would never run on it):"
+            echo
+            echo "  <https://github.com/$REPO/compare/main...$BRANCH?expand=1>"
+            echo
+            echo "**2. Tag the merge commit** once it is on main and green:"
+            echo
+            echo '```bash'
+            echo "git fetch origin main && git tag -a v$V -m v$V origin/main && git push origin v$V"
+            echo '```'
+            echo
+            echo "The tag starts \`release.yml\`, which publishes the 8 \`@archstone/*\` packages"
+            echo "to npm via OIDC and creates the GitHub Release from the \`## [$V]\` section of"
+            echo "the CHANGELOG."
+          } >> "$GITHUB_STEP_SUMMARY"
