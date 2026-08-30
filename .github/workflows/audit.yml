@@ -57,6 +57,14 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # Explicitly OFF, and load-bearing. setup-node@v5 turns the package-manager cache on
+          # by default; it detects pnpm from the lockfile and, in its post step, tries to SAVE
+          # the pnpm store. This job deliberately never installs (see below), so that store does
+          # not exist and the save fails the job — but only on a cache MISS, which is to say
+          # only when the lockfile hash is new, which is to say only on exactly the PRs this
+          # workflow exists to run on. A dependency-changing PR was the one thing it could not
+          # survive, and a lockfile-unchanged run reusing a warm cache hid it.
+          cache: false
 
       # No `pnpm install` on purpose: `pnpm audit` resolves the advisory set from the
       # lockfile alone, so installing would only add a minute of CI for nothing.
