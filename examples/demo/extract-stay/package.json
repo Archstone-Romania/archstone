@@ -1,0 +1,14 @@
+{
+  "name": "archstone-demo-extract-stay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable demo of ADR-0011: a model extracts a tourism.Stay from a booking email, and Archstone judges the answer. Deterministic — recorded model responses, no API key, no network.",
+  "scripts": {
+    "start": "node extract-stay.mjs"
+  },
+  "dependencies": {
+    "@archstone/agent": "workspace:*",
+    "@archstone/runtime": "workspace:*"
+  }
+}

@@ -16,6 +16,18 @@ Deployable CDL — `capabilities.yaml` + `*.capability.yaml` + `bindings/`.
 
 ---
 
+## Runnable demos
+
+| Demo | What |
+|---|---|
+| [`demo/extract-stay/`](demo/extract-stay/) | The other direction: a model *produces* a `tourism.Stay`, and Archstone judges it (ADR-0011). Deterministic — recorded responses, no API key. |
+
+```bash
+pnpm --filter archstone-demo-extract-stay start
+```
+
+---
+
 ## Apply
 
 ```bash
