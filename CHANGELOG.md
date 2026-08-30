@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.19.1]
+
 ### Fixed
 
 - **The published package READMEs describe the extraction surface.** ADR-0011 shipped in
