@@ -1,0 +1,148 @@
+# Act three of a release: put the tag on, having first checked that the thing being tagged
+# can actually ship.
+#
+# The tag is not ceremony — pushing it starts release.yml, which publishes eight packages to
+# npm. That is irreversible in the way that matters: `npm unpublish` is allowed for 72 hours
+# and even then does not free the version number for reuse. So the decision to release stays
+# human, and this workflow does not change that: dispatching it IS the decision. What it
+# removes is the part a human is bad at — checking eleven files agree before typing three git
+# commands against whatever happens to be checked out locally.
+#
+# Why this is not part of release-prepare.yml: it cannot be. Prepare produces a BRANCH. The
+# commit that must be tagged is the merge commit that does not exist until someone merges the
+# prepare PR. One workflow cannot do both, whatever we might wish.
+#
+# The check that earns this workflow its keep is the CHANGELOG one. release.yml asks the same
+# question, but from the "Create the GitHub Release" step — which runs AFTER "Publish packages
+# to npm". A missing or empty `## [X.Y.Z]` section there means eight packages are already on
+# the registry, that version number is burned forever, and there is no clean re-run: you fix
+# the CHANGELOG, and the only version you can ship it under is the next one. Asked here, one
+# minute before the tag, it costs a re-dispatch.
+
+name: Release tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >
+          The version to tag, with no leading "v" (e.g. 0.19.1). Must already be stamped into
+          the branch you dispatch against — merge the release-prepare PR first.
+        required: true
+        type: string
+
+permissions:
+  contents: write        # to push the tag; branch protection is untouched, nothing writes to main
+
+concurrency:
+  # Never cancel in flight: a cancelled run may already have pushed the tag, and a second one
+  # would then race release.yml.
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate the version and the line being tagged
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          V="${INPUT_VERSION#v}"
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z with no leading v, got '$INPUT_VERSION'."
+            exit 1
+          fi
+
+          # release.yml will publish a tag reachable from main (mainline, dist-tag `latest`)
+          # or from its own release/X.Y.x branch (backport, dist-tag lts-X.Y). Refuse anything
+          # else HERE rather than letting release.yml discover an orphan tag it must reject —
+          # by then the tag exists and someone has to delete it.
+          LINE="release/${V%.*}.x"
+          if [ "$REF_NAME" != "main" ] && [ "$REF_NAME" != "$LINE" ]; then
+            echo "::error::dispatched against '$REF_NAME'. Tag $V from main (mainline) or from $LINE (backport); anything else produces a tag release.yml will refuse to publish."
+            exit 1
+          fi
+
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Tagging v$V from $REF_NAME ($(git rev-parse --short HEAD))"
+
+      - name: Refuse a version that is already tagged
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "::error::tag v$V already exists. If its release run stopped partway, resume it with release.yml's workflow_dispatch instead of re-tagging."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false    # nothing here installs; see audit.yml for the same reason
+
+      - name: Verify the tree is stamped and has release notes
+        # Same discovery as the stamper, so the two cannot disagree about what "every
+        # package" means — see scripts/release-prepare.mjs. This is release.yml's stamp
+        # assertion plus the CHANGELOG question, both asked before the tag exists.
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: node scripts/release-prepare.mjs --verify "$V"
+
+      - name: Report the checks already run on this commit
+        # Advisory, not a gate. A red commit is worth seeing before publishing, but this
+        # workflow must not become a second, weaker copy of branch protection — that is what
+        # required checks on main are for, and release.yml re-runs lint, typecheck, the full
+        # test suite and the packed-artifact gate before it publishes anything regardless.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          CONCLUSIONS=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '.check_runs[] | "\(.conclusion // "pending")\t\(.name)"' 2>/dev/null || true)
+
+          if [ -z "$CONCLUSIONS" ]; then
+            echo "::warning::no check runs found for $SHA yet — CI may still be starting."
+          else
+            echo "$CONCLUSIONS"
+            if echo "$CONCLUSIONS" | grep -qE '^(failure|cancelled|timed_out)'; then
+              echo "::warning::this commit has failing or cancelled checks (listed above). release.yml will re-run lint, typecheck, tests and the packed-artifact gate before publishing, and will stop there if they still fail — but consider cancelling this run."
+            fi
+          fi
+
+      - name: Push the tag
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$V" -m "v$V"
+          git push origin "v$V"
+
+      - name: Say what happens now
+        env:
+          V: ${{ steps.v.outputs.version }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          {
+            echo "## Tagged \`v$V\` on \`$REF_NAME\`"
+            echo
+            echo "Commit \`$(git rev-parse --short HEAD)\`, verified stamped with a non-empty"
+            echo "\`## [$V]\` CHANGELOG section before the tag was pushed."
+            echo
+            echo "\`release.yml\` is now running. It publishes the 8 \`@archstone/*\` packages to"
+            echo "npm via OIDC and creates the GitHub Release from that CHANGELOG section:"
+            echo
+            echo "  <https://github.com/$REPO/actions/workflows/release.yml>"
+            echo
+            echo "If it stops partway, **resume it** with its own \`workflow_dispatch\` and"
+            echo "version \`$V\` — do not delete and re-push the tag."
+          } >> "$GITHUB_STEP_SUMMARY"

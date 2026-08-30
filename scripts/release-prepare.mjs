@@ -195,15 +195,79 @@ export function stampTree(version, root = ROOT) {
   return changed;
 }
 
+/**
+ * The read-only mirror of stampTree: is this tree ALREADY at `version`, everywhere, with a
+ * release-worthy CHANGELOG section? Returns a list of complaints — empty means yes.
+ *
+ * It lives here, next to the stamper and sharing its discovery, because the two must agree
+ * about what "everywhere" means. A separate verifier with its own package list would be a
+ * fifth place to forget a package, and it would be the one place where forgetting is
+ * invisible: a verifier that does not know about a package reports success.
+ *
+ * release.yml asks a version of this question too, after the tag exists. The extra thing
+ * asked here is the CHANGELOG, and that is not redundant: release.yml's own CHANGELOG check
+ * lives in "Create the GitHub Release", which runs AFTER "Publish packages to npm". Failing
+ * it there means eight packages are already on the registry, that version number is burned,
+ * and there is no clean re-run. Asked before the tag, it costs nothing.
+ */
+export function verifyStamp(version, root = ROOT) {
+  const problems = [];
+  if (!parseVersion(version)) return [`version must be X.Y.Z with no leading "v": got "${version}"`];
+
+  for (const rel of relPathsFor(root)) {
+    const v = JSON.parse(readFileSync(join(root, rel), "utf8")).version;
+    if (v !== version) problems.push(`${rel} is at ${v}, expected ${version}`);
+  }
+
+  const server = JSON.parse(readFileSync(join(root, "server.json"), "utf8"));
+  if (server.version !== version) {
+    problems.push(`server.json .version is ${server.version}, expected ${version}`);
+  }
+  for (const [i, p] of (server.packages ?? []).entries()) {
+    if (p.version !== version) {
+      problems.push(
+        `server.json .packages[${i}] (${p.identifier ?? "?"}) is ${p.version}, expected ${version}`,
+      );
+    }
+  }
+
+  const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+  const heading = `## [${version}]`;
+  const idx = changelog.indexOf(heading);
+  if (idx === -1) {
+    problems.push(`CHANGELOG.md has no ${heading} section — the release body would be empty`);
+  } else {
+    const body = changelog.slice(idx + heading.length).split(/^## \[/m)[0];
+    if (body.trim() === "") {
+      problems.push(`CHANGELOG.md's ${heading} section is empty — the release body would be empty`);
+    }
+  }
+
+  return problems;
+}
+
 function main(argv) {
-  const version = argv[0];
+  const verify = argv[0] === "--verify";
+  const version = (verify ? argv[1] : argv[0])?.replace(/^v/, "");
   if (!version) {
-    console.error("usage: node scripts/release-prepare.mjs <X.Y.Z>");
+    console.error("usage: node scripts/release-prepare.mjs [--verify] <X.Y.Z>");
     process.exit(2);
   }
-  const changed = stampTree(version.replace(/^v/, ""));
+
+  if (verify) {
+    const problems = verifyStamp(version);
+    for (const p of problems) console.error(`::error::${p}`);
+    if (problems.length > 0) {
+      console.error(`[release-prepare] tree is NOT ready to tag as v${version}`);
+      process.exit(1);
+    }
+    console.log(`[release-prepare] ✓ tree is stamped to ${version} and has release notes`);
+    return;
+  }
+
+  const changed = stampTree(version);
   for (const f of changed) console.log(`[release-prepare] stamped ${f}`);
-  console.log(`[release-prepare] ${changed.length} file(s) now at ${version.replace(/^v/, "")}`);
+  console.log(`[release-prepare] ${changed.length} file(s) now at ${version}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
