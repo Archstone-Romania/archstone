@@ -1,15 +1,17 @@
 # @archstone/agent
 
 Embedded agent SDK (RFC-0008 / ADD-0008): load a compiled Archstone IR artifact, generate typed
-tool definitions (Anthropic · OpenAI · Gemini · JSON-Schema), and invoke capabilities with
-fail-closed response mapping — all without running a separate MCP server process.
+tool definitions (Anthropic · OpenAI · Gemini · JSON-Schema), invoke capabilities with
+fail-closed response mapping, and judge model-produced documents at the extraction boundary —
+all without running a separate MCP server process.
 
 **Two entry points:**
 
 - **Root** (`@archstone/agent`): `fromIR(json)` constructs an embedded instance; `tools(format)`
   generates typed tool defs; `execute(capabilityId, input)` invokes a capability with mapping
-  applied. Zero MCP SDK, zero `node:fs` — safe to bundle and run anywhere (browser, Worker,
-  native app).
+  applied; `extractor(resource, format)` binds one declared resource to one target — the schema
+  a model is given and the boundary its answer passes through, as one object (ADR-0011). Zero
+  MCP SDK, zero `node:fs` — safe to bundle and run anywhere (browser, Worker, native app).
 - **`/mcp` subpath** (`@archstone/agent/mcp`): `mcpHandler(archstone, {bearerToken})` — a
   mountable, fail-closed Streamable-HTTP MCP endpoint for consumers who want to expose an
   embedded instance as an MCP server (e.g., Claude API `mcp_servers`, ChatGPT connectors).
@@ -46,6 +48,48 @@ if (result.status === "ok") {
   console.log("Error:", result.error);
 }
 ```
+
+**Extracting business data from unstructured input (ADR-0011):**
+
+A Resource Definition already says what a provider's response is mapped into. The same
+definition says what a model must *produce*, and `extractor()` carries both halves — the closed
+schema the model is given, and the validator its answer is judged by — so the two cannot drift
+apart.
+
+```typescript
+const stay = archstone.extractor("tourism.Stay", "anthropic");
+
+// Give the model the schema — either axis, same schema underneath.
+stay.structuredOutput;   // native structured output, in the envelope your provider expects:
+                         //   Anthropic: output_config.format
+                         //   OpenAI:    text.format
+                         //   Gemini:    response_format
+
+// ...or extraction as a forced tool call, in the same envelopes tools() emits. The
+// instruction is required and never defaulted: it says what to DO on this occasion, which
+// no Resource Definition can know.
+stay.tool("Record the stay described in this booking email.");
+
+// Judge what comes back, at a boundary Archstone owns.
+const result = stay.validate(modelOutput);
+
+if (result.status === "ok") {
+  save(result.data);
+} else if (result.status === "degraded") {
+  save(result.data); // declared optional fields absent: result.degraded
+} else {
+  reject(result.missing, result.invalid); // withheld whole — result.data is absent
+}
+
+// Undeclared keys never reach `result.data`, at any depth, and are named in
+// `result.undeclared`. There is no passthrough option, for the same reason there is none
+// in ADR-0008.
+```
+
+`status` proves *shape*, never truth: a model that invents a plausible, correctly-typed value
+returns `ok`, and nothing at this boundary can tell that apart from a real one. Error messages
+never echo a value from the document — the extraction input is by construction the most
+sensitive text in the deployment.
 
 **For HTTP-based MCP:**
 
