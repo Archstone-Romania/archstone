@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.19.0]
+
 ### Added
 
 - **Model-output validation — the mirror of ADR-0008.** A CDL Resource Definition is now the
