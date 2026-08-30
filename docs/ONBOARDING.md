@@ -1129,6 +1129,85 @@ const result = await archstone.execute(
 );
 ```
 
+### Validating what the model produces (the other direction)
+
+Everything above is one direction of travel: the business answers, and Archstone decides what
+reaches the model. A provider returns a body, the declared fields are mapped out of it, and every
+key the manifest does not name is dropped before the model sees anything. That is a stated
+guarantee — [ADR-0008](adr/0008-undeclared-provider-data-never-reaches-a-model.md), *undeclared
+provider data never reaches a model*.
+
+A model is also a **producer** of business data. It reads a booking email, an invoice, a clinical
+note, and emits structured fields your system then stores or acts on. The same guarantee applies
+the other way round — [ADR-0011](adr/0011-undeclared-model-output-never-reaches-a-business-system.md),
+*undeclared model output never reaches a business system* — and it is the resource you already
+declared that says what the shape is. One entity, one declaration, both directions.
+
+```typescript
+const stay = archstone.extractor("tourism.Stay", "anthropic");
+```
+
+An extractor binds one resource to one target format and carries three things: the schema you
+hand the model, the envelope your provider call needs, and the boundary the answer passes
+through. They are one object rather than three calls so that the schema you gave the model and
+the contract you judge it by cannot drift apart.
+
+**Give the model the schema.** Either axis, depending on which your provider call uses:
+
+```typescript
+// Native structured output — goes where your provider expects it
+stay.structuredOutput;   // Anthropic: output_config.format
+                         // OpenAI:    text.format
+                         // Gemini:    response_format
+
+// …or extraction as a forced tool call, in the same envelopes tools() emits
+stay.tool("Record the stay described in this booking email.");
+```
+
+The instruction is required and is never defaulted. A resource description says what the entity
+*is*; a tool description has to say what to *do* on this occasion, and "record the stay described
+in this email" is a different instruction from "record the stay this review is about" for one and
+the same resource.
+
+**Judge what comes back.**
+
+```typescript
+const result = stay.validate(modelOutput);
+
+if (result.status === "ok") {
+  save(result.data);
+} else if (result.status === "degraded") {
+  save(result.data);                    // optional fields absent — result.degraded names them
+} else if (result.status === "violation") {
+  retryOrEscalate(result.missing, result.invalid);   // nothing is returned
+}
+
+if (result.undeclared) {
+  log.warn("model emitted undeclared fields", result.undeclared);  // dropped, never propagated
+}
+```
+
+The three outcomes are the same three `execute()` returns, because it is the same boundary seen
+from the other side: a missing **required** field is a violation and the document is withheld
+whole; a missing **optional** field degrades and the rest is returned; anything else is `ok`.
+There is no fourth state for an undeclared key — it is dropped from `data` and listed in
+`undeclared`, and your own threshold for caring about it lives in your own code.
+
+Two properties worth knowing before you rely on this:
+
+- **Nothing is coerced.** `"320"` for a `quantity` is a violation, not a number. There are no
+  defaults, no repair, and no re-prompt: a repaired extraction is indistinguishable downstream
+  from a correct one. Write the retry around a `violation` if you want one.
+- **No error message ever contains a value from the document.** `pricePerNight: expected number`,
+  never the text that failed. Extraction input is usually the most sensitive material in the
+  deployment, and an error that echoes it writes it into whatever catches the error.
+
+**What validation does not tell you.** It proves *shape*, never *truth*. A model that invents a
+plausible, correctly-typed stay returns `ok`, and nothing at this boundary can tell that apart
+from a real one — the same way a green `verify` means the provider still answers in the recorded
+shape, not that its answers are right. This is stated on `ExtractionResult` itself, not only
+here, because you wire the type and may never read this page.
+
 ### Observing cost & usage data from backend invocations
 
 If a bound capability's own backend charges per token — for example, a `summarize-review`

@@ -15,6 +15,43 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Model-output validation — the mirror of ADR-0008.** A CDL Resource Definition is now the
+  schema for both directions of travel. It has always said what a provider's response is mapped
+  into; it now also says what a model must *produce* when it extracts business data from
+  unstructured input, and Archstone judges the answer at a boundary it owns. **Undeclared model
+  output never reaches a business system** —
+  [ADR-0011](docs/adr/0011-undeclared-model-output-never-reaches-a-business-system.md).
+
+  `archstone.extractor(resource, format)` binds one resource to one target and carries the closed
+  schema, the provider envelope for either axis (native structured output, or extraction as a
+  forced tool call), and the validator — one object, so the schema a model was given and the
+  contract it is judged by cannot drift apart. Outcomes are the three `execute()` already
+  returns: a missing required field is a `violation` and the document is withheld whole, a
+  missing optional field `degrade`s, everything else is `ok`. An undeclared key is dropped and
+  named, and changes no outcome. Nothing is coerced, defaulted or repaired, and no error message
+  contains a value from the document.
+
+  No CDL grammar change: Resource Definitions already existed, so a manifest that compiles today
+  is unaffected and nothing was added to a frozen 1.0 language. New API on
+  `@archstone/emitter-support` (`extractionJsonSchema`, `validateExtraction`,
+  `Registry.getResource`/`listResources`) and `@archstone/agent` (`extractor()`).
+
+### Fixed
+
+- **A field's authored description is no longer discarded by its semantic type.** The
+  JSON-Schema lowering spread the semantic type's schema over the field's own, so wherever a
+  semantic type carried a description the generic text won and the manifest's was thrown away.
+  `location` is the only semantic type that ships one today, which is why this read as working
+  code — it was correct on every other field.
+
+  **This changes emitted output.** An MCP `inputSchema`/`outputSchema` for a manifest that
+  describes a `location` field now carries the sentence the manifest wrote instead of "A place —
+  city, region, or address." No shape changed, so no client breaks; a fixture that pins emitted
+  schema *text* will need updating. Cosmetic while a description is documentation — not cosmetic
+  once the description is the instruction a model extracts against.
+
 ## [0.18.0]
 
 Patch-sized minor, and the first release cut from this repository rather than

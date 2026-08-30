@@ -122,6 +122,14 @@ offers each one, asks you to describe it, writes it into your resource and bindi
 recompiles before keeping anything. With stdin closed it refuses and writes nothing: it needs a
 person, which is the point rather than a limitation.
 
+**And a field the model invents never reaches your system.** The same resource declaration read
+the other way round: when a model *produces* business data — extracting a booking from an email,
+a line item from an invoice — `archstone.extractor("tourism.Stay", …)` hands it the closed schema
+and judges what comes back. A missing required field is a violation and the document is withheld
+whole; an undeclared key is dropped and named; nothing is coerced, defaulted or repaired. One
+entity declared once, both directions of travel
+([ADR-0011](docs/adr/0011-undeclared-model-output-never-reaches-a-business-system.md)).
+
 ---
 
 ## Quick start
@@ -304,8 +312,8 @@ performs is not purchasable in any form ([ADR-0006](docs/adr/0006-marketplace-ne
 What we sell, when it exists, is the *operation* of these artifacts over time on our machines:
 hosted durable audit and retention, managed rate-limit counters, drift monitoring, and
 multi-tenant hosting for teams who would rather not run a node. The governance mechanisms
-themselves — policy evaluation, rate limiting, execution audit — ship here, in the open, at
-every tier.
+themselves — policy evaluation, rate limiting, execution audit, model-output validation — ship
+here, in the open, at every tier.
 
 ---
 
