@@ -151,7 +151,7 @@ jobs:
           # before this run touches anything, not on a tag at publish time. `publish-loop` runs
           # THIS FILE's publish step against stubbed binaries, so it is a test of the shell
           # below, not of a copy of it.
-          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs
+          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs scripts/release-prepare.test.mjs
           pnpm install --frozen-lockfile
           pnpm lint
           pnpm typecheck
