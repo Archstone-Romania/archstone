@@ -1,12 +1,16 @@
 # Act three of a release: put the tag on, having first checked that the thing being tagged
 # can actually ship.
 #
-# The tag is not ceremony — pushing it starts release.yml, which publishes eight packages to
-# npm. That is irreversible in the way that matters: `npm unpublish` is allowed for 72 hours
-# and even then does not free the version number for reuse. So the decision to release stays
-# human, and this workflow does not change that: dispatching it IS the decision. What it
-# removes is the part a human is bad at — checking eleven files agree before typing three git
-# commands against whatever happens to be checked out locally.
+# This workflow tags a release and starts it. Those are two steps, not one: a tag pushed with
+# GITHUB_TOKEN starts no workflow, so the release is dispatched explicitly — see "Start the
+# release" for the rule and its documented exception.
+#
+# What follows is irreversible in the way that matters: release.yml publishes eight packages
+# to npm, and `npm unpublish` is allowed for 72 hours and even then does not free the version
+# number for reuse. So the decision to release stays human, and this workflow does not change
+# that: dispatching it IS the decision. What it removes is the part a human is bad at —
+# checking eleven files agree before typing three git commands against whatever happens to be
+# checked out locally.
 #
 # Why this is not part of release-prepare.yml: it cannot be. Prepare produces a BRANCH. The
 # commit that must be tagged is the merge commit that does not exist until someone merges the
@@ -33,6 +37,8 @@ on:
 
 permissions:
   contents: write        # to push the tag; branch protection is untouched, nothing writes to main
+  actions: write         # to dispatch release.yml — see "Start the release" below for why a
+                         # tag push alone does not, and cannot, start it
 
 concurrency:
   # Never cancel in flight: a cancelled run may already have pushed the tag, and a second one
@@ -126,6 +132,29 @@ jobs:
           git tag -a "v$V" -m "v$V"
           git push origin "v$V"
 
+      - name: Start the release
+        # The tag push above does NOT start release.yml, and no amount of fixing the push
+        # will change that: "events triggered by the GITHUB_TOKEN will not create a new
+        # workflow run", the same rule that stops this repository from opening its own
+        # prepare PR. The first version of this workflow ended at the push, reported success,
+        # and left v0.19.1 tagged with no release — a silent failure, and the worst kind,
+        # because the tag then exists and the "already tagged" guard above refuses a retry.
+        #
+        # `workflow_dispatch` is the documented exception: it and `repository_dispatch`
+        # always create a run, GITHUB_TOKEN or not. So the tag is pushed to be the record of
+        # what ships (release.yml checks out the TAG, not a branch — that is what makes
+        # backports ship their own tree), and the release is started explicitly.
+        #
+        # release.yml's dispatch input was built for exactly this shape: it resumes a version
+        # whose tag already exists on origin, and refuses one whose tag does not. Nothing
+        # about its contract is bent here.
+        env:
+          V: ${{ steps.v.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref "${{ github.ref_name }}" -f version="$V"
+          echo "✓ dispatched release.yml for v$V"
+
       - name: Say what happens now
         env:
           V: ${{ steps.v.outputs.version }}
@@ -138,11 +167,16 @@ jobs:
             echo "Commit \`$(git rev-parse --short HEAD)\`, verified stamped with a non-empty"
             echo "\`## [$V]\` CHANGELOG section before the tag was pushed."
             echo
-            echo "\`release.yml\` is now running. It publishes the 8 \`@archstone/*\` packages to"
-            echo "npm via OIDC and creates the GitHub Release from that CHANGELOG section:"
+            echo "\`release.yml\` has been dispatched for \`$V\` and is now running. It publishes"
+            echo "the 8 \`@archstone/*\` packages to npm via OIDC and creates the GitHub Release"
+            echo "from that CHANGELOG section:"
             echo
             echo "  <https://github.com/$REPO/actions/workflows/release.yml>"
             echo
-            echo "If it stops partway, **resume it** with its own \`workflow_dispatch\` and"
-            echo "version \`$V\` — do not delete and re-push the tag."
+            echo "It is dispatched explicitly rather than left to the tag push: a tag pushed with"
+            echo "\`GITHUB_TOKEN\` starts no workflow, and \`workflow_dispatch\` is the documented"
+            echo "exception to that rule."
+            echo
+            echo "If it stops partway, **resume it** the same way — its own \`workflow_dispatch\`"
+            echo "with version \`$V\`. Do not delete and re-push the tag."
           } >> "$GITHUB_STEP_SUMMARY"
