@@ -36,6 +36,15 @@ importers:
         specifier: ^3.0.5
         version: 3.2.7(@types/node@22.20.1)(tsx@4.23.12)(yaml@2.9.0)
 
+  examples/demo/extract-stay:
+    dependencies:
+      '@archstone/agent':
+        specifier: workspace:*
+        version: link:../../../packages/agent
+      '@archstone/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+
   examples/demo/remote-mcp-worker:
     dependencies:
       '@archstone/compiler':
@@ -133,6 +142,9 @@ importers:
       '@archstone/schema':
         specifier: workspace:*
         version: link:../schema
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)(yaml@2.9.0)

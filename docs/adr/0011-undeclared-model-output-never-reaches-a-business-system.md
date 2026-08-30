@@ -64,10 +64,11 @@ assumed:
   is not a fail-closed schema, and shipping this one as if it were would make the guarantee a
   slogan.
 - **The authored description of `location` is gone.** `fieldJsonSchema` spreads the semantic
-  type's schema over the field's own, so for every semantic type that carries a description
-  (`location`, `date-range`, `party`, `money`) the generic text wins and the manifest's text is
-  discarded. Tolerable when the description is documentation. Not tolerable when the description
-  is the *instruction the model extracts against* — which is exactly what it becomes here.
+  type's schema over the field's own, so wherever a semantic type carries a description the
+  generic text wins and the manifest's is discarded. `location` is the only semantic type that
+  ships one today, which is precisely why this reads as working code: it is correct on every
+  other field. Tolerable while a description is documentation. Not tolerable once the description
+  is the *instruction the model extracts against* — which is what it becomes here.
 
 So the question this record answers is not whether to validate model output. It is whether
 validating it means **inventing a second schema language** or **pointing the one we have in the

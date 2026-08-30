@@ -90,9 +90,18 @@ export type ToolDef = AnthropicToolDef | OpenAIToolDef | GeminiToolDef | JsonSch
  * supported (stripped here): additionalProperties, $ref, allOf, oneOf, if/then/else,
  * const, patternProperties, not, exclusiveMinimum/Maximum, multipleOf, prefixItems.
  *
- * Our own lowering (@archstone/emitter-support's semanticJsonSchema) never emits any of
- * the unsupported keys today, so this pass is a no-op on current output — it exists to
- * fail safe if the lowering ever grows a keyword Gemini's dialect doesn't understand.
+ * This pass USED to be a no-op on current output. It no longer is: `extractionJsonSchema`
+ * (ADR-0011) emits `additionalProperties: false`, which is not in the list above, so this is
+ * the first key the sanitizer actually removes — and removing it is what ADR-0011's R-2
+ * describes, on the TOOL axis only: the model is not told the object is closed, while
+ * `validateExtraction` closes it regardless. A quality difference, never a safety one.
+ *
+ * The structured-output axis is a DIFFERENT Gemini surface (`response_format.schema`) whose own
+ * reference does list `additionalProperties`, so `extract.ts` does not route through here. The
+ * function-calling reference could not be re-read at the address cited above (checked again
+ * 2026-08-30, the anchor no longer resolves), so this list is deliberately left exactly as it
+ * was verified in 2026-07 rather than widened on the strength of the other surface's docs.
+ * Re-verify at source before changing it.
  */
 const GEMINI_ALLOWED_KEYS = new Set([
   "type",
@@ -138,6 +147,34 @@ export function sanitizeGeminiSchema(schema: JsonSchema): JsonSchema {
   return out;
 }
 
+/**
+ * One capability/resource, one format, one envelope. Extracted from `buildToolDefs` so the
+ * extraction surface (`extract.ts`, ADR-0011) wraps a schema in exactly the shape this file
+ * already ships, rather than restating four provider envelopes a second time. The only thing
+ * that varies between the two callers is which schema goes in and what the description says.
+ */
+export function toolEnvelope(format: ToolFormat, name: string, description: string, schema: JsonSchema): ToolDef {
+  switch (format) {
+    case "anthropic":
+      return { name, description, input_schema: schema };
+    case "openai":
+      return { type: "function", function: { name, description, parameters: schema } };
+    case "gemini":
+      return { name, description, parameters: sanitizeGeminiSchema(schema) };
+    case "json-schema":
+      return { name, description, schema };
+    default:
+      // ADD-56 D-5: zero-risk hardening, NOT a fix to a reachable defect. `format` is supplied
+      // directly by the trusted host program calling `tools(format)` — it never originates from
+      // a `fromIR` artifact or any other externally-sourced data (unlike `lifecycle`, ADD-56's
+      // actual defect). Reachable only by a caller bypassing this package's own `ToolFormat`
+      // type checking (an `as`/`any` cast on a value it constructs itself). Before this branch,
+      // that case silently returned `undefined` where `ToolDef[]` is declared, crashing the
+      // caller downstream on `.map`/spread instead of here, with a clear cause.
+      throw new Error(`toolEnvelope: unrecognized tool format: ${String(format)}`);
+  }
+}
+
 /** Lower every invocable capability to `format`'s tool-definition envelope. Reads the
  *  (name, tool) pairs Registry already derived (ADD-30 D-3) instead of re-deriving the
  *  invocable filter or re-running `toolName()` here.
@@ -158,51 +195,5 @@ export function buildToolDefs(registry: Registry, format: ToolFormat): ToolDef[]
     const hint = registry.getExposure(t.id).hint;
     return hint ? `${t.description} (${hint.text})` : t.description;
   };
-
-  switch (format) {
-    case "anthropic":
-      return tools.map(
-        ({ name, tool: t }): AnthropicToolDef => ({
-          name,
-          description: describe(t),
-          input_schema: inputJsonSchema(t.input, resources),
-        }),
-      );
-    case "openai":
-      return tools.map(
-        ({ name, tool: t }): OpenAIToolDef => ({
-          type: "function",
-          function: {
-            name,
-            description: describe(t),
-            parameters: inputJsonSchema(t.input, resources),
-          },
-        }),
-      );
-    case "gemini":
-      return tools.map(
-        ({ name, tool: t }): GeminiToolDef => ({
-          name,
-          description: describe(t),
-          parameters: sanitizeGeminiSchema(inputJsonSchema(t.input, resources)),
-        }),
-      );
-    case "json-schema":
-      return tools.map(
-        ({ name, tool: t }): JsonSchemaToolDef => ({
-          name,
-          description: describe(t),
-          schema: inputJsonSchema(t.input, resources),
-        }),
-      );
-    default:
-      // ADD-56 D-5: zero-risk hardening, NOT a fix to a reachable defect. `format` is supplied
-      // directly by the trusted host program calling `tools(format)` — it never originates from
-      // a `fromIR` artifact or any other externally-sourced data (unlike `lifecycle`, ADD-56's
-      // actual defect). Reachable only by a caller bypassing this package's own `ToolFormat`
-      // type checking (an `as`/`any` cast on a value it constructs itself). Before this branch,
-      // that case silently returned `undefined` where `ToolDef[]` is declared, crashing the
-      // caller downstream on `.map`/spread instead of here, with a clear cause.
-      throw new Error(`buildToolDefs: unrecognized tool format: ${String(format)}`);
-  }
+  return tools.map(({ name, tool: t }) => toolEnvelope(format, name, describe(t), inputJsonSchema(t.input, resources)));
 }

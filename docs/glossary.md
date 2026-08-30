@@ -25,6 +25,27 @@ the [CDL Specification](cdl-specification.md).
 | **Capability Runtime** | Execution engine in `core/` |
 | **Tool** | MCP/protocol view of a Capability |
 | **Gateway** | Ingress component — not the product |
+| **Extraction** | A model *producing* declared business data — judged against the same Resource Definition |
+
+---
+
+## Extraction
+
+A **Resource Definition** serves both directions of travel. In the direction a Capability runs, it
+names what a provider's response is mapped into; in the other, it is the schema a model is
+required to *produce* when it extracts business data from unstructured input.
+
+| Outcome | Meaning |
+|---|---|
+| `ok` | every declared required field present and well-shaped |
+| `degraded` | a declared **optional** field is absent; the rest is returned |
+| `violation` | a declared **required** field is absent or ill-shaped; the document is withheld whole |
+
+An **undeclared key** — one the model emitted that the manifest does not declare — is neither of
+those three. It is dropped from the returned data and listed separately, and it does not change
+the outcome. Extraction validation proves *shape*, never *truth*: a correctly-typed invention
+passes. See [ADR-0011](adr/0011-undeclared-model-output-never-reaches-a-business-system.md), the
+mirror of [ADR-0008](adr/0008-undeclared-provider-data-never-reaches-a-model.md).
 
 ---
 

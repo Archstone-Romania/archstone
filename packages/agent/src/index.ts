@@ -10,6 +10,7 @@
 import type { IR } from "@archstone/compiler";
 import { Registry } from "@archstone/emitter-support";
 import { buildToolDefs, type ToolFormat, type ToolDef } from "./tools";
+import { buildExtractor, type Extractor } from "./extract";
 import { executeCapability, type ExecuteOptions, type ExecuteResult } from "./execute";
 
 export type {
@@ -22,6 +23,18 @@ export type {
 } from "./tools";
 export { sanitizeGeminiSchema } from "./tools";
 export type { ExecuteOptions, ExecuteResult, ExecuteDenial } from "./execute";
+/** ADR-0011 / #11: the extraction surface — what a model must PRODUCE, and the boundary its
+ *  answer passes through. Schema and judge are one object by construction; see `extract.ts`. */
+export type {
+  Extractor,
+  StructuredOutputDef,
+  AnthropicStructuredOutput,
+  OpenAIStructuredOutput,
+  GeminiStructuredOutput,
+  JsonSchemaStructuredOutput,
+} from "./extract";
+export { UnknownResourceError } from "./extract";
+export type { ExtractionResult, ExtractionStatus } from "@archstone/emitter-support";
 /** #43: the closed set of policy denial reason codes carried on `ExecuteResult.denial`.
  *  Re-exported so a consumer can name/exhaustively switch on it without importing
  *  `@archstone/emitter-support` — type-only, no runtime edge (test/boundary.test.ts). */
@@ -68,6 +81,11 @@ export class InvalidArtifactError extends Error {
 export interface Archstone {
   readonly registry: Registry;
   tools(format: ToolFormat): ToolDef[];
+  /** ADR-0011: an extractor for one declared resource — the schema a model is given and the
+   *  boundary its answer passes through, bound together. Throws `UnknownResourceError` for a
+   *  resource the artifact does not declare, and `ExtractionSchemaError` for one that cannot
+   *  be lowered into a closed schema. */
+  extractor(resource: string, format: ToolFormat): Extractor;
   execute(capabilityId: string, input: Record<string, unknown>, opts?: ExecuteOptions): Promise<ExecuteResult>;
 }
 
@@ -98,6 +116,7 @@ export function fromIR(json: unknown): Archstone {
   return {
     registry,
     tools: (format) => buildToolDefs(registry, format),
+    extractor: (resource, format) => buildExtractor(registry, resource, format),
     execute: (capabilityId, input, opts) => executeCapability(registry, capabilityId, input, opts),
   };
 }

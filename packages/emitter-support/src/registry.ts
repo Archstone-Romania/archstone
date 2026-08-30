@@ -34,7 +34,7 @@
 // boundness: `invocableTools()`/`byName` above are unaffected by lifecycle/health, exactly as
 // before this ADD.
 
-import type { IR, IRTool } from "@archstone/compiler";
+import type { IR, IRField, IRTool } from "@archstone/compiler";
 import { toolName } from "./lowering";
 import { lifecycleExposure, combineExposure, type Exposure, type HealthStatus } from "./exposure";
 
@@ -172,6 +172,23 @@ export class Registry {
     const byId = this.byId.get(idOrName);
     if (byId) return byId;
     return this.byName.get(idOrName);
+  }
+
+  /**
+   * A resource's declared fields, by canonical name — `undefined` when the IR has no such
+   * resource. Added for the extraction surface (ADR-0011), which needs to fail closed on an
+   * unknown resource name rather than lower an empty field list into a schema that accepts
+   * `{}`. `ir.resources` was always reachable through the public `ir` property; this exists so
+   * a consumer asks the Registry a question instead of indexing its internals, exactly as
+   * `getCapability` does for tools.
+   */
+  getResource(name: string): IRField[] | undefined {
+    return this.ir.resources[name];
+  }
+
+  /** Every declared resource name, in IR order. The listing counterpart to `getResource`. */
+  listResources(): string[] {
+    return Object.keys(this.ir.resources);
   }
 
   get size(): number {
