@@ -15,6 +15,20 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The published package READMEs describe the extraction surface.** ADR-0011 shipped in
+  0.19.0 and the two READMEs npm serves said nothing about it:
+  `@archstone/emitter-support` enumerated a substrate list that no longer included
+  `extraction` (`extractionJsonSchema`, `validateExtraction`) and still promised the embedded
+  agent "later"; `@archstone/agent`'s quick start covered `fromIR`/`tools`/`execute` and not
+  `extractor()`, the headline of the version it shipped under.
+
+  Documentation only — no code, no API and no behaviour changed. It is recorded here because
+  a package README is replaced only by publishing again, so the correction cannot reach npm
+  without a release: until one is cut, `@archstone/agent`'s registry page describes a package
+  without the function that release was about.
+
 ## [0.19.0]
 
 ### Added
