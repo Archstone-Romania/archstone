@@ -6,6 +6,8 @@ MCP today, other protocols as they arrive. Nobody hand-writes integration code.
 
 Open source, Apache-2.0.
 
+[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://www.buymeacoffee.com/irutehe)
+
 ---
 
 ## See it work — 60 seconds, nothing to install
