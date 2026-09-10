@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { IRResourceRegistry, IRTool } from "@archstone/compiler";
+import type { IRField, IRResourceRegistry, IRTool } from "@archstone/compiler";
 import { applyResponseMapping } from "../src/mapping";
 
 // Required-ness is the resource registry's, NOT the mapping's (single source of truth):
@@ -94,5 +94,98 @@ describe("applyResponseMapping (ADD-12)", () => {
     const r = applyResponseMapping(tool(single), { n: "Solo", p: 5 }, resources);
     expect(r.status).toBe("ok");
     expect(r.data).toEqual({ items: { name: "Solo", price: 5 } });
+  });
+});
+
+// `tool.extract` (extends ADD-12 with a sibling binding block, per the accepted architecture
+// decision): additional SCALAR output fields read straight off the raw body ROOT — never
+// `mapping.collection`-scoped items — with required-ness sourced from `tool.output` directly
+// (there is no resource registry entry for a scalar field).
+describe("applyResponseMapping — extract (extends ADD-12)", () => {
+  function toolWith(opts: { output: IRField[]; response?: IRTool["response"]; extract?: IRTool["extract"] }): IRTool {
+    return {
+      id: "shop.search",
+      description: "",
+      effect: "read",
+      provider: "",
+      policies: [],
+      lifecycle: "stable",
+      input: [],
+      output: opts.output,
+      response: opts.response,
+      extract: opts.extract,
+    };
+  }
+
+  const countOutput: IRField[] = [{ name: "count", required: true, type: { kind: "scalar", semantic: "quantity" } }];
+
+  it("extract:-only (no response: at all): OK maps the scalar field off the body root", () => {
+    const t = toolWith({ output: countOutput, extract: [{ name: "count", path: "$.total" }] });
+    const r = applyResponseMapping(t, { total: 42 }, {});
+    expect(r.status).toBe("ok");
+    expect(r.data).toEqual({ count: 42 });
+  });
+
+  it("extract:-only: required-ness comes from `tool.output` directly — a missing REQUIRED field is a VIOLATION", () => {
+    const t = toolWith({ output: countOutput, extract: [{ name: "count", path: "$.total" }] });
+    const r = applyResponseMapping(t, {}, {});
+    expect(r.status).toBe("violation");
+    expect(r.missing).toEqual(["count"]);
+    expect(r.data).toBeUndefined();
+  });
+
+  it("extract:-only: an absent OPTIONAL field DEGRADES, per `tool.output`'s own required: false", () => {
+    const optionalOutput: IRField[] = [{ name: "count", required: false, type: { kind: "scalar", semantic: "quantity" } }];
+    const t = toolWith({ output: optionalOutput, extract: [{ name: "count", path: "$.total" }] });
+    const r = applyResponseMapping(t, {}, {});
+    expect(r.status).toBe("degraded");
+    expect(r.degraded).toEqual(["count"]);
+    expect(r.data).toEqual({});
+  });
+
+  it("extract:'s own requiredOverride:false loosens a required output field to DEGRADED", () => {
+    const t = toolWith({ output: countOutput, extract: [{ name: "count", path: "$.total", requiredOverride: false }] });
+    const r = applyResponseMapping(t, {}, {});
+    expect(r.status).toBe("degraded");
+    expect(r.degraded).toEqual(["count"]);
+  });
+
+  it("response: + extract: together populate a single merged structuredContent (one MappingResult)", () => {
+    const output: IRField[] = [
+      { name: "items", required: true, type: { kind: "collection", of: "shop.Widget" } },
+      { name: "count", required: true, type: { kind: "scalar", semantic: "quantity" } },
+    ];
+    const t = toolWith({ output, response: collectionMapping, extract: [{ name: "count", path: "$.total" }] });
+    const body = { results: [{ n: "Widget A", p: 9, t: "sale" }], total: 1 };
+    const r = applyResponseMapping(t, body, resources);
+    expect(r.status).toBe("ok");
+    expect(r.data).toEqual({ items: [{ name: "Widget A", price: 9, tag: "sale" }], count: 1 });
+  });
+
+  it("a missing required field from EITHER side merges into ONE violation, not two separate errors", () => {
+    const output: IRField[] = [
+      { name: "items", required: true, type: { kind: "collection", of: "shop.Widget" } },
+      { name: "count", required: true, type: { kind: "scalar", semantic: "quantity" } },
+    ];
+    const t = toolWith({ output, response: collectionMapping, extract: [{ name: "count", path: "$.total" }] });
+    // `price` (response:'s Widget field) AND `count` (extract:'s output field) both absent.
+    const body = { results: [{ n: "Widget A", t: "sale" }] };
+    const r = applyResponseMapping(t, body, resources);
+    expect(r.status).toBe("violation");
+    expect([...(r.missing ?? [])].sort()).toEqual(["count", "price"]);
+    expect(r.data).toBeUndefined();
+  });
+
+  it("extract: reads the body ROOT, never `mapping.collection`-scoped items", () => {
+    const output: IRField[] = [
+      { name: "items", required: true, type: { kind: "collection", of: "shop.Widget" } },
+      { name: "count", required: true, type: { kind: "scalar", semantic: "quantity" } },
+    ];
+    const t = toolWith({ output, response: collectionMapping, extract: [{ name: "count", path: "$.total" }] });
+    // `total` sits at the body root, a sibling of `results` — NOT inside any result item.
+    const body = { results: [{ n: "Widget A", p: 9, t: "sale", total: 999 }], total: 1 };
+    const r = applyResponseMapping(t, body, resources);
+    expect(r.status).toBe("ok");
+    expect(r.data).toEqual({ items: [{ name: "Widget A", price: 9, tag: "sale" }], count: 1 });
   });
 });

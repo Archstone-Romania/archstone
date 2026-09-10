@@ -48,7 +48,7 @@ describe("mcpHandler() — real Streamable-HTTP round trip (ADD-0008 #29)", () =
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const handler = mcpHandler(archstone, {
@@ -79,6 +79,7 @@ describe("mcpHandler() — real Streamable-HTTP round trip (ADD-0008 #29)", () =
     expect(callBody.result?.isError).toBeFalsy();
     expect(callBody.result?.structuredContent).toEqual({
       stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      totalMatches: 1,
     });
   });
 
@@ -109,7 +110,7 @@ describe("mcpHandler() — real Streamable-HTTP round trip (ADD-0008 #29)", () =
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const handler = mcpHandler(archstone, {

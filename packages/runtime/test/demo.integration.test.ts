@@ -22,6 +22,7 @@ function startMock(): Promise<{ url: string; close: () => Promise<void> }> {
       resp.end(
         JSON.stringify({
           stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice, France", pricePerNight: 118, rating: 4.5 }],
+          totalMatches: 1,
         }),
       );
     });

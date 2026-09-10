@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load, type LoadResult } from "@archstone/schema";
@@ -199,6 +201,44 @@ describe("compile — response mapping (ADD-12)", () => {
     expect(search.response!.collection).toBe("$.stays[*]");
     const price = search.response!.fields.find((f) => f.name === "pricePerNight");
     expect(price!.path).toBe("$.pricePerNight");
+  });
+});
+
+describe("compile — extract (extends ADD-12 with a sibling scalar-output binding block)", () => {
+  it("lowers the tourism binding's extract: alongside its unchanged response:, reusing IRFieldMapping verbatim", () => {
+    const ir = compile(load(join(manifests, "tourism")));
+    const search = ir.tools.find((t) => t.id === "tourism.search")!;
+    // `response:` is byte-for-byte the same as before this ADD (D-4/conformance (a)).
+    expect(search.response).toBeDefined();
+    expect(search.response!.field).toBe("stays");
+    // `extract:` is a NEW sibling list — no unparsed JSONPath string reaches the IR.
+    expect(search.extract).toBeDefined();
+    expect(search.extract).toHaveLength(1);
+    expect(search.extract![0]).toEqual({ name: "totalMatches", path: "$.totalMatches" });
+  });
+
+  it("lowers a binding's extract: even when the capability has no response: at all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-extract-"));
+    writeFileSync(join(dir, "capabilities.yaml"), "company:\n  id: acme\ncapabilities:\n  - shop.count\nproviders:\n  - store\n");
+    writeFileSync(
+      join(dir, "shop.count.capability.yaml"),
+      "capability:\n  id: shop.count\n  description: count\n  effect: read\n  provider: store\n  output:\n    total:\n      type: quantity\n",
+    );
+    mkdirSync(join(dir, "bindings"), { recursive: true });
+    writeFileSync(
+      join(dir, "bindings", "shop.count.binding.yaml"),
+      "binding:\n  capabilityId: shop.count\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /count\n  extract:\n    total:\n      path: \"$.total\"\n      required: false\n",
+    );
+    const ir = compile(load(dir));
+    const tool = ir.tools.find((t) => t.id === "shop.count")!;
+    expect(tool.response).toBeUndefined();
+    expect(tool.extract).toEqual([{ name: "total", path: "$.total", requiredOverride: false }]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("omits extract from the IR when the binding declares none (undefined, not an empty array)", () => {
+    const ir = compile(load(join(manifests, "bank")));
+    for (const tool of ir.tools) expect(tool.extract).toBeUndefined();
   });
 });
 

@@ -84,18 +84,16 @@ function outputFieldFor(resource: string, output: IRField[]): string | undefined
   return match?.name;
 }
 
-/** Lower a shape-valid binding `response:` to a neutral IRResponseMapping. Canonicalizes the
- *  resource name and binds it to its output field; the required set is NOT copied here (the
- *  runtime reads it from the resource registry, so mapping + outputSchema cannot disagree). */
-function lowerResponse(raw: Record<string, unknown>, canon: Canonicalize, output: IRField[]): IRResponseMapping | undefined {
-  if (typeof raw.resource !== "string") return undefined;
-  const resource = canon(raw.resource);
-  const field = outputFieldFor(resource, output);
-  if (!field) return undefined; // no output field references this resource — cannot bind (validator errored)
-
-  const map = (raw.map ?? {}) as Record<string, unknown>;
+/**
+ * Lower a shape-valid `map:`/`extract:` object (field name → JSONPath | {path, required:false})
+ * into `IRFieldMapping[]`. Shared by `lowerResponse` and `lowerExtract` (per the accepted
+ * architecture decision extending ADD-12) because the two blocks parse the identical value
+ * shape — only WHAT the name anchors to (a resource field vs. an output field) differs, and
+ * that distinction lives in the caller, not here.
+ */
+function lowerFieldMappings(map: Record<string, unknown> | undefined): IRFieldMapping[] {
   const fields: IRFieldMapping[] = [];
-  for (const [name, value] of Object.entries(map)) {
+  for (const [name, value] of Object.entries(map ?? {})) {
     if (typeof value === "string") {
       fields.push({ name, path: value });
     } else if (value && typeof value === "object") {
@@ -107,10 +105,33 @@ function lowerResponse(raw: Record<string, unknown>, canon: Canonicalize, output
       }
     }
   }
+  return fields;
+}
 
-  const mapping: IRResponseMapping = { resource, field, fields };
+/** Lower a shape-valid binding `response:` to a neutral IRResponseMapping. Canonicalizes the
+ *  resource name and binds it to its output field; the required set is NOT copied here (the
+ *  runtime reads it from the resource registry, so mapping + outputSchema cannot disagree). */
+function lowerResponse(raw: Record<string, unknown>, canon: Canonicalize, output: IRField[]): IRResponseMapping | undefined {
+  if (typeof raw.resource !== "string") return undefined;
+  const resource = canon(raw.resource);
+  const field = outputFieldFor(resource, output);
+  if (!field) return undefined; // no output field references this resource — cannot bind (validator errored)
+
+  const mapping: IRResponseMapping = { resource, field, fields: lowerFieldMappings(raw.map as Record<string, unknown> | undefined) };
   if (typeof raw.collection === "string") mapping.collection = raw.collection;
   return mapping;
+}
+
+/**
+ * Lower a shape-valid binding `extract:` to `IRFieldMapping[]` (per the accepted architecture
+ * decision extending ADD-12). Unlike `response:`, `extract:` IS the map — its keys are output
+ * field names directly (validated by the semantic pass), not resource field names, so no
+ * resource canonicalization and no `outputFieldFor` anchor lookup happen here.
+ */
+function lowerExtract(raw: Record<string, unknown> | undefined): IRFieldMapping[] | undefined {
+  if (!raw) return undefined;
+  const fields = lowerFieldMappings(raw);
+  return fields.length > 0 ? fields : undefined;
 }
 
 /**
@@ -207,11 +228,13 @@ function lowerLifecycle(raw: unknown): Lifecycle {
 export function compile(model: LoadResult): IR {
   const connectorByCap = new Map<string, IRConnector>();
   const responseByCap = new Map<string, Record<string, unknown>>();
+  const extractByCap = new Map<string, Record<string, unknown>>();
   const contractByCap = new Map<string, Record<string, unknown>>();
   for (const b of model.bindings) {
     const connector = lowerConnector(b.binding.connector);
     if (connector) connectorByCap.set(b.binding.capabilityId, connector);
     if (b.binding.response) responseByCap.set(b.binding.capabilityId, b.binding.response);
+    if (b.binding.extract) extractByCap.set(b.binding.capabilityId, b.binding.extract);
     if (b.binding.contract) contractByCap.set(b.binding.capabilityId, b.binding.contract);
   }
 
@@ -251,6 +274,8 @@ export function compile(model: LoadResult): IR {
       const response = lowerResponse(rawResponse, canon, tool.output);
       if (response) tool.response = response;
     }
+    const extract = lowerExtract(extractByCap.get(c.id));
+    if (extract) tool.extract = extract;
     const rawContract = contractByCap.get(c.id);
     if (rawContract) {
       const contract = lowerContract(rawContract);

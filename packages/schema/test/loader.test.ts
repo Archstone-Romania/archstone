@@ -129,6 +129,72 @@ const POLICY = [
   "",
 ].join("\n");
 
+// Extends ADD-12 (per the accepted architecture decision): binding.schema.json's new sibling
+// `extract:` property. Shape only — a real field/kind/path check is the semantic pass
+// (packages/compiler/test/validate.test.ts); this just proves the schema itself accepts a
+// well-formed block and refuses a malformed one, naming the file.
+describe("load — bindings/*.binding.yaml extract: (extends ADD-12)", () => {
+  const CAPS = "company:\n  id: acme\ncapabilities:\n  - shop.count\nproviders:\n  - store\n";
+  const CAP = "capability:\n  id: shop.count\n  description: count\n  effect: read\n  provider: store\n  output:\n    total:\n      type: quantity\n";
+  const CONNECTOR = "  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /count\n";
+
+  it("accepts a well-formed extract: — a bare JSONPath string and a {path, required:false} form", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), CAPS);
+    writeFileSync(join(dir, "shop.count.capability.yaml"), CAP);
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(
+      join(dir, "bindings", "shop.count.binding.yaml"),
+      `binding:\n  capabilityId: shop.count\n${CONNECTOR}  extract:\n    total: "$.total"\n`,
+    );
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    expect(r.bindings[0].binding.extract).toEqual({ total: "$.total" });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("accepts the {path, required: false} object form", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), CAPS);
+    writeFileSync(join(dir, "shop.count.capability.yaml"), CAP);
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(
+      join(dir, "bindings", "shop.count.binding.yaml"),
+      `binding:\n  capabilityId: shop.count\n${CONNECTOR}  extract:\n    total:\n      path: "$.total"\n      required: false\n`,
+    );
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects required: true (only false is a legal loosening, mirroring response.schema.json's map)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), CAPS);
+    writeFileSync(join(dir, "shop.count.capability.yaml"), CAP);
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(
+      join(dir, "bindings", "shop.count.binding.yaml"),
+      `binding:\n  capabilityId: shop.count\n${CONNECTOR}  extract:\n    total:\n      path: "$.total"\n      required: true\n`,
+    );
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.file === "bindings/shop.count.binding.yaml")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects an empty extract: map (minProperties: 1, mirroring response.schema.json's map)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), CAPS);
+    writeFileSync(join(dir, "shop.count.capability.yaml"), CAP);
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(join(dir, "bindings", "shop.count.binding.yaml"), `binding:\n  capabilityId: shop.count\n${CONNECTOR}  extract: {}\n`);
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.file === "bindings/shop.count.binding.yaml")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("load — *.policy.yaml (#43)", () => {
   it("discovers a policy document by suffix from the manifest root and shape-validates it", () => {
     const dir = fixture({ "capabilities.yaml": CAPS, "x.capability.yaml": CAP, "shop.policy.yaml": POLICY });

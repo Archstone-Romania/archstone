@@ -18,6 +18,9 @@ capability:
   output:
     stays:
       collection: Stay
+    totalMatches:
+      type: quantity
+      description: Total number of stays the backend found, before this response's own page/limit.
 
   # No `authenticated` policy: this demo's search is a public, service-account-style
   # lookup (no per-user "act on my data" concern) — see ADD-32 §"Open questions"/final

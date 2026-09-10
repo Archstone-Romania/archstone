@@ -14,6 +14,10 @@ import { createServer } from "node:http";
  * `verify` correctly reports a lost field (ADD-114), which is what these green-path tests would
  * otherwise trip over. Nothing here reaches a model: the mapping allowlist is what governs that
  * (ADR-0008), and `demo.integration.test.ts` is where that is asserted.
+ *
+ * Every mock body built from CLEAN_STAY also carries a sibling top-level `totalMatches` (the
+ * `extract:`-mapped output field added alongside `stays`'s `response:` mapping) — omitting it
+ * would ALSO now report as lost shape/an unmet required field, for the same ADD-114/D-7 reason.
  */
 /** The retired-gate fixture manifest keeps its own pre-ADD-114 contract, recorded against the
  *  five-field payload — so its probes must keep sending exactly that. Separate constant rather
@@ -100,6 +104,7 @@ describe("archstone verify (ADD-18)", () => {
   it("exits 0 and prints green for a clean backend matching the golden fixture", async () => {
     const mock = await startMock({
       stays: [CLEAN_STAY],
+      totalMatches: 1,
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", tourism], {
@@ -306,6 +311,7 @@ describe("archstone verify --json (ADD-20)", () => {
   it("clean backend + --json → stdout parses as JSON, one entry, exit 0", async () => {
     const mock = await startMock({
       stays: [CLEAN_STAY],
+      totalMatches: 1,
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", tourism, "--json"], {
@@ -366,6 +372,7 @@ describe("archstone verify --json (ADD-20)", () => {
   it("stdout parses as a single JSON document with no interleaved free text (--json flag position independent)", async () => {
     const mock = await startMock({
       stays: [CLEAN_STAY],
+      totalMatches: 1,
     });
     try {
       // flag comes before the directory here, proving argv parsing tolerates either order
@@ -383,6 +390,7 @@ describe("archstone verify --json (ADD-20)", () => {
   it("default (non-json) invocation is unchanged", async () => {
     const mock = await startMock({
       stays: [CLEAN_STAY],
+      totalMatches: 1,
     });
     try {
       const { stdout } = await execFileAsync(tsx, [cli, "verify", tourism], {

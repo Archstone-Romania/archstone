@@ -330,8 +330,10 @@ describe("callTool — one record per attempt, on every termination point (BR-2,
   });
 
   it("TP-13/TP-14/TP-15: violation is failed, degraded is SUCCEEDED, ok is succeeded (S-US4.8, BR-17)", async () => {
+    // `totalMatches` present throughout — this test isolates `response:`'s own
+    // required/degraded behavior; extract:'s (totalMatches) is covered separately.
     const body = (stay: Record<string, unknown>): FetchLike => async () =>
-      new Response(JSON.stringify({ stays: [stay] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [stay], totalMatches: 1 }), { status: 200 });
     const env = { STAYS_API_URL: "https://x.test" };
 
     const violation = spySink();
@@ -486,7 +488,7 @@ describe("callTool — the audit log cannot leak the credential it audited (US-5
       lines.push(JSON.stringify(r));
     };
     await callTool(tourismRegistry, "tourism_search", { destination: TOKEN }, {
-      auditSink: sink, env: env2, fetchImpl: async () => new Response(JSON.stringify({ stays: [{ name: "A", location: "B", pricePerNight: 1 }] }), { status: 200 }),
+      auditSink: sink, env: env2, fetchImpl: async () => new Response(JSON.stringify({ stays: [{ name: "A", location: "B", pricePerNight: 1 }], totalMatches: 1 }), { status: 200 }),
       caller: { accessToken: TOKEN },
     });
     await callTool(registryOf(tool({ policyRules: [{ id: "p", allow: ["user:alice"] }] })), "bank.list", { q: TOKEN }, {
@@ -562,7 +564,7 @@ describe("callTool — a broken sink can never break, delay, or be seen by the i
     const input = { destination: "Nice" };
     const env2 = { STAYS_API_URL: "https://x.test" };
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "A", location: "B", pricePerNight: 1 }] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [{ name: "A", location: "B", pricePerNight: 1 }], totalMatches: 1 }), { status: 200 });
     for (let i = 0; i < 2; i += 1) {
       const r = await callTool(tourismRegistry, "tourism_search", input, { auditSink: vandal, env: env2, fetchImpl });
       expect(r.isError).toBe(false);

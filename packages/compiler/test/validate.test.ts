@@ -278,10 +278,12 @@ describe("validateSemantics — caller-influenced-baseurl-no-allowlist (advisory
   });
 });
 
-describe("validateSemantics — response mapping (ADD-12)", () => {
+describe("validateSemantics — response/extract mapping (ADD-12, extended by the accepted architecture decision adding extract:)", () => {
   // A shop.search manifest whose output is `items: collection Widget`, with a Widget
-  // resource; each case swaps only the binding's `response:` block to isolate one diagnostic.
-  function withResponse(responseBlock: string, opts?: { output?: string; widgetFields?: string }): string {
+  // resource; each case swaps the binding's `response:`/`extract:` block(s) to isolate one
+  // diagnostic. `bindingExtra` is appended verbatim under `binding:`, so a caller may pass
+  // `response:`, `extract:`, or both.
+  function withBinding(bindingExtra: string, opts?: { output?: string; widgetFields?: string }): string {
     const dir = mkdtempSync(join(tmpdir(), "archstone-resp-"));
     const output = opts?.output ?? "  output:\n    items:\n      collection: Widget\n";
     const widgetFields = opts?.widgetFields ?? "    name:\n      type: text\n    price:\n      type: money\n";
@@ -290,7 +292,7 @@ describe("validateSemantics — response mapping (ADD-12)", () => {
       "shop.search.capability.yaml": `capability:\n  id: shop.search\n  description: find\n  effect: read\n  provider: store\n${output}`,
       "shop.Widget.resource.yaml": `resource:\n  name: shop.Widget\n  fields:\n${widgetFields}`,
       "bindings/shop.search.binding.yaml":
-        `binding:\n  capabilityId: shop.search\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /x\n${responseBlock}`,
+        `binding:\n  capabilityId: shop.search\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /x\n${bindingExtra}`,
     };
     for (const [rel, content] of Object.entries(files)) {
       const full = join(dir, rel);
@@ -301,19 +303,19 @@ describe("validateSemantics — response mapping (ADD-12)", () => {
   }
 
   it("clean mapping to a resolvable resource + field is silent", () => {
-    const dir = withResponse("  response:\n    collection: \"$.results[*]\"\n    resource: Widget\n    map:\n      name: \"$.n\"\n      price: \"$.p\"\n");
+    const dir = withBinding("  response:\n    collection: \"$.results[*]\"\n    resource: Widget\n    map:\n      name: \"$.n\"\n      price: \"$.p\"\n");
     expect(errors(validateSemantics(load(dir)))).toHaveLength(0);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it("flags a mapping to an undefined resource (unknown-response-resource)", () => {
-    const dir = withResponse("  response:\n    resource: Ghost\n    map:\n      name: \"$.n\"\n");
+    const dir = withBinding("  response:\n    resource: Ghost\n    map:\n      name: \"$.n\"\n");
     expect(codes(errors(validateSemantics(load(dir))))).toContain("unknown-response-resource");
     rmSync(dir, { recursive: true, force: true });
   });
 
   it("flags a map key that is not a field of the resource (unknown-response-field)", () => {
-    const dir = withResponse("  response:\n    resource: Widget\n    map:\n      bogus: \"$.n\"\n");
+    const dir = withBinding("  response:\n    resource: Widget\n    map:\n      bogus: \"$.n\"\n");
     const e = errors(validateSemantics(load(dir))).find((x) => x.code === "unknown-response-field");
     expect(e).toBeDefined();
     expect(e!.message).toMatch(/bogus/);
@@ -321,48 +323,131 @@ describe("validateSemantics — response mapping (ADD-12)", () => {
   });
 
   it("flags an invalid JSONPath (bad-response-path)", () => {
-    const dir = withResponse("  response:\n    resource: Widget\n    map:\n      name: \"$.[\"\n");
+    const dir = withBinding("  response:\n    resource: Widget\n    map:\n      name: \"$.[\"\n");
     expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-response-path");
     rmSync(dir, { recursive: true, force: true });
   });
 
   it("flags when no output field references the mapped resource (response-output-mismatch)", () => {
     // output is a scalar, so nothing references Widget → the mapped result has no home.
-    const dir = withResponse("  response:\n    resource: Widget\n    map:\n      name: \"$.n\"\n", {
+    const dir = withBinding("  response:\n    resource: Widget\n    map:\n      name: \"$.n\"\n", {
       output: "  output:\n    count:\n      type: quantity\n",
     });
     expect(codes(errors(validateSemantics(load(dir))))).toContain("response-output-mismatch");
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // #61 (Option B — stop the ADD-19 crash, don't lift the one-resource cap): a capability can
-  // correctly bind exactly one output field to the mapped resource (D-7 above) and STILL ship
-  // the outputSchema/structuredContent mismatch that crashes the reference MCP client, if it
-  // declares any OTHER output field alongside it — applyResponseMapping's structuredContent
-  // always carries exactly one key, but objectJsonSchema's outputSchema is built from every
-  // declared output field.
-  it("flags a second, unrelated output field alongside a correctly-bound one (response-output-extra-fields)", () => {
-    const dir = withResponse("  response:\n    collection: \"$.results[*]\"\n    resource: Widget\n    map:\n      name: \"$.n\"\n      price: \"$.p\"\n", {
-      // `items` correctly references Widget (D-7 is satisfied); `count` does not reference
-      // anything and would still land in outputSchema with nothing to populate it in
-      // structuredContent.
+  // D-5 (generalizing #61's Option B / the old response-output-extra-fields blanket refusal): a
+  // capability can correctly bind exactly one output field to the mapped resource (D-7 above)
+  // and STILL ship the outputSchema/structuredContent mismatch that crashes the reference MCP
+  // client, if it declares any OTHER output field alongside it that neither `response:` nor
+  // `extract:` reaches.
+  it("flags a second, unrelated output field alongside a correctly-bound one (unbound-output-field)", () => {
+    const dir = withBinding("  response:\n    collection: \"$.results[*]\"\n    resource: Widget\n    map:\n      name: \"$.n\"\n      price: \"$.p\"\n", {
+      // `items` correctly references Widget (D-7 is satisfied); `count` is reachable by
+      // neither `response:` nor `extract:` and would still land in outputSchema with nothing
+      // to populate it in structuredContent.
       output: "  output:\n    items:\n      collection: Widget\n    count:\n      type: quantity\n",
     });
     const d = validateSemantics(load(dir));
     // D-7's own check must NOT also fire — `items` still uniquely references Widget; this is a
-    // distinct diagnostic for a distinct problem (extra fields), not a re-triggering of D-7.
+    // distinct diagnostic for a distinct problem (an uncovered field), not a re-triggering of D-7.
     expect(codes(errors(d))).not.toContain("response-output-mismatch");
-    const e = errors(d).find((x) => x.code === "response-output-extra-fields");
+    const e = errors(d).find((x) => x.code === "unbound-output-field");
     expect(e).toBeDefined();
-    expect(e!.message).toMatch(/2 output fields/);
-    expect(e!.message).toMatch(/#61/);
+    expect(e!.message).toMatch(/'count'/);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("real fixtures (booking/tourism/bank): no response-bound capability declares more than one output field — no false positives", () => {
-    for (const m of ["booking", "tourism", "bank"]) {
+  // (a) of the conformance checklist: `response:` alone, unchanged from ADD-12.
+  it("real fixtures (booking/tourism/bank): every response/extract-bound capability has every output field covered — no false positives", () => {
+    for (const m of ["booking", "bank"]) {
       const d = validateSemantics(load(join(manifests, m)));
-      expect(codes(errors(d))).not.toContain("response-output-extra-fields");
+      expect(codes(errors(d))).not.toContain("unbound-output-field");
     }
+    // tourism now ALSO declares `extract:` (totalMatches) alongside `response:` (stays) — both
+    // covered, so this is the (c) conformance case (response: + extract: together) proven
+    // against the real example, not just a synthetic fixture.
+    const d = validateSemantics(load(join(manifests, "tourism")));
+    expect(codes(errors(d))).not.toContain("unbound-output-field");
+    expect(errors(d)).toHaveLength(0);
+  });
+
+  // (b) extract:-only (no response:) compiles clean when it covers every declared output field.
+  it("extract:-only, with no response: at all, is silent when it covers the sole output field", () => {
+    const dir = withBinding("  extract:\n    count: \"$.total\"\n", {
+      output: "  output:\n    count:\n      type: quantity\n",
+    });
+    expect(errors(validateSemantics(load(dir)))).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // (c) response: + extract: together, covering two DIFFERENT output fields, compiles clean —
+  // the exact shape the old blanket "> 1 output field" refusal used to reject outright.
+  it("response: (resource) + extract: (scalar) together cover two output fields — silent", () => {
+    const dir = withBinding(
+      "  response:\n    collection: \"$.results[*]\"\n    resource: Widget\n    map:\n      name: \"$.n\"\n      price: \"$.p\"\n  extract:\n    count: \"$.total\"\n",
+      { output: "  output:\n    items:\n      collection: Widget\n    count:\n      type: quantity\n" },
+    );
+    expect(errors(validateSemantics(load(dir)))).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an extract: key that is not a declared output field (unknown-extract-field)", () => {
+    const dir = withBinding("  extract:\n    bogus: \"$.n\"\n", {
+      output: "  output:\n    count:\n      type: quantity\n",
+    });
+    const d = validateSemantics(load(dir));
+    const e = errors(d).find((x) => x.code === "unknown-extract-field");
+    expect(e).toBeDefined();
+    expect(e!.message).toMatch(/bogus/);
+    // `count` itself is left uncovered too — named separately, not swallowed by the typo.
+    expect(codes(errors(d))).toContain("unbound-output-field");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // (d), extract: side: a resource/collection-typed output field can never be reached by
+  // extract: — that is still response:'s job exclusively.
+  it("flags a resource/collection-typed output field targeted by extract: (extract-field-wrong-kind)", () => {
+    const dir = withBinding("  extract:\n    items: \"$.results\"\n");
+    const d = validateSemantics(load(dir));
+    const e = errors(d).find((x) => x.code === "extract-field-wrong-kind");
+    expect(e).toBeDefined();
+    expect(e!.message).toMatch(/'items'/);
+    // One diagnostic per problem: the wrong-kind field still counts as "attempted" so it is
+    // NOT also reported as unbound-output-field.
+    expect(codes(errors(d))).not.toContain("unbound-output-field");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // (d), response: side: `response:`'s own D-7 anchor already refuses to bind a scalar output
+  // field — response-output-mismatch, unchanged from ADD-12 — proving the mirror-image case:
+  // a resource/collection block can never land on a scalar field either.
+  it("flags a scalar output field with no resource/collection field to anchor a response: mapping to (response-output-mismatch)", () => {
+    const dir = withBinding("  response:\n    resource: Widget\n    map:\n      name: \"$.n\"\n", {
+      output: "  output:\n    count:\n      type: quantity\n",
+    });
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("response-output-mismatch");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an invalid JSONPath in extract: (bad-extract-path)", () => {
+    const dir = withBinding("  extract:\n    count: \"$.[\"\n", {
+      output: "  output:\n    count:\n      type: quantity\n",
+    });
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-extract-path");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // (e): an output field reachable by neither mechanism still refuses — proving the cap is
+  // precise (only the specific covered shape compiles) rather than removed outright.
+  it("flags an output field covered by neither response: nor extract: (unbound-output-field)", () => {
+    const dir = withBinding("  extract:\n    count: \"$.total\"\n", {
+      output: "  output:\n    count:\n      type: quantity\n    flagged:\n      type: quantity\n",
+    });
+    const e = errors(validateSemantics(load(dir))).find((x) => x.code === "unbound-output-field");
+    expect(e).toBeDefined();
+    expect(e!.message).toMatch(/'flagged'/);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

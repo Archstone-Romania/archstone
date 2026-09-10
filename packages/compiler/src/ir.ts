@@ -164,6 +164,14 @@ export interface IRTool {
   output: IRField[];
   connector?: IRConnector; // present iff the capability has a binding (else: not invocable)
   response?: IRResponseMapping; // present iff the binding declares a response mapping (ADD-12)
+  /** Present iff the binding declares an `extract:` block (per the accepted architecture
+   *  decision extending ADD-12): additional SCALAR output fields populated straight from the
+   *  raw provider body root, alongside (or instead of) `response`. Reuses `IRFieldMapping`
+   *  verbatim — same fill-a-field-from-a-path shape `response.fields` already carries; the only
+   *  difference is WHERE required-ness comes from at execution time (the output field itself,
+   *  not a resource registry — there is no resource here), which is the mapper's decision, not
+   *  this shape's. */
+  extract?: IRFieldMapping[];
   contract?: IRContract; // present iff the binding declares a contract snapshot (ADD-18)
 }
 

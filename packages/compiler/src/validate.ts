@@ -195,85 +195,138 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
     checkFields(r.resource.fields, domainOf(r.resource.name), `resource '${r.resource.name}' (${r.file})`);
   }
 
-  // 5. Response-mapping resolution (ADD-12) — for each binding `response:`: the resource
-  // resolves (P-7); every `map` key is a real field of it; every path parses; and the bound
-  // capability has exactly one output field referencing that resource (D-7 output binding).
+  // 5. Response/extract-mapping resolution (ADD-12, extended by the accepted architecture
+  // decision that added `extract:`) — for each binding `response:` and/or `extract:`: the
+  // resource resolves (P-7); every `map`/`extract` key is a real field (of the resource, or of
+  // the capability's `output:`, respectively); every path parses; the bound capability has
+  // exactly one output field referencing a mapped resource (D-7 output binding); and — the
+  // generalized form of #61's original "at most one output field" refusal — every declared
+  // `output:` field is reachable by exactly one of {response:, extract:}.
   const fieldsByResource = new Map<string, Set<string>>();
   for (const r of resourceDocs) {
     fieldsByResource.set(r.resource.name, new Set(Object.keys(r.resource.fields ?? {})));
   }
 
+  /** A `map:`/`extract:` entry value is either a bare JSONPath string or `{path, required}`. */
+  const pathOf = (value: unknown): string | undefined =>
+    typeof value === "string" ? value : typeof (value as Record<string, unknown>)?.path === "string" ? (value as Record<string, string>).path : undefined;
+
   for (const b of bindings) {
     const resp = b.binding.response;
-    if (!resp) continue;
+    const extract = b.binding.extract;
+    if (!resp && !extract) continue; // no output-populating mechanism declared: today's raw pass-through, unchanged
     const cid = b.binding.capabilityId;
     const cap = byId.get(cid);
     if (!cap) continue; // binding-without-capability already reported above
     const domain = domainOf(cid);
-    const at = `binding ${b.file} response`;
+    const outputRaw = (cap.capability.output ?? {}) as Record<string, unknown>;
 
-    const rawResource = resp.resource;
-    if (typeof rawResource !== "string") continue; // shape-guaranteed by schema; defensive
-    const resolved = resolveResourceName(rawResource, domain, index);
-    if (!resolved.ok) {
-      const detail =
-        resolved.reason === "ambiguous"
-          ? `is ambiguous — it matches both ${resolved.candidates[0]} and ${resolved.candidates[1]}; qualify it`
-          : `is not defined by any *.resource.yaml`;
-      diags.push({ severity: "error", code: "unknown-response-resource", message: `${at} maps to resource '${rawResource}' which ${detail}` });
-      continue;
-    }
-    const canonical = resolved.canonical;
-    const resourceFields = fieldsByResource.get(canonical);
+    // `response:` (ADD-12, unchanged) — tracks WHICH output field it covers (`responseField`),
+    // consumed by the coverage pass below instead of the old blanket "> 1 output field" refusal.
+    let responseField: string | undefined;
+    let responseUnresolved = false; // a response:-side error already named the problem; the
+    // coverage pass below would only pile on a confusing second diagnostic for the same cause.
+    if (resp) {
+      const at = `binding ${b.file} response`;
+      const rawResource = resp.resource;
+      if (typeof rawResource !== "string") {
+        responseUnresolved = true; // shape-guaranteed by schema; defensive
+      } else {
+        const resolved = resolveResourceName(rawResource, domain, index);
+        if (!resolved.ok) {
+          const detail =
+            resolved.reason === "ambiguous"
+              ? `is ambiguous — it matches both ${resolved.candidates[0]} and ${resolved.candidates[1]}; qualify it`
+              : `is not defined by any *.resource.yaml`;
+          diags.push({ severity: "error", code: "unknown-response-resource", message: `${at} maps to resource '${rawResource}' which ${detail}` });
+          responseUnresolved = true;
+        } else {
+          const canonical = resolved.canonical;
+          const resourceFields = fieldsByResource.get(canonical);
 
-    // Every map key must be a field of the resolved resource; every path must parse.
-    const map = (resp.map ?? {}) as Record<string, unknown>;
-    for (const [key, value] of Object.entries(map)) {
-      if (resourceFields && !resourceFields.has(key)) {
-        diags.push({ severity: "error", code: "unknown-response-field", message: `${at} maps '${key}', not a field of resource '${canonical}'` });
+          // Every map key must be a field of the resolved resource; every path must parse.
+          const map = (resp.map ?? {}) as Record<string, unknown>;
+          for (const [key, value] of Object.entries(map)) {
+            if (resourceFields && !resourceFields.has(key)) {
+              diags.push({ severity: "error", code: "unknown-response-field", message: `${at} maps '${key}', not a field of resource '${canonical}'` });
+            }
+            const path = pathOf(value);
+            if (typeof path === "string") {
+              const p = parsePath(path);
+              if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} field '${key}' has an invalid JSONPath '${path}': ${p.error}` });
+            }
+          }
+          if (typeof resp.collection === "string") {
+            const p = parsePath(resp.collection);
+            if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} collection has an invalid JSONPath '${resp.collection}': ${p.error}` });
+          }
+
+          // D-7: exactly one output field must reference the mapped resource, so the mapped
+          // result has one unambiguous home in the tool's output (structuredContent = outputSchema).
+          const targets = Object.entries(outputRaw).filter(([, raw]) => {
+            const ref = referencedResourceName((raw ?? {}) as Record<string, unknown>);
+            if (!ref) return false;
+            const r = resolveResourceName(ref, domain, index);
+            return r.ok && r.canonical === canonical;
+          });
+          if (targets.length !== 1) {
+            const detail = targets.length === 0 ? `no output field references resource '${canonical}'` : `${targets.length} output fields reference resource '${canonical}' (need exactly one)`;
+            diags.push({ severity: "error", code: "response-output-mismatch", message: `${at}: ${detail}` });
+            responseUnresolved = true;
+          } else {
+            responseField = targets[0][0];
+          }
+        }
       }
-      const path = typeof value === "string" ? value : typeof (value as Record<string, unknown>)?.path === "string" ? (value as Record<string, string>).path : undefined;
-      if (typeof path === "string") {
-        const p = parsePath(path);
-        if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} field '${key}' has an invalid JSONPath '${path}': ${p.error}` });
-      }
-    }
-    if (typeof resp.collection === "string") {
-      const p = parsePath(resp.collection);
-      if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} collection has an invalid JSONPath '${resp.collection}': ${p.error}` });
     }
 
-    // D-7: exactly one output field must reference the mapped resource, so the mapped
-    // result has one unambiguous home in the tool's output (structuredContent = outputSchema).
-    const targets = Object.entries((cap.capability.output ?? {}) as Record<string, unknown>).filter(([, raw]) => {
-      const ref = referencedResourceName((raw ?? {}) as Record<string, unknown>);
-      if (!ref) return false;
-      const r = resolveResourceName(ref, domain, index);
-      return r.ok && r.canonical === canonical;
-    });
-    if (targets.length !== 1) {
-      const detail = targets.length === 0 ? `no output field references resource '${canonical}'` : `${targets.length} output fields reference resource '${canonical}' (need exactly one)`;
-      diags.push({ severity: "error", code: "response-output-mismatch", message: `${at}: ${detail}` });
-    } else {
-      // #61 (ADD-19's underlying cause, Option B — stop the crash, don't lift the cap): D-7
-      // above only checks that exactly one output field references THIS resource; it says
-      // nothing about other, unrelated output fields declared alongside it. `applyResponseMapping`
-      // (`@archstone/emitter-support/mapping.ts`) always returns `{ [mapping.field]: value }` —
-      // exactly one key — while `objectJsonSchema` builds `outputSchema` from EVERY declared
-      // `output:` field. A capability with two or more output fields (even with exactly one
-      // correctly bound here) ships an `outputSchema` naming N properties against a
-      // `structuredContent` carrying one, N-1 of them silently missing — the reference MCP SDK
-      // client validates `structuredContent` against `outputSchema` unconditionally and crashes
-      // (ADD-19 Rev 2 D-3'/D-6's own precedent, hit again one level up). Refused here, loudly,
-      // at authoring time, rather than shipping a capability that crashes its first real caller.
-      // Not a lift of the one-resource cap (#61 tracks that as a separate, larger decision) —
-      // only a fail-closed stop on the silent version of the same defect.
-      const outputFieldCount = Object.keys((cap.capability.output ?? {}) as Record<string, unknown>).length;
-      if (outputFieldCount > 1) {
+    // `extract:` — a sibling binding block (per the accepted architecture decision extending
+    // ADD-12) that populates additional SCALAR output fields straight from the raw provider
+    // body root. Every key must name a real output field; that field must be scalar-typed
+    // (never resource/collection — those still require `response:`); every path must parse.
+    const extractCovered = new Set<string>();
+    if (extract) {
+      const at = `binding ${b.file} extract`;
+      for (const [key, value] of Object.entries(extract)) {
+        const fieldRaw = outputRaw[key] as Record<string, unknown> | undefined;
+        if (!fieldRaw) {
+          diags.push({ severity: "error", code: "unknown-extract-field", message: `${at} extracts '${key}', not a declared output field of capability '${cid}'` });
+          continue;
+        }
+        // A real field — counts toward coverage below even if it turns out to be wrong-kind
+        // (one diagnostic per problem: extract-field-wrong-kind already names this exact field).
+        extractCovered.add(key);
+        if (referencedResourceName(fieldRaw) !== undefined) {
+          diags.push({
+            severity: "error",
+            code: "extract-field-wrong-kind",
+            message: `${at} extracts '${key}', a resource/collection-typed output field — extract: reaches only scalar/semantic-typed fields; map '${key}' with response: instead`,
+          });
+        }
+        const path = pathOf(value);
+        if (typeof path === "string") {
+          const p = parsePath(path);
+          if (!p.ok) diags.push({ severity: "error", code: "bad-extract-path", message: `${at} field '${key}' has an invalid JSONPath '${path}': ${p.error}` });
+        }
+      }
+    }
+
+    // D-5 (generalizing #61's Option B / response-output-extra-fields): every declared output
+    // field must be reachable by exactly one of {response:, extract:}. `applyResponseMapping`
+    // only ever populates the fields these two mechanisms name, while `objectJsonSchema` builds
+    // `outputSchema` from EVERY declared `output:` field — a field reachable by neither ships an
+    // `outputSchema` property `structuredContent` never carries, which crashes the reference MCP
+    // SDK client (ADD-19 Rev 2 D-3'/D-6's precedent). Skipped when `response:` itself already
+    // failed to resolve — that error already names the problem; this pass would only add noise.
+    if (!responseUnresolved) {
+      const covered = new Set(extractCovered);
+      if (responseField) covered.add(responseField);
+      for (const fieldName of Object.keys(outputRaw)) {
+        if (covered.has(fieldName)) continue;
         diags.push({
           severity: "error",
-          code: "response-output-extra-fields",
-          message: `${at}: capability '${cid}' declares ${outputFieldCount} output fields but this response: block binds only one resource ('${canonical}') — outputSchema would advertise every declared field while structuredContent carries only the mapped one, which crashes the reference MCP client (ADD-19). A response: binding is capped at one resource per capability until #61 decides how to lift it; split into separate capabilities, or remove the extra output field(s), for now.`,
+          code: "unbound-output-field",
+          message: `binding ${b.file}: capability '${cid}' declares output field '${fieldName}', which is reachable by neither response: nor extract: — outputSchema would advertise it while structuredContent never carries it, crashing the reference MCP client (ADD-19). Map it with response: (resource/collection fields) or extract: (scalar fields), or remove the field.`,
         });
       }
     }
