@@ -13,10 +13,26 @@ on:
   push:
     branches: [main]
     paths:
+      # This is the demo worker's actual dependency closure, traced by hand from
+      # examples/demo/remote-mcp-worker/package.json through each workspace package's own
+      # "dependencies" (not devDependencies), and cross-checked against pnpm-lock.yaml:
+      #   worker -> @archstone/runtime, @archstone/compiler, @archstone/provider-rest
+      #   runtime -> + @archstone/emitter-support, @archstone/schema
+      #   provider-rest -> + @archstone/emitter-support (compiler already covered)
+      #   compiler -> + @archstone/schema (already covered)
+      #   emitter-support -> (only compiler, already covered)
+      #   schema -> no workspace deps
+      # packages/agent, packages/cli and packages/init are deliberately excluded: they
+      # consume the packages above, nothing in the closure depends on them.
+      # Re-derive this list if the worker or any package in the closure gains a new
+      # workspace dependency — do not widen it back to "packages/**" or "providers/**".
       - "examples/demo/remote-mcp-worker/**"
       - "examples/manifests/tourism/**"
-      - "packages/**"
-      - "providers/**"
+      - "packages/compiler/**"
+      - "packages/emitter-support/**"
+      - "packages/runtime/**"
+      - "packages/schema/**"
+      - "providers/rest/**"
   workflow_dispatch: {}
 
 permissions:
