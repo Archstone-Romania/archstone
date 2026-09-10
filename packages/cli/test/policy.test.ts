@@ -10,6 +10,12 @@ import { tmpdir } from "node:os";
 // (BR-8/ADD-43 D-9). Spawning the CLI is deliberate — the exit code IS the acceptance criterion
 // for "a malformed policy fails `archstone apply`" (#43 DoD item 1), and only a subprocess sees it.
 
+// #134: every `it` here spawns a fresh `tsx` process (transpile + run the whole CLI),
+// which is slow to cold-start under real CPU load — sighting #2 on #134 was this file
+// timing out at ~5032ms, a hair past vitest's 5000ms default, only under a loaded
+// machine, never in isolation. Explicit generous timeouts below (already the convention
+// for the child-process-spawning tests in serve-http.test.ts and verify.test.ts) remove
+// that race without loosening any assertion.
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -73,7 +79,7 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("exits 1 and prints a shape issue naming a malformed policy file (S-US1.2)", async () => {
     const dir = manifest(policyDoc("  bogusKey: 1\n"));
@@ -84,7 +90,7 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("exits 1 with a semantic error for an unresolvable scope, naming file and policy id", async () => {
     const dir = manifest(policyDoc('  allow:\n    - "user:alice"\n', "  scope: capability\n  capabilityId: demo.nope\n"));
@@ -96,7 +102,7 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("exits 1 on an incomplete spec.rateLimit and on non-empty spec.constraints (S-US4.1/S-US4.2)", async () => {
     // #45: `spec.rateLimit` is enforced now, but `maxInvocations`/`windowSeconds` are still
@@ -110,7 +116,7 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  });
+  }, 30000);
 
   it("exits 0 on a COMPLETE spec.rateLimit (#45)", async () => {
     const dir = manifest(policyDoc("  rateLimit:\n    maxInvocations: 5\n    windowSeconds: 60\n"));
@@ -120,7 +126,7 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("prints unenforced-token warnings without blocking, on a real example manifest (S-US7.1/7.2)", async () => {
     const r = await run(["apply", bank]);
@@ -134,7 +140,7 @@ describe("archstone apply — policy documents (SF-1/SF-6)", () => {
     // still appear in the pre-existing ADD-32 "no caller placeholder" advisory — a different
     // warning, which is why this filters by the unenforced-token wording rather than by token.)
     expect(unenforced.some((l) => l.includes("policies:[authenticated]"))).toBe(false);
-  });
+  }, 20000);
 });
 
 describe("archstone build — the strip rule (BR-8 / ADD-43 D-9)", () => {
@@ -153,7 +159,7 @@ describe("archstone build — the strip rule (BR-8 / ADD-43 D-9)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("refuses to build a manifest whose spec.rateLimit is incomplete (#45)", async () => {
     const dir = manifest(policyDoc("  rateLimit:\n    maxInvocations: 5\n"));
@@ -162,7 +168,7 @@ describe("archstone build — the strip rule (BR-8 / ADD-43 D-9)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("leaves every shipped example manifest's artifact free of policyRules (S-US8.2)", async () => {
     for (const name of ["booking", "bank", "tourism"]) {
