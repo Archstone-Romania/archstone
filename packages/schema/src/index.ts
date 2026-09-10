@@ -84,7 +84,7 @@ export interface ExecutionValidation {
  * published contract rather than against a hand-written object literal.
  *
  * The schema is `additionalProperties: false` at all four levels, so this also proves no
- * undeclared key was written, and `status.denialReason` carries a five-member `enum`, so free
+ * undeclared key was written, and `status.denialReason` carries a seven-member `enum`, so free
  * text is rejected here rather than only by a TypeScript union.
  *
  * **Known limitation, stated rather than assumed:** this loader registers `date-time` (and
