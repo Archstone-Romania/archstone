@@ -15,6 +15,21 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`archstone verify --json` now carries the live fingerprint a binding's `status` was derived
+  from.** `runVerify` always compared an observed fingerprint against the recorded one to decide
+  green/yellow/red — the observed value itself only ever reached `detail`, a sentence written
+  for a person (`"response shape changed (fingerprint sha256:… → sha256:…)"`). A `--json`
+  consumer could see that a status changed and not what the backend now answers, short of
+  parsing that sentence.
+
+  `ToolVerification` gains `observedFingerprint`, present whenever a probe actually ran —
+  including a green result, which previously reported only the word "unchanged" — and absent on
+  every path where none did: no `contract:` declared, no fixture found, a policy denial, or a
+  failed request. `detail` and `drift` keep their exact current text and meaning; this is an
+  additive field only, and no existing `--json` consumer is affected.
+
 ## [0.19.1]
 
 ### Fixed

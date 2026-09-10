@@ -73,6 +73,25 @@ export interface ToolVerification {
    * `archstone verify --json` for free, since the CLI serialises this object directly.
    */
   drift?: ShapeDiff;
+  /**
+   * #18: the live fingerprint `status` was actually derived from — the value `narrateShapeChange`
+   * already renders into `detail`'s prose (`"fingerprint sha256:… → sha256:…"`) but that a
+   * `--json` consumer could previously only read by parsing English out of that string. This is
+   * the same string, as data, nothing recomputed and nothing new compared.
+   *
+   * Present iff a probe actually happened and returned a response `fingerprintShape` could run
+   * over — i.e. every branch below the `invokeRest` call in `verifyTool`, GREEN included. That
+   * "even when unchanged" half is deliberate, not an oversight: a green result today reports only
+   * the word "unchanged" (`detail: "fingerprint unchanged"`), so this field is what makes a green
+   * run informative on its own terms rather than merely reporting the absence of a problem — a
+   * consumer can record what it observed and diff across runs itself, without waiting for drift.
+   *
+   * Omitted (never `null` or the recorded value) on every path that returns before that call: no
+   * `contract`, no fixture, a policy denial, or a failed request — nothing was observed on any of
+   * those, so there is nothing to carry. Mirrors `ContractRecording.fingerprint` below, which
+   * uses the same "absent means not observed" convention for the same reason.
+   */
+  observedFingerprint?: string;
 }
 
 /**
@@ -227,34 +246,37 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
   const liveFingerprint = fingerprintShape(result.data);
   const fingerprintChanged = liveFingerprint !== contract.fingerprint;
   const liveShape = describeShape(result.data);
+  // #18: every return from here on reports a probe that actually happened and actually got a
+  // response back — so every one of them, GREEN included, carries what it observed.
+  const observed = { ...base, observedFingerprint: liveFingerprint };
 
   if (!tool.response) {
     // No response mapping to validate against — fingerprint drift is all we can see.
-    if (!fingerprintChanged) return { ...base, status: "green", detail: "fingerprint unchanged" };
+    if (!fingerprintChanged) return { ...observed, status: "green", detail: "fingerprint unchanged" };
     const { detail, drift } = narrateShapeChange(contract, liveShape, liveFingerprint);
-    return { ...base, status: "yellow", detail, ...(drift ? { drift } : {}) };
+    return { ...observed, status: "yellow", detail, ...(drift ? { drift } : {}) };
   }
 
   const mapped = applyResponseMapping(tool, result.data, resources);
   if (mapped.status === "violation") {
-    return { ...base, status: "red", detail: `contract violation: missing required field(s) ${(mapped.missing ?? []).join(", ")}` };
+    return { ...observed, status: "red", detail: `contract violation: missing required field(s) ${(mapped.missing ?? []).join(", ")}` };
   }
 
   if (fixture.expects?.collectionNonEmpty) {
     const field = tool.response.field;
     const value = mapped.data?.[field];
     const empty = Array.isArray(value) ? value.length === 0 : value === undefined || value === null;
-    if (empty) return { ...base, status: "red", detail: `expected a non-empty '${field}' collection; got none` };
+    if (empty) return { ...observed, status: "red", detail: `expected a non-empty '${field}' collection; got none` };
   }
 
   if (mapped.status === "degraded") {
-    return { ...base, status: "yellow", detail: `degraded: optional field(s) absent — ${(mapped.degraded ?? []).join(", ")}` };
+    return { ...observed, status: "yellow", detail: `degraded: optional field(s) absent — ${(mapped.degraded ?? []).join(", ")}` };
   }
   if (fingerprintChanged) {
     const { detail, drift } = narrateShapeChange(contract, liveShape, liveFingerprint);
-    return { ...base, status: "yellow", detail: `mapping still resolves; ${detail}`, ...(drift ? { drift } : {}) };
+    return { ...observed, status: "yellow", detail: `mapping still resolves; ${detail}`, ...(drift ? { drift } : {}) };
   }
-  return { ...base, status: "green", detail: "fingerprint unchanged, mapping OK" };
+  return { ...observed, status: "green", detail: "fingerprint unchanged, mapping OK" };
 }
 
 /**

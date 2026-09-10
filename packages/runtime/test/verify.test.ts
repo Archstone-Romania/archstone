@@ -123,6 +123,65 @@ describe("verifyTool (ADD-18)", () => {
     }));
 });
 
+// Issue #18: `detail`'s prose already named the live fingerprint that decided `status` — this
+// asserts the same value is now readable as data, and only where a probe actually ran.
+describe("verifyTool — observedFingerprint (#18)", () => {
+  it("yellow: carries the ACTUAL live fingerprint, not merely a truthy value", () =>
+    withFixture(async (dir) => {
+      const drifted = { stays: [{ name: "Hotel A", location: "Nice", price: 100, rating: 4.5, currency: "EUR" }] };
+      const liveFingerprint = fingerprintShape(drifted);
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(drifted), { status: 200 });
+      const r = await verifyTool(tool(goldenFingerprint), dir, resources, { fetchImpl });
+      expect(r.status).toBe("yellow");
+      // The two fingerprints differ (that's what made this yellow) and detail's prose already
+      // names both — this pins the field to the SAME value, not a copy of the recorded one.
+      expect(r.observedFingerprint).toBe(liveFingerprint);
+      expect(r.observedFingerprint).not.toBe(goldenFingerprint);
+      expect(r.detail).toContain(liveFingerprint);
+    }));
+
+  it("green: also present — a green run reports what it observed, not just the word \"unchanged\"", () =>
+    withFixture(async (dir) => {
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(goldenBody), { status: 200 });
+      const r = await verifyTool(tool(goldenFingerprint), dir, resources, { fetchImpl });
+      expect(r.status).toBe("green");
+      // Unchanged means observed and recorded coincide — asserted against the real recorded
+      // value, not merely `toBeDefined()`.
+      expect(r.observedFingerprint).toBe(goldenFingerprint);
+    }));
+
+  it("degraded (yellow) and violation (red) also carry it — a probe ran and returned a response in both", () =>
+    withFixture(async (dir) => {
+      const noRating = { stays: [{ name: "Hotel A", location: "Nice", price: 100 }] };
+      const fp = fingerprintShape(noRating);
+      const degradedFetch: FetchLike = async () => new Response(JSON.stringify(noRating), { status: 200 });
+      const degraded = await verifyTool(tool(fp), dir, resources, { fetchImpl: degradedFetch });
+      expect(degraded.status).toBe("yellow");
+      expect(degraded.observedFingerprint).toBe(fp);
+
+      const noPrice = { stays: [{ name: "Hotel A", location: "Nice" }] };
+      const violationFetch: FetchLike = async () => new Response(JSON.stringify(noPrice), { status: 200 });
+      const violation = await verifyTool(tool(goldenFingerprint), dir, resources, { fetchImpl: violationFetch });
+      expect(violation.status).toBe("red");
+      expect(violation.observedFingerprint).toBe(fingerprintShape(noPrice));
+    }));
+
+  it("omitted (not null, not the recorded value) when no probe was made: no contract, no fixture, or the request itself failed", () =>
+    withFixture(async (dir) => {
+      const noContract = tool(goldenFingerprint);
+      delete noContract.contract;
+      expect((await verifyTool(noContract, dir, resources)).observedFingerprint).toBeUndefined();
+
+      const missingFixture = tool(goldenFingerprint, "does-not-exist.json");
+      expect((await verifyTool(missingFixture, dir, resources)).observedFingerprint).toBeUndefined();
+
+      const failingFetch: FetchLike = async () => new Response("boom", { status: 500 });
+      const failed = await verifyTool(tool(goldenFingerprint), dir, resources, { fetchImpl: failingFetch });
+      expect(failed.status).toBe("red");
+      expect(failed.observedFingerprint).toBeUndefined();
+    }));
+});
+
 // Issue #39 / ADD-31 (BR-15/S-US6.1): verifyTool/runVerify already forward a generic
 // InvokeOptions bag into invokeRest with ZERO code change to verify.ts — this confirms it by
 // a passing test rather than merely assuming it from the pass-through shape.
