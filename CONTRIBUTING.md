@@ -29,6 +29,34 @@ Node 22+ · pnpm 11+.
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
 IR or CDL), open an issue first so the design can be discussed.
 
+## Releasing
+
+Cutting a release is a maintainer action, not a contributor one — it's covered here because the
+whole flow lives in three workflows and nowhere else. It's three acts, two of them human:
+
+1. **Dispatch `Release prepare`** (`workflow_dispatch` on `.github/workflows/release-prepare.yml`,
+   run against `main`) with a `bump` (`patch`/`minor`/`major`) or an explicit `version`. It stamps
+   the root `package.json`, every publishable package under `packages/` and `providers/`
+   (discovered by `private: false`, not hardcoded), and `server.json`; turns the CHANGELOG's
+   `## [Unreleased]` heading into `## [X.Y.Z]` and opens a fresh, empty `Unreleased` above it; then
+   pushes `release/prepare-X.Y.Z` and stops. It refuses to run if `[Unreleased]` has no entries —
+   there would be nothing to announce.
+2. **Open and merge that PR yourself.** The workflow deliberately doesn't open it: a PR raised
+   with the default `GITHUB_TOKEN` still needs a manual "approve workflow run" click before CI
+   runs on it, which is exactly as much human effort as opening the PR directly, without adding a
+   stored PAT or GitHub App token this repo otherwise has no use for (npm publishing is OIDC —
+   there is no `NPM_TOKEN`).
+3. **Dispatch `Release tag`** (`.github/workflows/release-tag.yml`) with the version, once the
+   prepare PR is merged and green. It re-verifies the merge commit is stamped and that the
+   CHANGELOG has a non-empty `## [X.Y.Z]` section, pushes the `vX.Y.Z` tag, and explicitly
+   dispatches `release.yml` — a tag pushed by `GITHUB_TOKEN` does not start a workflow on its own.
+4. **`release.yml`** runs from the tag: lint, typecheck, the full test suite, and a release-only
+   gate that packs and installs every package end to end — then publishes the 8 `@archstone/*`
+   packages to npm via OIDC and creates the GitHub Release from that CHANGELOG section.
+
+If a run stops partway, resume it via that same workflow's own `workflow_dispatch` with the same
+version — never delete and re-push a tag.
+
 ## Conventions
 
 - **Schema before core** — don't build a feature ahead of the schema that defines it.
