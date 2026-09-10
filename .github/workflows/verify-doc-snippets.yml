@@ -2,10 +2,13 @@ name: Verify published doc snippets
 
 # #57 — published CDL is a de facto second specification of the language (Rule #11: a
 # shipped primitive is permanent, so a wrong published example is as load-bearing as the real
-# grammar). This runs whenever a PR touches one of the three docs a copy-pasted CDL snippet
-# is most likely to live/rot in, or the fixture-directory mechanism that completes those
-# snippets into compilable manifests, and fails the check if any annotated snippet no longer
-# compiles.
+# grammar). #29 widened the same idea to every published package README, where a wrong
+# TypeScript snippet is worse: it can only be corrected by cutting a new npm release, not by
+# merging a PR. This runs whenever a PR touches one of the three top-level docs a copy-pasted
+# CDL snippet is most likely to live/rot in, a package/provider README, the fixture-directory
+# mechanism that completes CDL snippets into compilable manifests, or the checker itself — and
+# fails the check if any covered snippet no longer compiles or no longer matches its package's
+# real exports.
 #
 # Same check also runs unconditionally as part of `pnpm test` (scripts/verify-doc-snippets.
 # test.ts) and again, explicitly, in release.yml's Build gate step before every tagged
@@ -18,6 +21,8 @@ on:
       - "README.md"
       - "CASE-STUDY.md"
       - "docs/ONBOARDING.md"
+      - "packages/*/README.md"
+      - "providers/*/README.md"
       - "examples/doc-fixtures/**"
       - "scripts/verify-doc-snippets.mjs"
 
@@ -46,5 +51,5 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Compile every archstone-fixture= annotated CDL snippet in the published docs
+      - name: Verify CDL and package README snippets in the published docs
         run: node scripts/verify-doc-snippets.mjs

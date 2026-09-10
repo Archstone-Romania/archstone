@@ -19,10 +19,11 @@ all without running a separate MCP server process.
 ## Quick start
 
 ```typescript
-import { fromIR, tools, execute } from "@archstone/agent";
+import { fromIR } from "@archstone/agent";
+import { readFileSync } from "node:fs";
 
 // Load a compiled IR (produced by `archstone build manifest/`)
-const ir = JSON.parse(fs.readFileSync("archstone.ir.json", "utf-8"));
+const ir = JSON.parse(readFileSync("archstone.ir.json", "utf-8"));
 const archstone = fromIR(ir);
 
 // Get tool definitions in your preferred format
@@ -56,7 +57,7 @@ definition says what a model must *produce*, and `extractor()` carries both halv
 schema the model is given, and the validator its answer is judged by — so the two cannot drift
 apart.
 
-```typescript
+```typescript pseudocode
 const stay = archstone.extractor("tourism.Stay", "anthropic");
 
 // Give the model the schema — either axis, same schema underneath.
@@ -93,7 +94,7 @@ sensitive text in the deployment.
 
 **For HTTP-based MCP:**
 
-```typescript
+```typescript pseudocode
 import { mcpHandler } from "@archstone/agent/mcp";
 
 const handler = mcpHandler(archstone, {
