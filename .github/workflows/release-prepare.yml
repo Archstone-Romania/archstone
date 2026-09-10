@@ -10,11 +10,18 @@
 #
 # This workflow does the mechanical part and stops. It pushes `release/prepare-X.Y.Z` and
 # prints a link. It does NOT open the pull request, and that is a decision, not an omission:
-# a PR opened with the default GITHUB_TOKEN does not raise `pull_request` events, so ci.yml
-# and verify-doc-snippets.yml would never run on it and a required check would leave it
-# permanently unmergeable. The alternatives are a PAT or a GitHub App token — a new secret to
-# hold and rotate in a repository that deliberately holds none (npm publishing is OIDC; there
-# is no NPM_TOKEN either). A human opening the PR costs one click and keeps that true.
+# a PR opened with the default GITHUB_TOKEN does raise a `pull_request` event — `opened`,
+# `synchronize` and `reopened` are a documented exception to the token's usual no-recursive-
+# triggers rule (see GitHub's GITHUB_TOKEN docs) — but the workflow runs it starts land in an
+# approval-required state, so someone with write access still has to click "Approve workflows
+# to run" before `ci.yml`'s `build` job (the only required check on main) executes.
+# Automating the PR-open step would therefore trade one click for a different one, while adding
+# a new code path. The alternative that skips the approval click — a PAT or a GitHub App token
+# — is a new secret to hold and rotate in a repository that deliberately holds none (npm
+# publishing is OIDC; there is no NPM_TOKEN either). A human opening the PR costs one click and
+# keeps that true. `verify-doc-snippets.yml` is beside the point either way: it is path-filtered
+# to docs this stamping script never touches, so it never runs on a prepare PR regardless of
+# who opens it.
 #
 # So the full release is three acts, two of them human:
 #
@@ -170,8 +177,9 @@ jobs:
             echo
             echo "Branch \`$BRANCH\` is pushed and stamped. Two human steps remain."
             echo
-            echo "**1. Open and merge the PR** (this workflow does not open it — a PR from"
-            echo "\`GITHUB_TOKEN\` raises no \`pull_request\` event, so CI would never run on it):"
+            echo "**1. Open and merge the PR** (this workflow does not open it — a PR opened by"
+            echo "\`GITHUB_TOKEN\` would still need its checks approved by hand before CI ran,"
+            echo "so a human opens it instead and skips that extra click):"
             echo
             echo "  <https://github.com/$REPO/compare/main...$BRANCH?expand=1>"
             echo
