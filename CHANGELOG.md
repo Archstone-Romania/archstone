@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.0]
+
 ### Added
 
 - **`archstone verify --json` now carries the live fingerprint a binding's `status` was derived
