@@ -428,22 +428,78 @@ async function handleHttpRequest(
   }
 
   const chunks: Buffer[] = [];
-  try {
+  // #134: this used to be `for await (const chunk of req)`, with the cap check inside the
+  // loop body returning (and, for the aborted case, throwing out of the loop) to bail early.
+  // Both a `break`/`return` and a `throw` out of a `for await...of` make the language runtime
+  // call the async iterator's `return()` — which for a Node Readable, `req` included, destroys
+  // the stream (documented Node behaviour, not a bug in the runtime). The comment that used to
+  // sit here reasoned that this was harmless because `refuseOversizedBody` had already taken
+  // `res`'s socket out of the response via `detachSocket()` — but `detachSocket` only unlinks
+  // the RESPONSE's bookkeeping. `req.socket` is a separate live reference to the same shared
+  // socket, and `IncomingMessage`'s own `_destroy` (run when the stream is torn down before
+  // `end`) reaches through THAT reference and calls `this.socket.destroy(err)` — an immediate,
+  // ungraceful close that can RST the connection out from under the 413 `refuseOversizedBody`
+  // just wrote via a deliberate half-close (`socket.end()`, not `.destroy()`). Both closes are
+  // scheduled back-to-back on the event loop, so which one actually reaches the kernel first —
+  // whether the graceful FIN carrying the response, or the abort's hard RST — depends on
+  // scheduling, which is exactly why this only ever showed up intermittently under real CPU
+  // load and never in an isolated, idle run.
+  //
+  // Only the streaming guard (chunked framing, no declared Content-Length) can hit this: the
+  // declared-oversize fast path above returns before `req` is ever iterated.
+  //
+  // The fix is to never let the runtime call `req`'s async-iterator `return()` in the first
+  // place. Plain event listeners carry no such implicit-destroy contract — removing them is
+  // just bookkeeping, not a stream teardown — so the accumulation below drives `req` by hand
+  // instead of `for await`.
+  const body = await new Promise<"ok" | "aborted" | "oversized">((settle) => {
     let received = 0;
-    for await (const chunk of req) {
-      const buf = chunk as Buffer;
-      received += buf.length;
+    let done = false;
+    const finish = (outcome: "ok" | "aborted" | "oversized"): void => {
+      if (done) return;
+      done = true;
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+      req.off("close", onClose);
+      settle(outcome);
+    };
+    const onData = (chunk: Buffer): void => {
+      received += chunk.length;
       if (received > MAX_REQUEST_BODY_BYTES) {
         // Nothing downstream will ever read these; drop them before handing the socket over.
         chunks.length = 0;
-        // Takes the socket out of `res` and answers on it directly, so returning here (which
-        // tears the request stream down) can no longer cost the client its 413.
-        refuseOversizedBody(res);
+        finish("oversized");
         return;
       }
-      chunks.push(buf);
-    }
-  } catch {
+      chunks.push(chunk);
+    };
+    const onEnd = (): void => finish("ok");
+    // Registered synchronously alongside `onData`/`onEnd`, so `req` never has a tick without an
+    // 'error' listener attached — an unlistened 'error' event throws and is exactly the #49
+    // failure mode (an escaping exception fatal under Node's default unhandled-rejection/
+    // exception handling) this adapter exists to prevent.
+    const onError = (): void => finish("aborted");
+    // Belt-and-braces, not part of #134's reported failure: every abrupt-disconnect path this
+    // adapter has actually observed also fires 'error' (ECONNRESET) on `req`, so `onClose` alone
+    // would be redundant with it in practice. It exists so that if some Node-internal close ever
+    // reached `req` without an 'error' first, this settles as "aborted" (400, unlogged) instead
+    // of leaving the promise — and the request — hanging forever.
+    const onClose = (): void => finish("aborted");
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+    req.on("close", onClose);
+  });
+
+  if (body === "oversized") {
+    // Takes the socket out of `res` and answers on it directly. `req` itself is left alone —
+    // no destroy, no cascade — so the graceful close below is the only thing that touches the
+    // socket from here on.
+    refuseOversizedBody(res);
+    return;
+  }
+  if (body === "aborted") {
     // The client went away mid-body (ECONNRESET / aborted), or delivered fewer bytes than
     // its declared Content-Length. On a public endpoint this is routine traffic — a closed
     // laptop, a cancelled fetch, a load-balancer health probe — NOT a server fault, so it is
@@ -451,7 +507,7 @@ async function handleHttpRequest(
     // one denial of service for another.
     //
     // 400 is the deliberate status, not 500: the request was never completed, and nothing on
-    // the server failed. In practice nobody reads it — this catch is reached only once the
+    // the server failed. In practice nobody reads it — this arm is reached only once the
     // socket is already dead. (Node does NOT surface a short body while the connection is
     // still open: it waits for the declared bytes until `server.requestTimeout`, 300 s by
     // default, and answers that itself.) The end is still attempted rather than skipped
