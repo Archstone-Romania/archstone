@@ -71,8 +71,13 @@ const server = createServer((req, res) => {
     const query = safeJson(body);
     // Pretend to search; echo the destination back in the results.
     const where = query?.destination ?? "your destination";
+    const stays = buildStays(where);
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ stays: buildStays(where) }));
+    // `totalMatches` — tourism.search's binding now also extracts (`extract:`, per the
+    // accepted architecture decision extending ADD-12) alongside `stays`'s own `response:`
+    // mapping. This mock always returns every stay it built, so the two agree. Kept in sync
+    // with ./remote-mcp-worker/src/mock-backend.ts, which does the same.
+    res.end(JSON.stringify({ stays, totalMatches: stays.length }));
   });
 });
 
