@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.21.1]
+
 ### Fixed
 
 - **`examples/demo/mock-stays-server.mjs` now returns `totalMatches`**, matching 0.21.0's
