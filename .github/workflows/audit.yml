@@ -6,23 +6,55 @@ name: Dependency audit
 # this side (see the audit workflow's own history). This workflow is the missing half: it surfaces the
 # same advisories on the private repo, before a release carries them into the mirror.
 #
-# Two tiers, deliberately:
+# Three tiers, deliberately — each answers a different question, and none of them can stand
+# in for another:
 #
-#   1. BLOCKING — `--prod`, high+. `--prod` is workspace-wide (it walks every importer in
-#      the lockfile, not just the root package.json, which declares devDependencies only)
-#      while still excluding dev trees. That makes it a close proxy for "what reaches a
-#      consumer of a published @archstone/* package" — the surface where a vulnerability is
-#      our problem rather than our toolchain's.
+#   1. BLOCKING (job `audit`, "production dependencies, high+") — `--prod`, high+. `--prod` is
+#      workspace-wide (it walks every importer in the lockfile, not just the root
+#      package.json, which declares devDependencies only) while still excluding dev trees.
+#      That makes it a close proxy for "what reaches a consumer of a published @archstone/*
+#      package" — the surface where a vulnerability is our problem rather than our
+#      toolchain's. This is a CURRENT-STATE check: it fails if a high-severity advisory
+#      exists in prod deps right now, regardless of whether this PR introduced it or it has
+#      been sitting on main for months.
 #
-#   2. ADVISORY — everything, moderate+, reported into the run summary and never failing.
-#      This is where eslint's js-yaml and wrangler/miniflare's undici + sharp land: worth
-#      patching to keep the mirror's alert list quiet, but not worth a red build, because a
-#      dev-only advisory blocking a merge trains people to ignore the gate.
+#   2. ADVISORY (job `audit`, "all dependencies, moderate+") — everything, moderate+, reported
+#      into the run summary and never failing. Also current-state, also never fails — this is
+#      where dev-only and sub-high advisories land so they stay visible without training
+#      people to ignore a red build for something that isn't this PR's fault.
 #
-# The blocking tier only runs on PRs that touch dependency manifests, plus on a weekly
-# schedule. That matters: advisories appear against an unchanged lockfile all the time, and
-# a newly-published HIGH with no upstream patch yet must not wall off every unrelated PR.
-# The schedule is what catches that drift; the PR trigger only holds you responsible for
+#   3. BLOCKING, DIFF-SCOPED (job `audit-diff`, "new advisories introduced by this PR") — the
+#      gap tiers 1-2 leave open: neither looks at whether an advisory is NEW. A PR that bumps
+#      a dev tool (eslint, vitest, wrangler) to a version with a fresh advisory sails through
+#      tier 1 because `--prod` never sees devDependencies. A PR that adds or bumps a
+#      PRODUCTION dependency to a version with a new MODERATE advisory sails through tier 1
+#      too, because `--audit-level high` never sees moderate — this is exactly what happened
+#      with qs/hono arriving via @modelcontextprotocol/sdk, a real dependency of
+#      @archstone/runtime, and it could have sat there indefinitely. Tier 3 diffs a
+#      `pnpm audit --json` of the PR's lockfile against the same audit of the base branch's
+#      lockfile and fails ONLY on an advisory occurrence (advisory id + package + version)
+#      present in head and absent from base — i.e. exposure this PR is actually responsible
+#      for. Pre-existing debt on main (tier 2's job) never fails this gate, by construction:
+#      diffing against main's own audit is what keeps "don't make it worse" from being
+#      redefined as "fix everything that's already broken." See `scripts/audit-diff.mjs` for
+#      the diffing logic and `scripts/audit-diff.test.mjs` for its regression tests.
+#
+#      Severity threshold: moderate+, not high-only. The stated goal ("catch adding a
+#      vulnerable library before it ships") is specifically about NEW exposure, and this repo
+#      already has direct evidence that moderate-severity issues in a real prod dependency
+#      chain (qs, hono) can go unnoticed under a high-only gate for a long time — the one
+#      tier-3 exists to prevent is precisely a moderate one arriving unnoticed. A dev-only
+#      advisory newly introduced also fails tier 3 (unlike tier 1), which is intentional here:
+#      the asymmetry in tier 1 exists to keep unrelated PRs from being blocked by advisory
+#      drift they didn't cause, but a PR that itself just added the vulnerable dev dependency
+#      IS the PR responsible for it, so there's no drift to protect against.
+#
+# The blocking tiers only run on PRs that touch dependency manifests, plus on a weekly
+# schedule for tier 1 (tier 3 has no meaning outside a PR — there is no "base" to diff a
+# schedule run against, so it does not run there; drift on main is tier 1/2's job, not tier
+# 3's). That matters: advisories appear against an unchanged lockfile all the time, and a
+# newly-published HIGH with no upstream patch yet must not wall off every unrelated PR. The
+# schedule is what catches that drift; the PR trigger only holds you responsible for
 # dependency changes you are actually making.
 
 on:
@@ -116,3 +148,99 @@ jobs:
           fi
 
           echo "No high-severity advisories in the shipped dependency tree."
+
+  # Tier 3 (see the file header). Distinct question from `audit` above: not "does a
+  # vulnerability exist," but "did THIS PR make it worse." Needs a base-branch lockfile to
+  # diff against, which only exists in a `pull_request` context — the weekly schedule and
+  # manual dispatch runs have no base to compare, so this job simply doesn't run for them.
+  audit-diff:
+    name: Gate — new advisories introduced by this PR
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Two checkouts side by side, one per ref, rather than one checkout plus `git show` for
+      # the base lockfile: `pnpm audit` reads pnpm-workspace.yaml and every importer's
+      # package.json in addition to pnpm-lock.yaml (a workspace `overrides:` entry, or a
+      # package.json range, can change the advisory set without the lockfile's *shape*
+      # changing in a way `git show` alone would be simple to reconstruct correctly). Two
+      # full checkouts costs a few extra seconds of `actions/checkout`; getting the base
+      # audit subtly wrong would defeat the whole point of this job.
+      #
+      # No `ref:` on this first checkout — for a `pull_request` event that defaults to the
+      # ephemeral merge commit between base and head, i.e. what will actually land if this PR
+      # is merged as-is. That is the tree this gate should judge, not whatever the head
+      # branch's tip looked like before it was last brought up to date with base.
+      - name: Checkout PR head (merge ref)
+        uses: actions/checkout@v5
+        with:
+          path: head
+
+      - name: Checkout PR base
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.13.1       # matches the `audit` job above and release.yml
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          # Same reasoning as the `audit` job above: neither checkout is ever `pnpm install`ed
+          # (`pnpm audit` needs only the lockfile + manifests, not node_modules), so a pnpm
+          # store never exists here for setup-node to try to save.
+          package-manager-cache: false
+
+      # Self-test before trusting the diff logic to gate a merge on it — cheap (well under a
+      # second) and it is exactly the kind of thing that should fail loudly in CI rather than
+      # silently pass every PR because a refactor broke the key format the diff matches on.
+      - name: Self-test the advisory-diff logic
+        working-directory: head
+        run: node --test scripts/audit-diff.test.mjs
+
+      # `pnpm audit --json` exits non-zero whenever it finds ANY advisory — expected on most
+      # runs, not a step failure, so `|| true` is required just to get past a normal "found
+      # advisories" exit here. `--ignore-registry-errors` matches the `audit` job above: a
+      # flaky advisory registry must not read as a real "zero advisories" result. If the
+      # command fails hard enough to write no (or unparsable) JSON, `|| true` still lets the
+      # step go green, but `scripts/audit-diff.mjs` then fails the JSON.parse on that file
+      # with a distinct exit code (2, "infra error" — see the script's own header) rather than
+      # exit 1 ("new advisory found"), so a broken audit run reads as a broken run, not as
+      # either a clean PR or a newly-vulnerable one.
+      - name: Audit the base branch's lockfile
+        working-directory: base
+        run: pnpm audit --json --ignore-registry-errors > ../base-audit.json || true
+
+      - name: Audit this PR's lockfile
+        working-directory: head
+        run: pnpm audit --json --ignore-registry-errors > ../head-audit.json || true
+
+      - name: Gate — fail on any advisory new to this PR (moderate and above)
+        run: |
+          set +e
+          OUT=$(node head/scripts/audit-diff.mjs base-audit.json head-audit.json --severity=moderate 2>&1)
+          STATUS=$?
+          set -e
+
+          echo "$OUT"
+
+          {
+            echo
+            echo "### Gate — new advisories introduced by this PR (moderate+)"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$STATUS" -eq 2 ]; then
+            echo "::error::audit-diff.mjs could not compare base and head (an infra/usage error, not a vulnerability finding — see the log above). Fix the workflow or re-run; this is not a signal about the PR's dependencies either way."
+            exit 1
+          elif [ "$STATUS" -ne 0 ]; then
+            echo "::error::This PR's dependency changes introduce a new advisory that the base branch does not carry (see the job summary for which package/version/advisory). Remediate before merge — prefer a version that avoids the vulnerable range, or drop the dependency, over waving it through with an override."
+            exit 1
+          fi
+
+          echo "No advisory newly introduced by this PR's dependency changes."
