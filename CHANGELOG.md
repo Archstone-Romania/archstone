@@ -15,6 +15,31 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **The one-output-field cap on `response:`-bound capabilities is lifted (#49).** Since 0.11.1,
+  `response:` only ever populated ONE resource/collection-typed output field — that's what its
+  `resource:`/`map:` shape is for — and any *other* declared `output:` field was unreachable,
+  refused outright at `archstone apply` (`response-output-extra-fields`). A capability needing a
+  plain scalar alongside its mapped resource (a total count, a cursor, a warning flag) had no way
+  to bind it short of splitting into a second capability.
+
+  A binding can now add a sibling, optional `extract:` block: a flat map of output-field name to
+  JSONPath, read straight off the raw provider body root rather than through `response:`'s
+  collection-scoped items. `response:` itself is **completely unchanged** — same shape, same
+  `resource:`/`map:`/`collection:` keys, same OK/DEGRADED/VIOLATION semantics — `extract:` only
+  reaches scalar/semantic-typed output fields; a resource- or collection-typed field still has to
+  go through `response:`. A field missing from either block merges into the same single violation
+  rather than reporting two. See `docs/ONBOARDING.md`'s `extract:` section for the worked example.
+
+  The old blanket "at most one output field" refusal is now a precise per-field coverage check:
+  every `output:` field must be reachable by exactly one of `response:`/`extract:`, or the
+  capability refuses to compile. `response-output-extra-fields` is retired; in its place,
+  `unbound-output-field` names the specific field left unreachable, and three new diagnostics
+  cover `extract:` itself — `unknown-extract-field` (extracts a name that isn't a declared output
+  field), `extract-field-wrong-kind` (extracts a resource/collection-typed field, which belongs to
+  `response:` instead), and `bad-extract-path` (an `extract:` value isn't a valid JSONPath).
+
 ## [0.20.0]
 
 ### Added
