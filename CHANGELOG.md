@@ -15,6 +15,15 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`examples/demo/mock-stays-server.mjs` now returns `totalMatches`**, matching 0.21.0's
+  `extract:` addition to `tourism.search` (#49). Its sibling, `remote-mcp-worker/src/mock-
+  backend.ts`, was updated when `extract:` shipped; this one carries an explicit "keep the
+  two in sync" comment that was missed. Caught by the release gate itself — `archstone verify`
+  against the real packed CLI reported the omission as a contract violation before anything
+  was published, exactly as that gate exists to do.
+
 ## [0.21.0]
 
 ### Added
