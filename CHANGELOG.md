@@ -40,6 +40,18 @@ All notable changes to Archstone are documented here. Format loosely follows
   field), `extract-field-wrong-kind` (extracts a resource/collection-typed field, which belongs to
   `response:` instead), and `bad-extract-path` (an `extract:` value isn't a valid JSONPath).
 
+- **`Execution.status.reachedConnector`** (ADD-44 Amendment 2) — a boolean, present only when
+  `status.phase` is `"failed"`, that says whether the connector actually returned a response.
+  Previously every `failed` record looked the same whether the attempt never left the process
+  (missing env var, missing caller credential, no `baseUrl`, an allowlist rejection, a missing
+  path parameter) or reached a backend that then errored (a non-2xx response, a network
+  exception, a response-mapping contract violation) — a hosted metering integration billing on
+  tool-call volume had no field to tell the two apart. `true` marks the billable half (the
+  connector answered, even with an error); `false` marks the non-billable half (it never did).
+  Absent on `succeeded` (always billable) and `denied` (never billable), where it would be a
+  constant. Additive: `execution.schema.json` gains one optional property, no previously-valid
+  record is invalidated. See [archstone#34](https://github.com/Archstone-Romania/archstone/issues/34).
+
 ## [0.20.0]
 
 ### Added

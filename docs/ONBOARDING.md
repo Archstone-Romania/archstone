@@ -754,6 +754,13 @@ A record looks like this — and this is the whole of it:
   which kind of refusal: `authenticated_no_credential`, `principal_not_allowed`,
   `principal_denied`, `policy_unevaluatable` (the four policy codes) or `lifecycle_blocked` (a
   `retired` capability refused by the exposure gate).
+- **`status.reachedConnector`** (present only when `phase` is `failed`) tells you which half of
+  that list you hit. `true` means the connector answered — a non-2xx response, or a response that
+  failed the declared mapping — and is the case a hosted metering integration bills. `false` means
+  it never did — a missing binding prerequisite, or a network error/timeout before any response
+  arrived — and is never billed, the same as `denied`. It is absent on `succeeded` (always reached)
+  and `denied` (never attempted), where it would carry no information. The rule in one line:
+  billable ⇔ `phase === "succeeded"` ∨ (`phase === "failed"` ∧ `reachedConnector === true`).
 - **`spec.principal`** is present only when your host supplied one; anonymous invocations simply
   omit the key. That presence or absence is also how you tell an anonymous denial from a
   wrong-principal one — the reason code is `principal_not_allowed` for both, deliberately, so

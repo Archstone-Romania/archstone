@@ -104,6 +104,13 @@ export interface ExecutionStatus {
    *  what lets a deployer grep the audit log for the same string the agent was shown. */
   message?: string;
   denialReason?: ExecutionDenialReason;
+  /** ADD-44 Amendment 2 (archstone#34): present only when `phase` is `"failed"`. `true` when
+   *  `invokeRest` received a response from the connector (a non-2xx status, or a response that
+   *  failed the declared mapping); `false` when the attempt never got one — a missing binding
+   *  prerequisite or a network-level failure before any response arrived. Absent on `succeeded`
+   *  and `denied`, where it would be a constant carrying no information. Doc 6 §3's billing rule:
+   *  billable iff `phase === "succeeded"` or (`phase === "failed"` and `reachedConnector === true`). */
+  reachedConnector?: boolean;
 }
 
 /**
@@ -373,6 +380,9 @@ export function buildExecutionRecord(args: BuildExecutionRecordInput): Execution
   if (caller?.principal !== undefined) record.spec.principal = scrub(caller.principal);
   if (status.message !== undefined) record.status.message = scrub(status.message);
   if (status.denialReason !== undefined) record.status.denialReason = status.denialReason;
+  // ADD-44 Amendment 2 (archstone#34): present only when the caller sets it, which the two
+  // audited consumers do only on `phase: "failed"` — never synthesized here for any other phase.
+  if (status.reachedConnector !== undefined) record.status.reachedConnector = status.reachedConnector;
 
   // `status.output` is NEVER populated, on any phase — the schema has the property and this
   // emitter has no code path that writes it. Rule #7's non-negotiable is "with what OUTCOME",

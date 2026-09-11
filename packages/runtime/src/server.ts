@@ -383,8 +383,12 @@ export async function callTool(
     // parameter, a network error, a non-2xx response — records `failed` carrying the shipped
     // error text verbatim, so a deployer greps the audit log and finds the same string the
     // agent was shown.
+    // ADD-44 Amendment 2 (archstone#34): `reachedConnector` disambiguates the billable/
+    // non-billable split inside `failed` — `status !== 0` iff invokeRest received a response
+    // (a non-2xx), never true for a pre-dispatch short-circuit or a network-level exception,
+    // both of which leave `status` at its zero default.
     const text = result.error ?? "invocation failed";
-    audit({ phase: "failed", message: text });
+    audit({ phase: "failed", message: text, reachedConnector: result.status !== 0 });
     return { content: [{ type: "text", text }], isError: true };
   }
 
@@ -408,7 +412,10 @@ export async function callTool(
       // (verified live against the SDK's own InMemoryTransport, R2.0/R2.2). `capability` is
       // `tool.id`, the unsanitized CDL id — never the MCP-sanitized `name` lookup key (BR-7).
       // #44: a VIOLATION is `failed` — the declared output shape was not met.
-      audit({ phase: "failed", message: text });
+      // ADD-44 Amendment 2: this branch is reachable only after `invokeRest` returned `ok: true`
+      // — a response was, by construction, received — so `reachedConnector` is unconditionally
+      // true here, never derived from a `status` check the way the `!result.ok` branch needs.
+      audit({ phase: "failed", message: text, reachedConnector: true });
       return {
         content: [{ type: "text", text }],
         _meta: { [CONTRACT_VIOLATION_META_KEY]: { error: "contract_violation", capability: tool.id, missing } },
