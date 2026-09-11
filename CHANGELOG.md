@@ -15,6 +15,25 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`extract:` — a sibling binding block that lifts the one-output-field cap.** A capability's
+  `output:` field map can declare any number of named fields, but a binding's `response:` block
+  only ever mapped ONE resource to ONE output field — a capability declaring a second output
+  field refused to compile (`response-output-extra-fields`) rather than shipping a tool whose
+  `outputSchema` promised a field `structuredContent` could never carry, crashing the reference
+  MCP client (ADD-19). `extract:` reaches the rest: an optional binding block, keyed by output
+  field name, that reads a SCALAR field straight from the raw provider body root — a total
+  count, a cursor, a warning flag — alongside (or instead of) a `response:` mapping.
+
+  `response:` itself is unchanged; every binding written against it keeps compiling and
+  behaving exactly as before. The compiler's coverage check generalizes to match: every
+  declared `output:` field must now be reachable by exactly one of `response:`/`extract:`, or
+  the capability refuses to compile with a diagnostic naming exactly which field and why
+  (`unbound-output-field`, `unknown-extract-field`, `extract-field-wrong-kind`,
+  `bad-extract-path`) instead of the old blanket "more than one output field" refusal. See
+  [#49](https://github.com/Archstone-Romania/archstone/issues/49) and ADD-49.
+
 ## [0.20.0]
 
 ### Added
