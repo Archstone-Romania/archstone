@@ -224,8 +224,11 @@ export async function executeCapability(
     onResponse: opts?.onResponse,
   });
   if (!result.ok) {
+    // ADD-44 Amendment 2 (archstone#34): `reachedConnector` mirrors `callTool`'s derivation —
+    // `status !== 0` iff invokeRest received a response, never true for a pre-dispatch
+    // short-circuit or a network-level exception, both of which leave `status` at its default.
     const text = result.error ?? "invocation failed";
-    audit({ phase: "failed", message: text });
+    audit({ phase: "failed", message: text, reachedConnector: result.status !== 0 });
     return { status: "error", error: text };
   }
 
@@ -237,7 +240,9 @@ export async function executeCapability(
       // content. `ExecuteResult` itself carries only `missing` — deliberately, that shape is
       // published — so without the shared helper the two consumers' records would describe one
       // failure in two ways, which is exactly the drift one record builder exists to prevent.
-      audit({ phase: "failed", message: contractViolationMessage(tool.id, missing) });
+      // ADD-44 Amendment 2: reachable only after `invokeRest` returned `ok: true` — a response
+      // was, by construction, received.
+      audit({ phase: "failed", message: contractViolationMessage(tool.id, missing), reachedConnector: true });
       return { status: "violation", missing };
     }
     if (mapped.status === "degraded") {

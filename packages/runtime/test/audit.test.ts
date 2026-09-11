@@ -389,6 +389,105 @@ describe("callTool — one record per attempt, on every termination point (BR-2,
   });
 });
 
+// ADD-44 Amendment 2 (archstone#34): `status.reachedConnector` disambiguates the billable/
+// non-billable split inside `phase: "failed"` — present and `false` for every pre-dispatch
+// short-circuit and the network-exception branch (none of which received a response), `true`
+// for a non-2xx response and for a contract violation (both received one).
+describe("callTool — status.reachedConnector (ADD-44 Amendment 2, archstone#34)", () => {
+  it("false — unbound capability, no REST connector (TP-4)", async () => {
+    const s = spySink();
+    await callTool(bankRegistry, "banking.generate-statement", {}, { auditSink: s.sink, fetchImpl: forbiddenFetch, caller: { accessToken: "caller-token-7d1e" } });
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: false });
+  });
+
+  it("false — missing env var (TP-5)", async () => {
+    const s = spySink();
+    await callTool(bankRegistry, "banking_list-accounts", {}, { auditSink: s.sink, env: {}, fetchImpl: forbiddenFetch, caller: { accessToken: "caller-token-7d1e" } });
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: false });
+  });
+
+  it("false — missing caller credential (TP-6)", async () => {
+    const s = spySink();
+    const t = tool({
+      policies: [],
+      connector: { type: "rest", rest: { baseUrl: "https://core.example", method: "GET", path: "/a", headers: { Authorization: "Bearer ${caller.accessToken}" } } },
+    });
+    await callTool(registryOf(t), "bank.list", {}, { auditSink: s.sink, fetchImpl: forbiddenFetch });
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: false });
+  });
+
+  it("false — missing required path parameter (TP-10)", async () => {
+    const s = spySink();
+    const t = tool({
+      connector: { type: "rest", rest: { baseUrl: "https://core.example", method: "GET", path: "/accounts/{accountId}" } },
+    });
+    await callTool(registryOf(t), "bank.list", {}, { auditSink: s.sink, fetchImpl: forbiddenFetch });
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: false });
+  });
+
+  it("false — a network-level exception before any response arrives (TP-11) — D-13's deliberate grouping with pre-dispatch causes (R-13)", async () => {
+    const s = spySink();
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("ECONNREFUSED");
+    };
+    await callTool(registryOf(tool()), "bank.list", {}, { auditSink: s.sink, fetchImpl });
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: false });
+  });
+
+  it("true — a non-2xx response WAS received from the connector (TP-12)", async () => {
+    const s = spySink();
+    const fetchImpl: FetchLike = async () => new Response("nope", { status: 503 });
+    await callTool(registryOf(tool()), "bank.list", {}, { auditSink: s.sink, fetchImpl });
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: true });
+  });
+
+  it("true — a contract violation, unconditionally: reachable only after invokeRest returned ok:true (TP-13)", async () => {
+    const ir: IR = {
+      version: "0",
+      company: { id: "acme" },
+      resources: { "acme.Account": [{ name: "iban", required: true, type: { kind: "scalar", semantic: "identifier" } }] },
+      tools: [
+        tool({
+          output: [{ name: "account", required: true, type: { kind: "resource", name: "acme.Account" } }],
+          response: { resource: "acme.Account", field: "account", fields: [{ name: "iban", path: "$.iban" }] },
+        }),
+      ],
+    };
+    const registry = new Registry(ir);
+    const s = spySink();
+    // The body omits `iban` — the mapping's required field — so applyResponseMapping returns
+    // VIOLATION, even though the connector plainly answered with a 200.
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify({}), { status: 200 });
+    await callTool(registry, "bank.list", {}, { auditSink: s.sink, fetchImpl });
+    expect(s.records[0].status.message).toContain("contract violation");
+    expect(s.records[0].status).toMatchObject({ phase: "failed", reachedConnector: true });
+  });
+
+  it("absent on succeeded and on denied — a constant carries no information (D-14)", async () => {
+    const succeeded = spySink();
+    await callTool(bankRegistry, "banking_list-accounts", {}, {
+      auditSink: succeeded.sink,
+      env: { CORE_BANKING_URL: "https://core.example" },
+      fetchImpl: ok200,
+      caller: { accessToken: "caller-token-7d1e" },
+    });
+    expect("reachedConnector" in succeeded.records[0].status).toBe(false);
+
+    const denied = spySink();
+    await callTool(registryOf(tool({ lifecycle: "retired" })), "bank.list", {}, { auditSink: denied.sink, fetchImpl: forbiddenFetch });
+    expect("reachedConnector" in denied.records[0].status).toBe(false);
+  });
+
+  it("every reachedConnector case above validates against the compiled schema", async () => {
+    const s = spySink();
+    await callTool(bankRegistry, "banking.generate-statement", {}, { auditSink: s.sink, fetchImpl: forbiddenFetch, caller: { accessToken: "caller-token-7d1e" } });
+    await callTool(registryOf(tool()), "bank.list", {}, { auditSink: s.sink, fetchImpl: async () => new Response("nope", { status: 503 }) });
+    await callTool(registryOf(tool({ lifecycle: "retired" })), "bank.list", {}, { auditSink: s.sink, fetchImpl: forbiddenFetch });
+    expect(s.records).toHaveLength(3);
+    for (const r of s.records) expect(validateExecution(r)).toEqual({ ok: true, errors: "" });
+  });
+});
+
 describe("callTool — the record's identity fields (BR-4, BR-20, BR-22)", () => {
   it("fixes consumer to \"mcp\" and ignores a host that tries to set one (BR-4, S-US1.6)", async () => {
     const s = spySink();
