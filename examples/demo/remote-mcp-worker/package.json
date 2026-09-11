@@ -12,9 +12,9 @@
     "test": "pnpm build:ir && vitest run"
   },
   "dependencies": {
-    "@archstone/runtime": "workspace:*",
     "@archstone/compiler": "workspace:*",
     "@archstone/provider-rest": "workspace:*",
+    "@archstone/runtime": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0"
   },
   "devDependencies": {
@@ -22,6 +22,6 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^3.0.5",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.131.0"
   }
 }

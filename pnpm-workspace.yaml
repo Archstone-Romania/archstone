@@ -7,6 +7,10 @@ allowBuilds:
   sharp: false
   workerd: true
 
+minimumReleaseAgeExclude:
+  - miniflare@5.20260910.0-alpha
+  - wrangler@4.131.0
+
 # Security remediation (issue #92): tsup@8.5.1 — the latest release — pins
 # esbuild ^0.27.0, so esbuild >= 0.28.1 cannot be reached by natural resolution.
 # Scoped to the ^0.27.0 range only; every other esbuild consumer (tsx, vite,
