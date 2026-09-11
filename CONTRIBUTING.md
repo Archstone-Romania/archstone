@@ -29,6 +29,19 @@ Node 22+ · pnpm 11+.
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
 IR or CDL), open an issue first so the design can be discussed.
 
+## Adding a dependency
+
+Before adding a new dependency, or bumping an existing one, check its advisory history yourself —
+`npm audit` locally after the change, or a quick look at the
+[GitHub Advisory Database](https://github.com/advisories) for that package — rather than finding
+out only when CI flags it. CI's dependency-audit gate (`.github/workflows/audit.yml`) is a
+backstop, not the first line of defense: by the time it runs on your PR, you've already picked the
+package and the version, and reworking that choice after a red build is more expensive than a
+minute of checking beforehand. The gate does fail a PR that introduces a version carrying a known
+advisory (moderate severity or above) that the base branch didn't already have — see that
+workflow's own header comment for exactly what it checks — but don't rely on it to do your
+research for you.
+
 ## Releasing
 
 Cutting a release is a maintainer action, not a contributor one — it's covered here because the
