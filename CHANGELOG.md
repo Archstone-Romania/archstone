@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.21.0]
+
 ### Added
 
 - **The one-output-field cap on `response:`-bound capabilities is lifted (#49).** Since 0.11.1,
