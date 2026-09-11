@@ -107,19 +107,28 @@ describe("callTool — response mapping (ADD-12, tourism binding has a response:
   it("maps the provider body to Stay and drops unmapped fields (structuredContent = outputSchema)", async () => {
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({
+          stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+          totalMatches: 1,
+        }),
         { status: 200 },
       );
     const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
     expect(r.isError).toBe(false);
     // `id` is not part of Stay → dropped by the mapping; structuredContent is the mapped shape.
-    expect(r.structuredContent).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] });
+    // `totalMatches` is not part of Stay either — it is a capability-level scalar reached by
+    // `extract:` (per the accepted architecture decision extending ADD-12), merged into the
+    // same structuredContent alongside `response:`'s `stays`.
+    expect(r.structuredContent).toEqual({
+      stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      totalMatches: 1,
+    });
   });
 
   it("fails closed on a missing REQUIRED field — no raw pass-through (D-6)", async () => {
     // pricePerNight (required) absent → VIOLATION; the raw body must NOT leak through.
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }], totalMatches: 1 }), { status: 200 });
     const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toMatch(/contract violation/i);
@@ -148,6 +157,7 @@ describe("callTool — response mapping (ADD-12, tourism binding has a response:
             { name: "Hotel Azur", location: "Nice" },
             { name: "Hotel Riviera", pricePerNight: 200 },
           ],
+          totalMatches: 2,
         }),
         { status: 200 },
       );
@@ -162,11 +172,85 @@ describe("callTool — response mapping (ADD-12, tourism binding has a response:
 
   it("degrades on a missing OPTIONAL field — result returned with a note", async () => {
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }], totalMatches: 1 }), { status: 200 });
     const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
     expect(r.isError).toBe(false);
-    expect(r.structuredContent).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] });
+    expect(r.structuredContent).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }], totalMatches: 1 });
     expect(r.content.some((c) => /degraded/i.test(c.text))).toBe(true);
+  });
+});
+
+// `extract:` (per the accepted architecture decision extending ADD-12): tourism.search's real
+// binding now ALSO extracts `totalMatches`, a capability-level scalar with no resource to anchor
+// it, straight off the raw body root — alongside the `stays` collection `response:` maps. This
+// proves the ADD's own suggested concrete scenario end to end, against the real example binding
+// (not a synthetic fixture): a merged structuredContent that validates against the full
+// outputSchema, and a merged VIOLATION when the extracted field is dropped.
+describe("callTool — response + extract together (extends ADD-12, tourism binding also has an extract:)", () => {
+  const tourismReg = buildRegistry(tourism).registry!;
+
+  it("populates BOTH `stays` (response:) and `totalMatches` (extract:) in one structuredContent, valid against outputSchema", async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({
+          stays: [
+            { id: "azur-01", name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 },
+            { id: "dunes-02", name: "Dunes Resort", location: "Nice", pricePerNight: 98 },
+          ],
+          totalMatches: 2,
+        }),
+        { status: 200 },
+      );
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(false);
+    expect(r.structuredContent).toEqual({
+      stays: [
+        { name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 },
+        { name: "Dunes Resort", location: "Nice", pricePerNight: 98 },
+      ],
+      totalMatches: 2,
+    });
+
+    // The full merged structuredContent must carry exactly the fields the tool's own
+    // outputSchema declares — the exact regression ADD-19/#61 exist to prevent, now proven
+    // for BOTH mechanisms landing in the same document at once.
+    const def = toolDefinitions(tourismReg).find((d) => d.name === "tourism_search")!;
+    const props = Object.keys((def.outputSchema as { properties: Record<string, unknown> }).properties);
+    expect(props.sort()).toEqual(["stays", "totalMatches"]);
+    expect(Object.keys(r.structuredContent as Record<string, unknown>).sort()).toEqual(["stays", "totalMatches"]);
+  });
+
+  it("dropping the extract:-mapped field from the backend response yields ONE merged VIOLATION, not a partial/crashing result", async () => {
+    // `totalMatches` absent — extract:'s own required-ness (read from `output:` directly, D-6)
+    // fires a VIOLATION merged into the SAME accumulators `response:`'s own checks use (D-7):
+    // one `MappingResult`, one error, never a partial success or a second error path.
+    const fetchImpl: FetchLike = async () =>
+      new Response(
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        { status: 200 },
+      );
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toMatch(/contract violation/i);
+    expect(r.content[0].text).toMatch(/totalMatches/);
+    // No partial structuredContent — the whole result is withheld, fail-closed (D-6/ADD-19).
+    expect(r.structuredContent).toBeUndefined();
+    expect(r._meta?.["dev.archstone/contract_violation"]).toEqual({
+      error: "contract_violation",
+      capability: "tourism.search",
+      missing: ["totalMatches"],
+    });
+  });
+
+  it("a merged VIOLATION lists missing fields from BOTH response: and extract: together, not as two separate errors", async () => {
+    // pricePerNight (response:'s Stay field) AND totalMatches (extract:'s output field) both
+    // absent — one violation naming both, order-independent.
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }] }), { status: 200 });
+    const r = await callTool(tourismReg, "tourism_search", { destination: "Nice" }, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
+    expect(r.isError).toBe(true);
+    const structured = r._meta?.["dev.archstone/contract_violation"] as { missing: string[] };
+    expect([...structured.missing].sort()).toEqual(["pricePerNight", "totalMatches"]);
   });
 });
 
@@ -182,7 +266,7 @@ describe("#19 ADD-19 Rev 2 R2.2/R2.7 step 4 — a real SDK Client survives a VIO
   it("does not throw on VIOLATION, and the structured error survives in result._meta", async () => {
     // pricePerNight (required) is absent from the mock backend body → VIOLATION.
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }], totalMatches: 1 }), { status: 200 });
     const server = createMcpServer(tourismReg, { env: { STAYS_API_URL: "https://x.test" }, fetchImpl });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -264,6 +348,7 @@ describe("callTool — onResponse hook (#39)", () => {
     // rating only) — a real LLM-backed connector's usage sidecar, simulated here.
     const rawBody = {
       stays: [{ id: "azur-01", name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      totalMatches: 1,
       usage: { promptTokens: 42, completionTokens: 7 },
     };
     const fetchImpl: FetchLike = async () => new Response(JSON.stringify(rawBody), { status: 200 });
@@ -277,6 +362,7 @@ describe("callTool — onResponse hook (#39)", () => {
     // The mapped structuredContent drops `id` and `usage` — confirming the mapping DID discard.
     expect(r.structuredContent).toEqual({
       stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      totalMatches: 1,
     });
     // But onResponse still saw the full raw body, usage sidecar included.
     expect(calls).toHaveLength(1);
@@ -302,9 +388,9 @@ describe("callTool — onResponse hook (#39)", () => {
 
   it("S-US5.2: fires exactly once, identically, across OK, DEGRADED, and VIOLATION classifications", async () => {
     const bodies = {
-      ok: { stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] },
-      degraded: { stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }, // rating absent
-      violation: { stays: [{ name: "Hotel Azur", location: "Nice" }] }, // pricePerNight absent
+      ok: { stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 },
+      degraded: { stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }], totalMatches: 1 }, // rating absent
+      violation: { stays: [{ name: "Hotel Azur", location: "Nice" }], totalMatches: 1 }, // pricePerNight absent
     } as const;
 
     for (const [label, rawBody] of Object.entries(bodies)) {
@@ -324,7 +410,7 @@ describe("callTool — onResponse hook (#39)", () => {
   it("S-US4.4: a throwing onResponse never affects the MCP CallResult (via a real client/server round-trip)", async () => {
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const withThrowingHook = createMcpServer(tourismReg, {
@@ -467,7 +553,7 @@ describe("createMcpServer — onResponse fires on a real MCP tool call (#39, S-U
     const calls: { capabilityId: string; status: number; data: unknown }[] = [];
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const server = createMcpServer(tourismReg, {

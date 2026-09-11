@@ -92,8 +92,10 @@ describe("execute() — one record per attempt, consumer fixed to function-calli
   it("records a violation as failed with the SAME sentence the MCP path returns, and a degraded as succeeded (BR-15, BR-17, BR-44)", async () => {
     const a = fromIR(artifact(tourism));
     const env = { STAYS_API_URL: "https://x.test" };
+    // `totalMatches` present in every call here — this test isolates `response:`'s own
+    // required/degraded behavior; extract:'s (totalMatches) is covered separately.
     const body = (stay: Record<string, unknown>): FetchLike => async () =>
-      new Response(JSON.stringify({ stays: [stay] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [stay], totalMatches: 1 }), { status: 200 });
 
     const violation = spySink();
     const v = await a.execute("tourism.search", { destination: "Nice" }, { env, fetchImpl: body({ name: "Azur" }), auditSink: violation.sink });

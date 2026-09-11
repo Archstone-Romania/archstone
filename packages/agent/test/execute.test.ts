@@ -23,7 +23,7 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const r = await archstone.execute(
@@ -32,7 +32,7 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
       { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
     );
     expect(r.status).toBe("ok");
-    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] });
+    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 });
     expect(r.missing).toBeUndefined();
     expect(r.degraded).toBeUndefined();
     expect(r.error).toBeUndefined();
@@ -41,7 +41,7 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
   it("degraded: optional field (rating) absent — mapped data still returned", async () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }), {
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }], totalMatches: 1 }), {
         status: 200,
       });
     const r = await archstone.execute(
@@ -51,13 +51,13 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
     );
     expect(r.status).toBe("degraded");
     expect(r.degraded).toEqual(["rating"]);
-    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] });
+    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }], totalMatches: 1 });
   });
 
   it("violation: required field (pricePerNight) absent — no raw data leaks through", async () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }] }), { status: 200 });
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice" }], totalMatches: 1 }), { status: 200 });
     const r = await archstone.execute(
       "tourism.search",
       { destination: "Nice" },
@@ -125,7 +125,7 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
 describe("execute() — US-3: every lifecycle state other than retired stays invocable (#51)", () => {
   const fetchImpl: FetchLike = async () =>
     new Response(
-      JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+      JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
       { status: 200 },
     );
 
@@ -177,7 +177,7 @@ describe("execute() — US-3: every lifecycle state other than retired stays inv
 describe("execute() — US-4: the five recognized lifecycle states never produce lifecycle_unevaluatable (#56)", () => {
   const fetchImpl: FetchLike = async () =>
     new Response(
-      JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+      JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
       { status: 200 },
     );
 
@@ -235,7 +235,7 @@ describe("execute() — caller credential propagation (ADD-32)", () => {
     const fetchImpl: FetchLike = async (_url, init) => {
       capturedAuth = (init?.headers as Record<string, string> | undefined)?.Authorization;
       return new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     };
@@ -321,7 +321,7 @@ describe("execute() — caller credential propagation (ADD-32)", () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const r = await archstone.execute(
@@ -341,7 +341,7 @@ describe("execute() — onResponse pass-through (#39)", () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const r = await archstone.execute(
@@ -355,6 +355,7 @@ describe("execute() — onResponse pass-through (#39)", () => {
     expect(calls[0].status).toBe(200);
     expect(calls[0].data).toEqual({
       stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      totalMatches: 1,
     });
     expect(calls[0].durationMs).toBeGreaterThanOrEqual(0);
   });
@@ -363,6 +364,7 @@ describe("execute() — onResponse pass-through (#39)", () => {
     const archstone = fromIR(loadArtifact());
     const responseBody = JSON.stringify({
       stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }],
+      totalMatches: 1,
     });
     const withHook = await archstone.execute(
       "tourism.search",
@@ -381,7 +383,7 @@ describe("execute() — onResponse pass-through (#39)", () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const r = await archstone.execute(
@@ -396,7 +398,7 @@ describe("execute() — onResponse pass-through (#39)", () => {
       },
     );
     expect(r.status).toBe("ok");
-    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] });
+    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 });
   });
 });
 
@@ -414,7 +416,7 @@ describe("round trip — tools(format)'s advertised name resolves in execute() (
 
     const fetchImpl: FetchLike = async () =>
       new Response(
-        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] }),
+        JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 }),
         { status: 200 },
       );
     const r = await archstone.execute(
@@ -423,13 +425,13 @@ describe("round trip — tools(format)'s advertised name resolves in execute() (
       { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
     );
     expect(r.status).toBe("ok");
-    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }] });
+    expect(r.data).toEqual({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118, rating: 4.5 }], totalMatches: 1 });
   });
 
   it("S-US1.5: the round trip preserves a degraded outcome, identical to the raw-id call", async () => {
     const archstone = fromIR(loadArtifact());
     const fetchImpl: FetchLike = async () =>
-      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }), {
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }], totalMatches: 1 }), {
         status: 200,
       });
     const viaSanitized = await archstone.execute(

@@ -26,11 +26,20 @@ binding:
       pricePerNight: "$.pricePerNight"
       rating: "$.rating"
 
+  # Extract (per the accepted architecture decision extending ADD-12): `totalMatches` is a
+  # capability-level SCALAR, not part of any one Stay — it has no resource to anchor it, so it
+  # cannot go through `response:`. `extract:` reaches it directly off the raw body root,
+  # alongside the `stays` collection `response:` already maps.
+  extract:
+    totalMatches: "$.totalMatches"
+
   # What we last verified the mock backend returns (ADD-18). `archstone verify` replays
   # fixtures/tourism.search.golden.json's `request` live and compares the response shape.
   contract:
     source: recorded
-    fingerprint: "sha256:fd7fa633978968bec2eb3afdb565541783d2a20b46d8189c445e16d910a8d258"
+    # Re-recorded for the `totalMatches` addition above ($.totalMatches: number joins the
+    # shape) — every other path/type is unchanged, so this is purely additive drift.
+    fingerprint: "sha256:f5475f16fbc6d9f151b8cb565dfbe1243633929816aabdacdd40ec45bb89d241"
     # Recorded response shape — paths and types, never values (ADD-114). This is what lets
     # `archstone verify` name a field the backend gained, instead of only reporting a moved hash.
     # Note what is here and unmapped: `net` and `commission` are recorded as SHAPE, so drift in
@@ -49,6 +58,7 @@ binding:
       "$.stays[].pricePerNight": number
       "$.stays[].rating": number
       "$.stays[].roomDescription": string
-    verifiedAt: "2026-08-24T00:00:00Z"
+      "$.totalMatches": number
+    verifiedAt: "2026-09-11T00:00:00Z"
     probe:
       fixture: fixtures/tourism.search.golden.json

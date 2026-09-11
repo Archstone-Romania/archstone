@@ -68,7 +68,11 @@ function buildStays(where: string) {
 export async function mockStaysResponse(request: Request): Promise<Response> {
   const query = await safeJson(request);
   const where = query?.destination ?? "your destination";
-  return Response.json({ stays: buildStays(where) });
+  const stays = buildStays(where);
+  // `totalMatches` — the capability-level scalar tourism.search's binding now also extracts
+  // (`extract:`, per the accepted architecture decision extending ADD-12) alongside `stays`'s
+  // own `response:` mapping. This mock always returns every stay it built, so the two agree.
+  return Response.json({ stays, totalMatches: stays.length });
 }
 
 async function safeJson(request: Request): Promise<StaySearchInput | undefined> {

@@ -68,7 +68,7 @@ function runAdopt(url: string): Promise<{ code: number; out: string }> {
 describe("archstone adopt — it needs a person (ADD-117 D-2, ADR-0008 R-1)", () => {
   it("refuses without a human, writes nothing, and exits non-zero", async () => {
     const before = { stay: readFileSync(stayFile, "utf8"), binding: readFileSync(bindingFile, "utf8") };
-    const mock = await startMock({ stays: [GROWN_STAY] });
+    const mock = await startMock({ stays: [GROWN_STAY], totalMatches: 1 });
     try {
       const { code, out } = await runAdopt(mock.url);
       // It got far enough to SEE the field — this is not a "nothing to do" pass.
@@ -86,7 +86,7 @@ describe("archstone adopt — it needs a person (ADD-117 D-2, ADR-0008 R-1)", ()
   it("exits 0 and writes nothing when the backend has gained nothing", async () => {
     const { distanceToBeachM: _unused, ...unchanged } = GROWN_STAY;
     const before = readFileSync(stayFile, "utf8");
-    const mock = await startMock({ stays: [unchanged] });
+    const mock = await startMock({ stays: [unchanged], totalMatches: 1 });
     try {
       const { code, out } = await runAdopt(mock.url);
       expect(out).toContain("nothing to adopt");
@@ -98,7 +98,7 @@ describe("archstone adopt — it needs a person (ADD-117 D-2, ADR-0008 R-1)", ()
   }, 30_000);
 
   it("reports what it will not adopt rather than dropping it silently", async () => {
-    const mock = await startMock({ stays: [{ ...GROWN_STAY, refundable: true, amenities: ["wifi"] }] });
+    const mock = await startMock({ stays: [{ ...GROWN_STAY, refundable: true, amenities: ["wifi"] }], totalMatches: 1 });
     try {
       const { out } = await runAdopt(mock.url);
       expect(out).toContain("not adoptable");

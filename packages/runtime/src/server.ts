@@ -388,9 +388,12 @@ export async function callTool(
     return { content: [{ type: "text", text }], isError: true };
   }
 
-  // #12 (ADD-12): a binding with a `response:` mapping is now MAPPED + VALIDATED against the
-  // resource — the outputSchema (ADD-11) becomes an enforced contract, not just declared.
-  if (tool.response) {
+  // #12 (ADD-12), extended by `extract:` (per the accepted architecture decision extending
+  // ADD-12): a binding with a `response:` mapping and/or an `extract:` block is now MAPPED +
+  // VALIDATED against the declared output — the outputSchema (ADD-11) becomes an enforced
+  // contract, not just declared, for every field either mechanism reaches. No new branch: both
+  // read through the one `applyResponseMapping` call and its one `MappingResult` below.
+  if (tool.response || tool.extract) {
     const mapped = applyResponseMapping(tool, result.data, registry.ir.resources);
     if (mapped.status === "violation") {
       // Fail closed (D-6): the declared output shape was not met — no raw pass-through.
@@ -423,8 +426,9 @@ export async function callTool(
     return { content, structuredContent: mapped.data, isError: false };
   }
 
-  // No response mapping: today's raw pass-through (rollout-safe). The declared outputSchema is
-  // NOT yet enforced for these tools — add a `response:` block to close the loop (ADD-12 R-3).
+  // Neither `response:` nor `extract:`: today's raw pass-through (rollout-safe). The declared
+  // outputSchema is NOT yet enforced for these tools — add a `response:` and/or `extract:` block
+  // to close the loop (ADD-12 R-3).
   const out: CallResult = { content: [{ type: "text", text: JSON.stringify(result.data ?? null, null, 2) }], isError: false };
   if (tool.output.length > 0) {
     const data = result.data;

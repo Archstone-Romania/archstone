@@ -22,6 +22,9 @@
         "response": {
           "$ref": "response.schema.json"
         },
+        "extract": {
+          "$ref": "extract.schema.json"
+        },
         "contract": {
           "$ref": "contract.schema.json"
         }

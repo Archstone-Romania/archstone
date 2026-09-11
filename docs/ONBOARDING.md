@@ -285,6 +285,32 @@ the runtime falls back to today's raw pass-through for that tool (rollout-safe),
 declared `outputSchema` isn't enforced for it. This lets you declare intent before the
 mapping exists, but map the response before you trust the shape you get back.
 
+**A capability with more than one `output:` field?** `response:` only ever binds ONE
+resource/collection-typed field — that's what its `resource:`/`map:` shape is for. Any
+*other* declared output field needs to be reachable too, or the capability refuses to
+compile (every `output:` field must be covered by exactly one of `response:`/`extract:`).
+For a plain SCALAR extra — a total count, a cursor, a warning flag — add a sibling
+`extract:` block, keyed by output field name (not a resource field), read straight off the
+raw response body:
+
+```yaml
+  response:
+    collection: "$.results[*]"
+    resource: Accommodation
+    map:
+      name: "$.name"
+      # ...
+
+  extract:
+    totalMatches: "$.totalMatches"   # a plain body-root scalar, no resource involved
+```
+
+`extract:` reaches only scalar/semantic-typed fields — a resource- or collection-typed
+field still has to go through `response:`. Its required/optional and OK/DEGRADED/VIOLATION
+rules are identical to `response:`'s, just sourced from the output field itself (there's no
+resource registry entry for a scalar), and a missing field from either block merges into
+the same single violation rather than reporting two.
+
 ### Step 5 — Compile and inspect
 
 You don't need every capability bound to run this. A capability with no binding still

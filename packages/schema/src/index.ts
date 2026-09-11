@@ -53,6 +53,7 @@ function getValidators(): Validators {
   // response validators, whose $refs into cdl.schema.json#/$defs/{resourceName,fieldMap} resolve.
   const capability: ValidateFunction = ajv.compile(readSchema("cdl.schema.json"));
   ajv.addSchema(readSchema("response.schema.json")); // referenced by binding.schema.json; refs cdl (registered above)
+  ajv.addSchema(readSchema("extract.schema.json")); // referenced by binding.schema.json (per the accepted architecture decision extending ADD-12)
   ajv.addSchema(readSchema("contract.schema.json")); // referenced by binding.schema.json
   const binding: ValidateFunction = ajv.compile(readSchema("binding.schema.json"));
   const resource: ValidateFunction = ajv.compile(readSchema("resource.schema.json"));
@@ -128,6 +129,7 @@ export interface BindingDoc {
     capabilityId: string;
     connector: Record<string, unknown>;
     response?: Record<string, unknown>; // optional response mapping (ADD-12); resolution/lowering is the compiler's
+    extract?: Record<string, unknown>; // optional scalar output extraction (extends ADD-12); resolution/lowering is the compiler's
     contract?: Record<string, unknown>; // optional contract snapshot (ADD-18); lowering is the compiler's
   };
 }

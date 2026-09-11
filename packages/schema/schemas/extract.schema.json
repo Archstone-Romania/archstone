@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://archstone.dev/schema/v1/extract.schema.json",
+  "title": "Scalar Output Extraction",
+  "description": "Binding block that populates additional SCALAR output fields directly from the raw provider body root, alongside (or instead of) a `response:` resource mapping. Implementation, not CDL — reaches only scalar/semantic-typed output fields; a resource- or collection-typed output field must still go through `response:`. Validated + executed above the connector (per the accepted architecture decision extending ADD-12).",
+  "type": "object",
+  "minProperties": 1,
+  "additionalProperties": {
+    "oneOf": [
+      {
+        "type": "string",
+        "description": "JSONPath into the raw provider body root; the extracted field keeps the output field's own required-ness."
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string" },
+          "required": {
+            "const": false,
+            "description": "Only `false` is allowed — an extraction may loosen a required field to degrade gracefully, never tighten one."
+          }
+        }
+      }
+    ]
+  }
+}
