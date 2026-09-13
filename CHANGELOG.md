@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.22.0]
+
 ### Added
 
 - **`Execution.status.reachedConnector`** (ADD-44 Amendment 2) — a boolean, present only when
