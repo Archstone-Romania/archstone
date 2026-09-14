@@ -40,8 +40,21 @@
         },
         "query": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "CDL input field name -> wire query-param name, for fields the backend expects under a different name (e.g. widthCm -> width_cm). Unmapped fields fall back to their CDL name unchanged."
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string", "description": "Wire query-param name, when different from the CDL field name" },
+                  "explode": { "type": "boolean", "description": "List-field wire form: true (default) repeats the key (tags=a&tags=b); false comma-joins (tags=a,b). Meaningful only for a `list:`-typed field." },
+                  "onQuery": { "const": true, "description": "This field belongs on the query string even on a method that also carries a body (issue #63); it is excluded from the JSON body." }
+                }
+              }
+            ]
+          },
+          "description": "CDL input field name -> wire query-param name (a bare string), or an object form carrying `name`/`explode`/`onQuery` (#63). Unmapped fields fall back to their CDL name unchanged."
         }
       }
     },

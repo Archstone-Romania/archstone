@@ -105,6 +105,7 @@ descriptor **MUST** use exactly **one** of three forms:
 | **Type** | `{ type: <t> }` | a value of semantic type `<t>` (§4.7) or a Resource by representation | input or output |
 | **Reference** | `{ ref: <Resource> }` | a **Resource Reference** — points at a Resource **by identity** | input |
 | **Collection** | `{ collection: <Resource> }` | an ordered set of a Resource | input or output |
+| **List** | `{ list: <t> }` | an ordered set of a **semantic type** `<t>` (§4.7) — distinct from **Collection**, which is a set of a **Resource** | input or output |
 
 Normative:
 
@@ -114,6 +115,13 @@ Normative:
   `collection` (a returned representation, not a pointer).
 - A `type` field **MAY** be a semantic type (lowercase, §4.7) or a Resource name
   (PascalCase). A field descriptor **MUST NOT** combine forms.
+- A **List** (`list`) field **MUST** name a semantic type (§4.7), never a Resource
+  name — a list of Resources **MUST** use `collection` instead. A field descriptor
+  **MUST NOT** combine `list` with `type`, `ref`, or `collection`.
+- `required: true` on a **List** field means the field **MUST** be present; it does
+  **NOT** constrain the list's length — an empty list is a valid value of a
+  `required: true` List field unless a future primitive adds a minimum-length
+  constraint.
 - A field **MAY** declare `required: false`; absent, it defaults to `required: true`.
 
 ### 4.4 `failures`
@@ -224,6 +232,12 @@ reader unable to tell which half of a normative document they may rely on.
 Rule 10 or it does not enter; either way an existing manifest is
 unaffected, which is why RQ-001 and
 RQ-002 can stay open across a 1.0.
+
+The **List** field form (§4.3, issue #63) is exactly such an addition: a new sibling of
+`type`/`ref`/`collection` inside the field-form union, added because no existing form could
+express "a list of one scalar semantic type" (only `collection`, a list of a *Resource*,
+existed). Every manifest authored before this addition continues to compile unchanged — the
+field-form union grew a member, and no existing member's meaning moved.
 
 The **semantic type system versions independently** of this grammar (§4.7) and is not frozen by
 1.0. This document tracks the **normative** grammar at each version; the

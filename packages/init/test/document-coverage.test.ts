@@ -68,11 +68,12 @@ const EXPECTED_UNREAD: Record<keyof typeof SPEC_KEYS, readonly string[]> = {
   // `unsupported-connector` note naming the exact method and path, which is strictly more useful
   // than "the path item declares `head`", and emitting both said the same thing twice.
   pathItem: ["$ref"],
-  // `style`/`explode`/`allowReserved` govern wire encoding for non-scalar parameters, which are
-  // now refused outright — so what remains unread here cannot change a scalar's encoding.
+  // `style`/`explode` (#63) ARE now read, for a list-valued (`schema.type: array`) parameter —
+  // moved out of this list into `PARAMETER_KEYS.read`. `allowReserved` still governs wire
+  // encoding this adapter does not model (percent-encoding overrides), and remains unread.
   // `examples` (plural) is a real gap in D-13's seeding: the singular form is read, the plural
   // is not. `allowEmptyValue` and `deprecated` are informational.
-  parameter: ["deprecated", "allowEmptyValue", "style", "explode", "allowReserved", "examples"],
+  parameter: ["deprecated", "allowEmptyValue", "allowReserved", "examples"],
   requestBody: [],
   // `encoding` only applies to media types this adapter refuses anyway; `example`/`examples`
   // on a RESPONSE are report material by design (a document example is a claim about the

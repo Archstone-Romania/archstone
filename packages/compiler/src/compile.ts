@@ -18,6 +18,11 @@ type Canonicalize = (ref: string) => string;
 function lowerType(raw: Record<string, unknown>, canon: Canonicalize): IRType {
   if (typeof raw.collection === "string") return { kind: "collection", of: canon(raw.collection) };
   if (typeof raw.ref === "string") return { kind: "resource", name: canon(raw.ref), identity: true };
+  if (typeof raw.list === "string" && SEMANTIC_TYPES.has(raw.list as SemanticType)) {
+    const t: IRType = { kind: "list", items: raw.list as SemanticType };
+    if (Array.isArray(raw.values)) t.values = raw.values as string[];
+    return t;
+  }
   if (typeof raw.type === "string") {
     if (SEMANTIC_TYPES.has(raw.type as SemanticType)) {
       const t: IRType = { kind: "scalar", semantic: raw.type as SemanticType };
@@ -66,7 +71,7 @@ function lowerConnector(raw: Record<string, unknown>): IRConnector | undefined {
     if (typeof r.baseUrl === "string") irRest.baseUrl = r.baseUrl;
     if (r.headers && typeof r.headers === "object") irRest.headers = r.headers as Record<string, string>;
     if (typeof r.body === "string") irRest.body = r.body;
-    if (r.query && typeof r.query === "object") irRest.query = r.query as Record<string, string>;
+    if (r.query && typeof r.query === "object") irRest.query = r.query as IRRestConnector["query"];
     connector.rest = irRest;
   }
   return connector;

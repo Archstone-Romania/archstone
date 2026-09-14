@@ -52,7 +52,11 @@ export type IRType =
     // resource registry); absent ⇒ came from `type:`/resource-typed field ("by representation",
     // today's full-object behavior). Any future consumer that branches on `kind === "resource"`
     // MUST check `identity` before treating the field as expandable (ADD-25 R-2).
-  | { kind: "collection"; of: string }; // a list of a resource
+  | { kind: "collection"; of: string } // a list of a resource
+  | { kind: "list"; items: SemanticType; values?: string[] }; // a LIST of a scalar semantic type
+    // (issue #63, `listField` in cdl.schema.json). `values` = closed set when `items` is `enum`.
+    // Carries only the item's semantic shape — wire concerns (style/explode/query-vs-body
+    // placement) live in `IRRestConnector.query`, never here (target-agnosticism).
 
 export interface IRField {
   name: string;
@@ -67,7 +71,12 @@ export interface IRRestConnector {
   path: string;
   headers?: Record<string, string>;
   body?: string;
-  query?: Record<string, string>; // CDL input field name -> wire query-param name (issue #26)
+  // CDL input field name -> wire query-param name (issue #26), widened (#63) so an entry can
+  // also carry `explode` (list-field wire form: repeated key vs. comma-joined — only meaningful
+  // when the field's IRType is `list`) and `onQuery` (this field belongs on the query string
+  // EVEN on a method that also carries a body, and must therefore be excluded from the JSON
+  // body). A plain string is the pre-#63 shorthand (rename only) and keeps compiling unchanged.
+  query?: Record<string, string | { name?: string; explode?: boolean; onQuery?: true }>;
 }
 
 /** Backend invocation data copied from the binding (not an emit-target concern). */

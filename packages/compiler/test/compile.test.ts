@@ -251,3 +251,49 @@ describe("compile — contract snapshot (ADD-18)", () => {
     expect(search.contract!.probeFixture).toBe("fixtures/tourism.search.golden.json");
   });
 });
+
+// #63 — `listField` CDL form → IRType.kind "list"; widened `rest.query` object form.
+describe("compile — list-valued input fields (#63)", () => {
+  it("lowers `list: string` to IRType.kind 'list'", () => {
+    const ir = compile(load(join(manifests, "booking"))); // sanity: existing manifests unaffected
+    for (const tool of ir.tools) for (const f of tool.input) expect(f.type.kind).not.toBe("list");
+  });
+
+  it("lowers a `list:` field with `values` (enum items)", () => {
+    const model = modelWithCapability({
+      input: { tags: { list: "enum", values: ["a", "b"] } },
+    });
+    const ir = compile(model);
+    const field = ir.tools[0]!.input.find((f) => f.name === "tags")!;
+    expect(field.type).toEqual({ kind: "list", items: "enum", values: ["a", "b"] });
+  });
+
+  it("lowers a `list:` field with no values", () => {
+    const model = modelWithCapability({ input: { tags: { list: "string" } } });
+    const ir = compile(model);
+    const field = ir.tools[0]!.input.find((f) => f.name === "tags")!;
+    expect(field.type).toEqual({ kind: "list", items: "string" });
+  });
+
+  it("widened `rest.query` object form (name/explode/onQuery) passes through unchanged", () => {
+    const ir = compile(
+      modelWith({
+        type: "rest",
+        rest: {
+          method: "GET",
+          path: "/x",
+          query: {
+            tags: { explode: false },
+            plain: "wire_plain",
+            filtered: { onQuery: true, name: "wire_filtered" },
+          },
+        },
+      }),
+    );
+    expect(ir.tools[0]!.connector!.rest!.query).toEqual({
+      tags: { explode: false },
+      plain: "wire_plain",
+      filtered: { onQuery: true, name: "wire_filtered" },
+    });
+  });
+});

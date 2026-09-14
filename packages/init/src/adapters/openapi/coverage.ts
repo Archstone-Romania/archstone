@@ -106,7 +106,10 @@ export const PATH_ITEM_KEYS: KeyPolicy = {
 
 export const PARAMETER_KEYS: KeyPolicy = {
   what: "parameter",
-  read: ["$ref", "name", "in", "description", "required", "schema", "example"],
+  // `style`/`explode` (#63): read for a list-valued (`schema.type: array`) parameter to decide
+  // its wire serialization and to refuse a non-`form` style (EC-3); "read" here regardless of
+  // whether this particular parameter turns out to be a list, same as `example`/`schema` above.
+  read: ["$ref", "name", "in", "description", "required", "schema", "example", "style", "explode"],
   refusedElsewhere: ["content"],
   inert: [],
 };

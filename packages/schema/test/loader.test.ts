@@ -273,3 +273,69 @@ describe("load — *.policy.yaml (#43)", () => {
     }
   });
 });
+
+// #63 — `listField` CDL form (`list:`), and connector.schema.json's widened `rest.query`.
+const LIST_CAPS = "company:\n  id: acme\ncapabilities:\n  - acme.thing\nproviders:\n  - store\n";
+const LIST_CAP_OK = "capability:\n  id: acme.thing\n  description: d\n  effect: read\n  input:\n    tags:\n      list: string\n      required: false\n      description: filter tags\n";
+
+describe("load — list-valued input fields (#63)", () => {
+  it("accepts a `list:` field with `required`/`description`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), LIST_CAPS);
+    writeFileSync(join(dir, "acme.thing.capability.yaml"), LIST_CAP_OK);
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("requires `values` when `list: enum`, exactly like `semanticField`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), LIST_CAPS);
+    writeFileSync(join(dir, "acme.thing.capability.yaml"), "capability:\n  id: acme.thing\n  description: d\n  effect: read\n  input:\n    tags:\n      list: enum\n");
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects `type:` and `list:` on the SAME field (mutually exclusive forms)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), LIST_CAPS);
+    writeFileSync(
+      join(dir, "acme.thing.capability.yaml"),
+      "capability:\n  id: acme.thing\n  description: d\n  effect: read\n  input:\n    tags:\n      type: string\n      list: string\n",
+    );
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("accepts the widened `rest.query` object form (explode, onQuery, name)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), LIST_CAPS);
+    writeFileSync(join(dir, "acme.thing.capability.yaml"), LIST_CAP_OK);
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(
+      join(dir, "bindings", "acme.thing.binding.yaml"),
+      "binding:\n  capabilityId: acme.thing\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /things\n      query:\n        tags:\n          explode: false\n        legacyRename: wire_name\n",
+    );
+    const r = load(dir);
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects an unmodeled key inside a `rest.query` object entry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-"));
+    writeFileSync(join(dir, "capabilities.yaml"), LIST_CAPS);
+    writeFileSync(join(dir, "acme.thing.capability.yaml"), LIST_CAP_OK);
+    mkdirSync(join(dir, "bindings"));
+    writeFileSync(
+      join(dir, "bindings", "acme.thing.binding.yaml"),
+      "binding:\n  capabilityId: acme.thing\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /things\n      query:\n        tags:\n          style: deepObject\n",
+    );
+    const r = load(dir);
+    expect(r.ok).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

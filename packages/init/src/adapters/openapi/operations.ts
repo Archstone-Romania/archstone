@@ -14,6 +14,7 @@ import {
   type DraftNode,
   type DraftOperation,
   type DraftOperationAuth,
+  type DraftScalarNode,
   type EffectHint,
   type Fact,
 } from "../../model";
@@ -226,17 +227,52 @@ function collectParameters(
 
     const schema = isObject(parameter["schema"]) ? parameter["schema"] : undefined;
     const node = parameterSchemaNode(schema, ctx, source);
-    // Same rule as a body property, for the same reason: a CDL input field is a scalar, and an
-    // array- or object-valued parameter degrading to `type: string` advertises a parameter the
-    // backend cannot accept. Previously it degraded silently; the coverage audit is what found
-    // it, since `style`/`explode` are read by nothing and an array parameter is what needs them.
-    if (node !== undefined && node.kind !== "scalar" && !ctx.fatal) {
+
+    // #63 Goals 1: a `query`-location parameter whose schema is `type: array` with a SCALAR
+    // `items` type is no longer a blanket refusal (BR-1) — it lowers to a CDL list field. Every
+    // other array/object shape still refuses exactly as before (BR-2/BR-4, EC-3/EC-5).
+    let isList = false;
+    let explode: boolean | undefined;
+    let itemNode: DraftNode | undefined = node;
+    if (node !== undefined && node.kind === "array") {
+      if (node.items.kind !== "scalar") {
+        return {
+          fields,
+          refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is a list whose items are a ${node.items.kind}; CDL list fields carry only scalar items`),
+        };
+      }
+      if (location === "path") {
+        // Founder ruling / EC-5: query-location lists only. The REST connector has no
+        // RFC 6570 path-style explode, so degrading this to a broken single-value
+        // interpolation would be SILENTLY_WRONG — refused, named, instead.
+        return {
+          fields,
+          refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is a list-valued \`in: path\` parameter; the REST connector has no path-list serialization, so only query-location lists are supported`),
+        };
+      }
+      const style = parameter["style"];
+      if (style !== undefined && style !== "form") {
+        // EC-3: `deepObject`/`spaceDelimited`/`pipeDelimited`/etc. either imply non-scalar
+        // structure or are not legal for `query` — never a scalar-list style this adapter models.
+        return {
+          fields,
+          refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' declares style '${String(style)}', which is not a scalar-list style this adapter models`),
+        };
+      }
+      isList = true;
+      // EC-4: OpenAPI's own default for `style: form` on `query` is `explode: true`.
+      explode = typeof parameter["explode"] === "boolean" ? parameter["explode"] : true;
+      itemNode = node.items;
+    } else if (node !== undefined && node.kind !== "scalar" && !ctx.fatal) {
+      // Same rule as a body property, for the same reason: a CDL input field is a scalar, and an
+      // object-valued parameter degrading to `type: string` advertises a parameter the backend
+      // cannot accept.
       return {
         fields,
         refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' has a ${node.kind} schema; CDL input fields are scalars, and \`style\`/\`explode\` are not modeled in v1`),
       };
     }
-    const { type, values } = inputSemanticType(name, node, source, "parameter");
+    const { type, values } = inputSemanticType(name, itemNode, source, "parameter");
 
     // §1.3 precedence, kept and reported: an `example` is someone's ILLUSTRATION; a `default`
     // means "the same as omitting the parameter". The human confirming a live call deserves to
@@ -254,13 +290,22 @@ function collectParameters(
       in: location,
       type,
       ...(values ? { values } : {}),
+      ...(isList ? { list: true, explode } : {}),
       // A path parameter is required by construction (`interpolatePath` fails the call without
       // it), so no evidence of nullability could make it optional. A query parameter goes
       // through D-12 like every other input.
       required:
         location === "path"
           ? declared(true, source)
-          : classifyInputRequired(parameter["required"] === true, node?.kind === "scalar" ? node.nullable : absent<boolean>("the parameter's schema is not a scalar"), source),
+          : classifyInputRequired(
+              parameter["required"] === true,
+              isList
+                ? absent<boolean>("the parameter's schema is a list; nullability of the list itself is not modeled")
+                : node?.kind === "scalar"
+                  ? node.nullable
+                  : absent<boolean>("the parameter's schema is not a scalar"),
+              source,
+            ),
       description: typeof description === "string" ? declared(oneLine(description), source) : absent<string>(),
       example,
     });
@@ -429,16 +474,32 @@ function collectRequestBody(
       return { fields, refusal: inputRefusal(key, `the \`requestBody\` declares '${property.name}', which is already a path or query parameter — one CDL input field cannot carry both`) };
     }
 
-    // CDL input fields are SCALARS. A nested object or array has no semantic type, and letting
-    // it degrade to `string` would advertise a string parameter for a field the backend needs
-    // an object in — a capability that compiles, serves, and fails every call.
-    if (property.node.kind !== "scalar") {
+    // CDL input fields are SCALARS, or (#63 Goal 3) a LIST of scalars. A nested object still has
+    // no semantic type, and letting it degrade to `string` would advertise a string parameter
+    // for a field the backend needs an object in — a capability that compiles, serves, and
+    // fails every call. An array whose ITEMS are non-scalar is refused the same way (BR-9).
+    let isList = false;
+    let itemNode: DraftNode = property.node;
+    if (property.node.kind === "array") {
+      if (property.node.items.kind !== "scalar") {
+        return {
+          fields,
+          refusal: inputRefusal(key, `the \`requestBody\` property '${property.name}' is an array of ${property.node.items.kind}; CDL list fields carry only scalar items`),
+        };
+      }
+      isList = true;
+      itemNode = property.node.items;
+    } else if (property.node.kind !== "scalar") {
       return { fields, refusal: inputRefusal(key, `the \`requestBody\` property '${property.name}' is a ${property.node.kind}; CDL input fields are scalars, and there is no connector construct that could place a nested value`) };
     }
+    // After the guard above, `itemNode` is a DraftScalarNode: either `property.node` itself
+    // (the `scalar` branch), or `property.node.items` (the `array` branch, whose own
+    // `.items.kind !== "scalar"` check already refused anything else).
+    const scalarItem = itemNode as DraftScalarNode;
 
     seenNames.add(property.name);
     const propertySource = `${source}/content/${jsonType}/schema/properties/${property.name}`;
-    const { type, values } = inputSemanticType(property.name, property.node, propertySource, "request body property");
+    const { type, values } = inputSemanticType(property.name, scalarItem, propertySource, "request body property");
     const declaredRequired = bodyRequired && property.declaredRequired.derivation !== "absent" && property.declaredRequired.value;
 
     fields.push({
@@ -446,38 +507,20 @@ function collectRequestBody(
       in: "body",
       type,
       ...(values ? { values } : {}),
-      required: classifyInputRequired(declaredRequired, property.node.nullable, propertySource),
-      description: property.node.description,
+      ...(isList ? { list: true } : {}),
+      required: classifyInputRequired(
+        declaredRequired,
+        isList ? absent<boolean>("the property's schema is an array; nullability of the array itself is not modeled") : scalarItem.nullable,
+        propertySource,
+      ),
+      description: scalarItem.description,
       // D-13 unchanged: a spec example SEEDS the gate's pre-fill and the legibility comment. It
       // is never read as probe input — only `DecisionRecord.sampleInput` reaches the wire.
-      example: property.node.example,
+      example: scalarItem.example,
     });
   }
 
   return { fields };
-}
-
-/**
- * A query parameter on a method that carries a body.
- *
- * Found by the coverage audit rather than by the bug report, and it predates this change:
- * `invokeRest` appends a query string ONLY when there is no body, so for `POST`/`PUT`/`PATCH`/
- * `DELETE` an `in: query` field is folded into the JSON body instead. The emitted binding
- * therefore sends the value at the wrong place on the wire, silently — the reported defect's
- * exact class, arrived at from the other side.
- *
- * Making it WORK needs a connector construct that does not exist (a way to say "this field goes
- * in the query even on a method with a body"), which is a schema decision and not this
- * increment's to take. Making it SAFE needs only this. So: refused, and the fork is reported.
- */
-function queryOnBodyMethodRefusal(fields: DraftInputField[], key: string, method: string): Note | undefined {
-  if (method === "get" || method === "head") return undefined;
-  const query = fields.filter((f) => f.in === "query").map((f) => f.name);
-  if (query.length === 0) return undefined;
-  return inputRefusal(
-    key,
-    `query parameter(s) ${query.join(", ")} on ${method.toUpperCase()}: the REST connector appends a query string only when there is no body, so these would be sent inside the JSON body instead of on the URL`,
-  );
 }
 
 export function reduceSecurityScheme(scheme: JsonObject): { headerName: string; valuePrefix: string; scheme?: string } | undefined {
@@ -609,8 +652,11 @@ export function collectOperations(docs: DocumentSet, notes: Note[]): OperationsR
       const serverRefusal = overriddenServer
         ? note("unsupported-connector", "operation", key, "the operation or its path item declares its own `servers`, so its backend is not the document's `servers[0]` and no correct connector baseUrl could be written")
         : undefined;
-      const parameterRefusal =
-        serverRefusal ?? own.refusal ?? shared.refusal ?? body.refusal ?? queryOnBodyMethodRefusal(parameterFields, key, method);
+      // #63 Goal 2 (BR-5): a `query` parameter no longer refuses an operation solely because it
+      // also carries a `requestBody` — `emit`'s binding writer marks those query fields
+      // `onQuery: true` in `rest.query`, and `invokeRest` sends them on the URL while the
+      // remaining input fields go in the JSON body, in the same call.
+      const parameterRefusal = serverRefusal ?? own.refusal ?? shared.refusal ?? body.refusal;
 
       const security = authFromSecurity(operation["security"], root, "", ctx);
       const securityRefusal =
