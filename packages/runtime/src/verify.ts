@@ -250,8 +250,8 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
   // response back — so every one of them, GREEN included, carries what it observed.
   const observed = { ...base, observedFingerprint: liveFingerprint };
 
-  if (!tool.response) {
-    // No response mapping to validate against — fingerprint drift is all we can see.
+  if (!tool.response && !tool.extract) {
+    // Neither response: nor extract: to validate against — fingerprint drift is all we can see.
     if (!fingerprintChanged) return { ...observed, status: "green", detail: "fingerprint unchanged" };
     const { detail, drift } = narrateShapeChange(contract, liveShape, liveFingerprint);
     return { ...observed, status: "yellow", detail, ...(drift ? { drift } : {}) };
@@ -262,7 +262,9 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
     return { ...observed, status: "red", detail: `contract violation: missing required field(s) ${(mapped.missing ?? []).join(", ")}` };
   }
 
-  if (fixture.expects?.collectionNonEmpty) {
+  // `collectionNonEmpty` names a `response:` collection field — nothing to check against an
+  // extract:-only tool, which maps scalars, never a collection.
+  if (fixture.expects?.collectionNonEmpty && tool.response) {
     const field = tool.response.field;
     const value = mapped.data?.[field];
     const empty = Array.isArray(value) ? value.length === 0 : value === undefined || value === null;
@@ -502,7 +504,7 @@ export async function recordContract(
     request: input,
   };
 
-  if (!tool.response) {
+  if (!tool.response && !tool.extract) {
     // Nothing to validate against; the fingerprint is still a real, replayable fact.
     return { ...base, outcome: "green", detail: "recorded — no response mapping to validate", fingerprint, shape, fixture };
   }

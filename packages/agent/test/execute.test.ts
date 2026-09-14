@@ -118,6 +118,49 @@ describe("execute() — 4-state result (ADD-0008 #28, R-8)", () => {
   });
 });
 
+// Extends the fix for the gap where an extract:-only capability (declaring `extract:` but no
+// `response:` at all) fell through execute()'s `if (tool.response)` gate into raw pass-through,
+// skipping extract:'s own required/degraded enforcement — the same gate `callTool`
+// (runtime/src/server.ts) already widened to `tool.response || tool.extract`. tourism.search's
+// real binding declares both; deleting `response` from the loaded artifact leaves `extract:
+// totalMatches` as the only mapping, isolating the gap.
+describe("execute() — extract:-only capability is enforced through the SAME gate as response: (no response: at all)", () => {
+  function extractOnlyArtifact(): unknown {
+    const artifact = loadArtifact() as { tools: { id: string; response?: unknown }[] };
+    delete artifact.tools.find((t) => t.id === "tourism.search")!.response;
+    return artifact;
+  }
+
+  it("violation: the extract:-mapped required field (totalMatches) is absent — no raw pass-through", async () => {
+    const archstone = fromIR(extractOnlyArtifact());
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ name: "Hotel Azur", location: "Nice", pricePerNight: 118 }] }), { status: 200 });
+    const r = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
+    );
+    expect(r.status).toBe("violation");
+    expect(r.missing).toEqual(["totalMatches"]);
+    expect(r.data).toBeUndefined();
+  });
+
+  it("ok: the extract:-mapped field is present — mapped data returned, not the raw body", async () => {
+    const archstone = fromIR(extractOnlyArtifact());
+    const fetchImpl: FetchLike = async () =>
+      new Response(JSON.stringify({ stays: [{ irrelevant: "field" }], totalMatches: 7 }), { status: 200 });
+    const r = await archstone.execute(
+      "tourism.search",
+      { destination: "Nice" },
+      { env: { STAYS_API_URL: "https://x.test" }, fetchImpl },
+    );
+    expect(r.status).toBe("ok");
+    // Only the extract:-mapped field — the `stays` array (no response: to map it) is dropped,
+    // proving this went through applyResponseMapping rather than the raw pass-through branch.
+    expect(r.data).toEqual({ totalMatches: 7 });
+  });
+});
+
 // ADD-51 (#51) BR-10/BR-12: only `lifecycle: retired` may block invocation through execute() —
 // `experimental`/`beta`/`deprecated`/`stable` must remain exactly as invocable as they were
 // before this increment. A gate that over-fires on any of these is a worse defect than the one
@@ -280,10 +323,14 @@ describe("execute() — caller credential propagation (ADD-32)", () => {
     // providers/rest security-hardening comment); mutate the loaded IR the same way the
     // caller-propagation test above does, to isolate execute()'s pass-through of allowedHosts.
     const artifact = loadArtifact() as {
-      tools: { id: string; response?: unknown; connector?: { rest?: Record<string, unknown> } }[];
+      tools: { id: string; response?: unknown; extract?: unknown; connector?: { rest?: Record<string, unknown> } }[];
     };
     const tool = artifact.tools.find((t) => t.id === "tourism.search")!;
-    delete tool.response; // raw pass-through — isolate the allowlist gate, not response mapping
+    // raw pass-through — isolate the allowlist gate, not response mapping. Both response: and
+    // extract: must go (tourism.search's real binding declares both; execute()'s gate now
+    // considers either one, per the fix above), or this would hit applyResponseMapping instead.
+    delete tool.response;
+    delete tool.extract;
     tool.connector!.rest = { baseUrl: "https://${caller.tenantId}", method: "GET", path: "/stays" };
     const archstone = fromIR(artifact);
 
