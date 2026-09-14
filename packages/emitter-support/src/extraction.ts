@@ -162,6 +162,26 @@ function checkField(f: IRField, value: unknown, path: string, resources: IRResou
     return failed ? undefined : items;
   }
 
+  if (f.type.kind === "list") {
+    // #63 — a LIST of one scalar semantic type, distinct from `collection` (a list of a
+    // RESOURCE) above. Each item goes through the SAME scalar checker a bare `f.type.kind ===
+    // "scalar"` field uses below — one classifier for a value's shape, whether it arrives alone
+    // or inside a list, per this file's own "one classifier" discipline elsewhere in the repo.
+    if (!Array.isArray(value)) {
+      acc.invalid.push(`${path}: expected array`);
+      return undefined;
+    }
+    const listType = f.type;
+    const items: unknown[] = [];
+    let failed = false;
+    value.forEach((item, i) => {
+      const checked = checkScalar(listType.items, listType.values, item, `${path}[${i}]`, acc);
+      if (checked === undefined) failed = true;
+      else items.push(checked);
+    });
+    return failed ? undefined : items;
+  }
+
   if (f.type.kind === "resource") {
     // `ref:` — by identity, a bare id. Never expanded, here or in the lowering (ADD-25 D-2).
     if (f.type.identity) {
@@ -174,8 +194,12 @@ function checkField(f: IRField, value: unknown, path: string, resources: IRResou
     return checkObject(resources[f.type.name] ?? [], value, path, resources, acc);
   }
 
-  const { semantic, values } = f.type;
+  return checkScalar(f.type.semantic, f.type.values, value, path, acc);
+}
 
+/** A single scalar value against its declared semantic type — the leaf check shared by a
+ *  bare `scalar` field and by each item of a `list` field (#63), so the two can never drift. */
+function checkScalar(semantic: SemanticType, values: string[] | undefined, value: unknown, path: string, acc: Acc): unknown {
   const composite = COMPOSITE[semantic];
   if (composite) return checkComposite(composite, value, path, acc);
 

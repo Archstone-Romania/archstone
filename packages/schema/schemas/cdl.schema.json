@@ -77,7 +77,8 @@
           { "$ref": "#/$defs/semanticField" },
           { "$ref": "#/$defs/refField" },
           { "$ref": "#/$defs/collectionField" },
-          { "$ref": "#/$defs/resourceTypeField" }
+          { "$ref": "#/$defs/resourceTypeField" },
+          { "$ref": "#/$defs/listField" }
         ]
       }
     },
@@ -146,6 +147,44 @@
         "required": { "type": "boolean", "default": true },
         "description": { "type": "string" }
       }
+    },
+    "listField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["list"],
+      "description": "A field that is a LIST of one scalar semantic type (issue #63) — distinct from `collection:`, which is a list of a RESOURCE, not a scalar.",
+      "properties": {
+        "list": {
+          "type": "string",
+          "enum": [
+            "location",
+            "date-range",
+            "party",
+            "preference-set",
+            "money",
+            "identifier",
+            "string",
+            "text",
+            "time-slot",
+            "quantity",
+            "enum",
+            "date",
+            "datetime"
+          ]
+        },
+        "required": { "type": "boolean", "default": true },
+        "description": { "type": "string" },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Closed value set for each item — required iff list is enum"
+        }
+      },
+      "if": { "properties": { "list": { "const": "enum" } } },
+      "then": { "required": ["list", "values"] },
+      "else": { "not": { "required": ["values"] } }
     }
   }
 }

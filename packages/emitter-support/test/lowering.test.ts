@@ -38,6 +38,29 @@ describe("#16 NF-7: inputJsonSchema lowers IR field kinds (crafted IR)", () => {
   });
 });
 
+// #63 — IRType.kind "list": a LIST of one scalar semantic type, distinct from `collection`
+// (a list of a resource, tested above).
+describe("#63: inputJsonSchema lowers IRType.kind 'list'", () => {
+  it("a list of `string` lowers to { type: 'array', items: { type: 'string' } }", () => {
+    const fields: IRField[] = [{ name: "tags", required: false, type: { kind: "list", items: "string" } }];
+    const schema = inputJsonSchema(fields) as { properties: Record<string, { type: string; items?: { type: string } }> };
+    expect(schema.properties.tags.type).toBe("array");
+    expect(schema.properties.tags.items?.type).toBe("string");
+  });
+
+  it("a list of `enum` carries the closed value set on `items`", () => {
+    const fields: IRField[] = [{ name: "tags", required: true, type: { kind: "list", items: "enum", values: ["a", "b"] } }];
+    const schema = inputJsonSchema(fields) as { properties: Record<string, { items?: { enum?: string[] } }> };
+    expect(schema.properties.tags.items?.enum).toEqual(["a", "b"]);
+  });
+
+  it("a list field's own `description` wins over the item semantic's generic text", () => {
+    const fields: IRField[] = [{ name: "tags", required: false, description: "Filter by tag.", type: { kind: "list", items: "string" } }];
+    const schema = inputJsonSchema(fields) as { properties: Record<string, { description?: string }> };
+    expect(schema.properties.tags.description).toBe("Filter by tag.");
+  });
+});
+
 describe("#25 identity fields lower to a bare string, not the full resource", () => {
   it("a `ref:`-originated (identity: true) field lowers to { type: 'string' }, not the object", () => {
     const resources: IRResourceRegistry = {
