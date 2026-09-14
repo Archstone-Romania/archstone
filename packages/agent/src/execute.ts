@@ -232,7 +232,11 @@ export async function executeCapability(
     return { status: "error", error: text };
   }
 
-  if (tool.response) {
+  // Mirrors `callTool`'s gate (runtime/src/server.ts): a binding with a `response:` mapping
+  // and/or an `extract:` block is MAPPED + VALIDATED. Before this, an extract:-only capability
+  // (no `response:` at all) fell through to raw pass-through below, skipping extract:'s
+  // required/degraded enforcement entirely.
+  if (tool.response || tool.extract) {
     const mapped = applyResponseMapping(tool, result.data, registry.ir.resources);
     if (mapped.status === "violation") {
       const missing = mapped.missing ?? [];
@@ -254,8 +258,8 @@ export async function executeCapability(
     return { status: "ok", data: mapped.data };
   }
 
-  // No response mapping: raw pass-through (mirrors server.ts's unbound-mapping behavior,
-  // ADD-0008 §3). The declared outputSchema is not enforced for these tools.
+  // Neither `response:` nor `extract:`: raw pass-through (mirrors server.ts's unbound-mapping
+  // behavior, ADD-0008 §3). The declared outputSchema is not enforced for these tools.
   const data = result.data;
   // #44: `status.output` stays unpopulated — `result.data` is precisely the payload the record
   // must never carry.

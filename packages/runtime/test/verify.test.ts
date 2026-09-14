@@ -434,6 +434,22 @@ function unrecorded(): IRTool {
   return rest;
 }
 
+/**
+ * An extract:-only tool: no `response:` at all, only a capability-level scalar reached via
+ * `extract:` — isolates the gap where `verifyTool`/`recordContract`'s `if (!tool.response)`
+ * gates fell through to "no mapping to validate" for a tool that in fact declares one, via
+ * `extract:` instead of `response:` (the same gap `callTool`, runtime/src/server.ts, already
+ * closed with `if (tool.response || tool.extract)`).
+ */
+function extractOnlyTool(contractFingerprint: string, fixtureName = "fixture.json"): IRTool {
+  const { response: _response, ...rest } = tool(contractFingerprint, fixtureName);
+  return {
+    ...rest,
+    output: [{ name: "totalMatches", required: true, type: { kind: "scalar", semantic: "quantity" } }],
+    extract: [{ name: "totalMatches", path: "$.totalMatches" }],
+  };
+}
+
 describe("recordContract (ADD-37 D-6)", () => {
   it("records a fingerprint and a fixture for a tool that has NO contract yet", async () => {
     // Why a sibling and not a flag: `verifyTool` returns `red` on `!tool.contract` before
@@ -513,6 +529,51 @@ describe("recordContract (ADD-37 D-6)", () => {
     const r = await recordContract(gated, {}, resources, { fetchImpl });
     expect(r.outcome).toBe("not-attempted");
     expect(calls).toBe(0);
+  });
+});
+
+describe("verifyTool — extract:-only capability is enforced through the SAME gate as response: (no response: at all)", () => {
+  it("red: the extract:-mapped required field (totalMatches) is absent — not reported as 'no response mapping to validate'", () =>
+    withFixture(async (dir) => {
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ stays: [{ name: "Hotel A" }] }), { status: 200 });
+      const r = await verifyTool(extractOnlyTool(goldenFingerprint), dir, resources, { fetchImpl });
+      expect(r.status).toBe("red");
+      expect(r.detail).toMatch(/totalMatches/);
+      expect(r.detail).not.toMatch(/no response mapping to validate/);
+    }));
+
+  it("green: the extract:-mapped field is present and the fingerprint matches", () =>
+    withFixture(async (dir) => {
+      const body = { totalMatches: 3 };
+      const fp = fingerprintShape(body);
+      const fetchImpl: FetchLike = async () => new Response(JSON.stringify(body), { status: 200 });
+      const r = await verifyTool(extractOnlyTool(fp), dir, resources, { fetchImpl });
+      expect(r.status).toBe("green");
+    }));
+});
+
+describe("recordContract — extract:-only capability is enforced through the SAME gate as response: (no response: at all)", () => {
+  function unrecordedExtractOnly(): IRTool {
+    const { contract: _contract, ...rest } = extractOnlyTool(goldenFingerprint);
+    return rest;
+  }
+
+  it("red on a VIOLATION of the extract:-mapped required field, and keeps NOTHING", async () => {
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify({ stays: [{ name: "Hotel A" }] }), { status: 200 });
+    const r = await recordContract(unrecordedExtractOnly(), {}, resources, { fetchImpl });
+    expect(r.outcome).toBe("red");
+    expect(r.missing).toContain("totalMatches");
+    expect(r.fingerprint).toBeUndefined();
+    expect(r.fixture).toBeUndefined();
+  });
+
+  it("green, and records a fixture, when the extract:-mapped field is present", async () => {
+    const body = { totalMatches: 3 };
+    const fetchImpl: FetchLike = async () => new Response(JSON.stringify(body), { status: 200 });
+    const r = await recordContract(unrecordedExtractOnly(), {}, resources, { fetchImpl });
+    expect(r.outcome).toBe("green");
+    expect(r.fingerprint).toBe(fingerprintShape(body));
+    expect(r.fixture).toBeDefined();
   });
 });
 
