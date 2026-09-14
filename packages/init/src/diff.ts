@@ -147,12 +147,18 @@ function requestShape(tool: IRTool): Set<string> {
   // The provider consumes path placeholders positionally, so their WIRE identity is the path
   // segment they fill, not their name — normalize the path itself and record the position.
   shape.add(`path:${normalizedConnectorKey(`${method} ${rest.path}`)}`);
+  const hasBody = method !== "GET" && method !== "HEAD";
   for (const field of tool.input) {
     if (pathParams.has(field.name)) continue;
-    const wire = rest.query?.[field.name] ?? field.name;
-    // GET/HEAD send the remainder as a query string; everything else sends it as a JSON body,
-    // where `rest.query` does not apply (`buildQuery` is only reached when there is no body).
-    shape.add(method === "GET" || method === "HEAD" ? `query:${wire}` : `body:${field.name}`);
+    const mapped = rest.query?.[field.name];
+    // Mirrors `providers/rest`'s `buildQuery`: an object-form entry's wire name is `name ??
+    // field.name`, never the entry itself (that used to stringify to `[object Object]`).
+    const wire = (typeof mapped === "object" ? mapped.name : undefined) ?? (typeof mapped === "string" ? mapped : undefined) ?? field.name;
+    // GET/HEAD send the remainder as a query string. A body-carrying method sends it as a JSON
+    // body EXCEPT a field the binding marks `onQuery: true` (#63), which `invokeRest` still
+    // sends on the URL alongside the body.
+    const onQuery = typeof mapped === "object" && mapped.onQuery === true;
+    shape.add(!hasBody || onQuery ? `query:${wire}` : `body:${field.name}`);
   }
   return shape;
 }

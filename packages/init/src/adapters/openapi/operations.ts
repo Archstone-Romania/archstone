@@ -269,7 +269,7 @@ function collectParameters(
       // cannot accept.
       return {
         fields,
-        refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' has a ${node.kind} schema; CDL input fields are scalars, and \`style\`/\`explode\` are not modeled in v1`),
+        refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' has a ${node.kind} schema; CDL input fields are scalars or (query-location only, #63) lists of scalars`),
       };
     }
     const { type, values } = inputSemanticType(name, itemNode, source, "parameter");
@@ -395,10 +395,11 @@ function inputRefusal(key: string, detail: string): Note {
  *
  * HOW IT REACHES THE WIRE, which is what bounds the whole feature: `invokeRest` serializes the
  * capability input as the JSON body for any method that is not `GET`/`HEAD`, keyed by the CDL
- * field name. There is no `rest.body` per-field mapping and no body counterpart to `rest.query`,
- * so a body property is expressible EXACTLY when its own name can be the CDL field name and
- * nothing else already claims that name. Everything this function refuses, it refuses because
- * the connector could not have carried it.
+ * field name — EXCEPT a field the binding marks `onQuery: true` in `rest.query` (#63 Goal 2),
+ * which goes on the URL instead and is excluded from the body. There is no `rest.body`
+ * per-field mapping, so a body property is expressible EXACTLY when its own name can be the CDL
+ * field name and nothing else already claims that name. Everything this function refuses, it
+ * refuses because the connector could not have carried it.
  */
 function collectRequestBody(
   operation: JsonObject,

@@ -198,8 +198,10 @@ value — CDL has no separate "must be non-empty" constraint.
 On the wire, a `list:` field bound to a `query`-location REST parameter can declare its
 serialization form in the binding's `rest.query` entry — see Step 4. A `list:` field sourced
 from a request body needs no such declaration: it serializes as a JSON array like any other
-body field. A list-valued **path** parameter has no CDL construct at all: `archstone init`
-refuses that shape by name rather than degrading it (see below).
+body field. A list-valued **path** parameter has no REST *serialization*: the connector has no
+RFC 6570 path-style explode, so `archstone init` refuses that shape by name rather than degrading
+it (see below). The `list:` construct itself is unaffected — only a `path`-location binding of
+one is refused.
 
 ### Step 3 — Define the resources your capability returns (`*.resource.yaml`)
 
