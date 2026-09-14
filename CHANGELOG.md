@@ -15,6 +15,30 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **List-valued CDL inputs** (#63) — a new `list:` field form (`cdl.schema.json`), a new
+  `IRType.kind: "list"` variant (`@archstone/compiler`), and MCP/extraction lowering for it
+  (`@archstone/emitter-support`), so a capability input can be an ordered set of one scalar
+  semantic type — distinct from `collection:`, which is a list of a *Resource*. Purely
+  additive: every existing manifest, IR consumer, and `switch`/`if` over `IRType.kind`
+  continues to compile and behave unchanged.
+- **`rest.query` widened to carry `explode`/`onQuery`** (`connector.schema.json`,
+  `@archstone/provider-rest`) — a `query:` entry may now be an object (`{name?, explode?,
+  onQuery?}`) instead of only a bare rename string. `explode` controls a `list:` field's wire
+  form (`tags=a&tags=b` vs. `tags=a,b`); `onQuery: true` marks a field that belongs on the URL
+  even on a method that also sends a JSON body, and excludes it from that body. The pre-#63
+  string shorthand keeps compiling unchanged.
+- **`archstone init`: list-valued query parameters, query-alongside-body, and array-of-scalars
+  body properties are no longer full-operation refusals** (`@archstone/init`, #63). Three
+  ordinary OpenAPI shapes that previously skipped the whole operation now lower to capability
+  candidates: a `query`/`path` parameter of `type: array` with scalar `items` (query-location
+  only — a list-valued `path` parameter is still refused, named, since the REST connector has
+  no path-list serialization); a `query` parameter coexisting with a `requestBody`; and a
+  request-body property of `type: array` with scalar `items`. Everything genuinely out of
+  scope (non-scalar list items, non-`form` styles, a header/cookie location) keeps refusing
+  with the same named reason codes as before.
+
 ## [0.22.0]
 
 ### Added

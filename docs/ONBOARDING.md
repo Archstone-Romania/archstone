@@ -175,6 +175,32 @@ capability:
   provider: booking-api            # which logical provider fulfils it
 ```
 
+#### List-valued inputs (`list:`)
+
+Every field form above (`type:`, `ref:`, `collection:`, and the resource-typed shorthand) names
+ONE value. When a business input is genuinely a LIST OF SCALARS — a set of tags, a batch of ids
+— use `list:` instead of `type:`, naming the item's semantic type:
+
+```yaml
+  input:
+    tags:
+      list: string
+      required: false
+      description: Filter by any of these tags.
+```
+
+`list:` is a distinct, mutually exclusive field form from `type:` (a manifest cannot declare
+both on the same field) and from `collection:` (a list of a *resource*, not a scalar — see Step
+3). It takes the same `values:` array as an enum `type:` field when the item type is `enum`. A
+`required: true` list means the field must be *present*; an empty array `[]` is still a valid
+value — CDL has no separate "must be non-empty" constraint.
+
+On the wire, a `list:` field bound to a `query`-location REST parameter can declare its
+serialization form in the binding's `rest.query` entry — see Step 4. A `list:` field sourced
+from a request body needs no such declaration: it serializes as a JSON array like any other
+body field. A list-valued **path** parameter has no CDL construct at all: `archstone init`
+refuses that shape by name rather than degrading it (see below).
+
 ### Step 3 — Define the resources your capability returns (`*.resource.yaml`)
 
 Step 2 referenced `Accommodation` before it was defined anywhere — that's intentional.
@@ -310,6 +336,46 @@ field still has to go through `response:`. Its required/optional and OK/DEGRADED
 rules are identical to `response:`'s, just sourced from the output field itself (there's no
 resource registry entry for a scalar), and a missing field from either block merges into
 the same single violation rather than reporting two.
+
+#### `rest.query` — renaming, list serialization, and query-alongside-body
+
+A REST connector's `rest.query` maps a CDL input field to its wire query-parameter name. The
+plain string form (`fieldName: wireName`) renames only — write it whenever the backend spells
+a field differently than your CDL does:
+
+```yaml
+    rest:
+      method: GET
+      path: /hotels
+      query:
+        widthCm: width_cm      # CDL keeps the business name, the wire gets the backend's
+```
+
+A field absent from `query:` falls back to its CDL name unchanged.
+
+For a `list:`-typed field, or a field that must sit on the query string on a method that ALSO
+carries a JSON body, use the object form instead of a bare string:
+
+```yaml
+      query:
+        tags:
+          explode: false        # comma-joined (tags=a,b) instead of the default repeated-key
+                                 # form (tags=a&tags=b) — mirrors the OpenAPI `style: form`
+                                 # explode flag your source document declared
+        dryRun:
+          onQuery: true         # this field goes on the URL even though the method also
+                                 # sends a body; every OTHER input field lands in the JSON
+                                 # body instead, in the same call
+        legacyField:
+          name: legacy_field    # the object form's own rename, equivalent to the string form
+```
+
+`onQuery` matters only when a binding has both `query`-location input fields and a body
+(non-`GET`/`HEAD` method with a `requestBody`): mark every field that belongs on the URL, or
+it silently lands in the JSON body instead. A required `list:` field whose runtime value is an
+empty array omits that query parameter entirely — it is not sent as `field=`, and the call is
+not rejected for "missing required field" (presence of the field, not non-emptiness of the
+list, is what `required` means).
 
 ### Step 5 — Compile and inspect
 
