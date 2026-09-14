@@ -1,0 +1,264 @@
+openapi: 3.1.0
+
+# LIST-VALUED INPUTS — issue #63.
+#
+# Three ordinary OpenAPI shapes used to cause a full operation refusal: a `query`/`path`
+# parameter whose schema is `type: array` with scalar items, a request-body property of
+# `type: array` with scalar items, and a `query` parameter coexisting with a `requestBody`.
+# This document is every variant the adapter has to have an answer for: exploded and
+# non-exploded query lists, the OpenAPI style default, a still-refused path-location list, a
+# still-refused non-scalar-item list, and a still-refused `deepObject` style.
+#
+# SYNTHETIC, same house style as its siblings.
+
+info:
+  title: Acme Parts — list-valued inputs
+  version: 1.0.0
+
+servers:
+  - url: https://api.acme.test/api/v2
+
+paths:
+  /items:
+    get:
+      summary: List items, filterable by an exploded list of tags
+      operationId: listItemsExploded
+      security: []
+      parameters:
+        - name: tags
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items-joined:
+    get:
+      summary: List items, filterable by a comma-joined list of tags
+      operationId: listItemsJoined
+      security: []
+      parameters:
+        - name: tags
+          in: query
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items-default-style:
+    get:
+      summary: A list query parameter with no declared style/explode
+      operationId: listItemsDefaultStyle
+      security: []
+      parameters:
+        - name: ids
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items-object-filter:
+    get:
+      summary: A list query parameter whose items are objects — still refused
+      operationId: listItemsObjectFilter
+      security: []
+      parameters:
+        - name: filters
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: object
+              properties:
+                field:
+                  type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items-deep-object:
+    get:
+      summary: A list-shaped query parameter declaring a non-form style — still refused
+      operationId: listItemsDeepObject
+      security: []
+      parameters:
+        - name: filters
+          in: query
+          required: false
+          style: deepObject
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items/{ids}:
+    get:
+      summary: A list-valued PATH parameter — still refused, query-location lists only
+      operationId: listItemsByPathIds
+      security: []
+      parameters:
+        - name: ids
+          in: path
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items/bulk-tag:
+    post:
+      summary: Tag several items in one call — an array-of-scalars body property
+      operationId: bulkTagItems
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemIds, tags]
+              properties:
+                itemIds:
+                  type: array
+                  items:
+                    type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Tagged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+
+  /items/bulk-link:
+    post:
+      summary: Link several items to related records — array-of-objects, still refused
+      operationId: bulkLinkItems
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [links]
+              properties:
+                links:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      itemId:
+                        type: string
+                      relatedId:
+                        type: string
+      responses:
+        '200':
+          description: Linked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+
+components:
+  schemas:
+    Item:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string

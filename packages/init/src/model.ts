@@ -186,6 +186,14 @@ export interface DraftInputField {
   description: Fact<string>;
   /** A sample value — the only source of probe input a document can offer (§1.3). */
   example: Fact<unknown>;
+  /** True when this field's value is a LIST of `type`, not one scalar (issue #63, Goals 1/3).
+   *  `type`/`values` describe each ITEM; the field as a whole is an array of them. */
+  list?: boolean;
+  /** For a `list` field `in: "query"` only: whether the wire form repeats the key
+   *  (`explode: true`, `tags=a&tags=b`) or joins with commas (`explode: false`, `tags=a,b`).
+   *  Read from the source parameter's own `explode`, defaulting to `true` — OpenAPI's own
+   *  default for `style: form` on `query` (§4/EC-4). Meaningless for `in: "body"`. */
+  explode?: boolean;
 }
 
 /**

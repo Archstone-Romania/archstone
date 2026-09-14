@@ -155,6 +155,16 @@ interface PlannedInput {
   required: boolean;
   description?: string;
   wireName?: string;
+  /** #63 Goals 1/3: this field's value is a LIST of `type`, not one scalar. */
+  list?: boolean;
+  /** #63 Goal 1: for a `list` query field, the wire form to write into the binding's
+   *  `rest.query` entry — `undefined` means the source declared none (the connector then
+   *  applies OpenAPI's own `form`/`explode: true` default; no need to write it explicitly). */
+  explode?: boolean;
+  /** The source `in:` this field arrived from — `input:` in CDL never carries it (business
+   *  shape only), but the binding writer needs it to decide which fields belong in `rest.query`
+   *  (`query`/`path`) versus the JSON body (`body`). */
+  in: "path" | "query" | "body";
 }
 
 interface PlannedCapability {
@@ -318,6 +328,8 @@ function planInput(field: DraftInputField, capabilityId: string, notes: Note[]):
     required,
     ...(description !== undefined ? { description } : {}),
     ...(field.wireName !== undefined && field.wireName !== field.name ? { wireName: field.wireName } : {}),
+    ...(field.list ? { list: true, ...(field.explode !== undefined ? { explode: field.explode } : {}) } : {}),
+    in: field.in,
   };
 }
 
@@ -545,7 +557,11 @@ function header(w: YamlWriter, draft: DraftModel, what: string): void {
 function writeFieldMap(w: YamlWriter, fields: Array<PlannedInput | PlannedResourceField>): void {
   for (const f of fields) {
     w.block(f.name, (fw) => {
-      fw.entry("type", f.type);
+      // #63: a `list`-valued input writes CDL's `list:` field form (a list of one scalar
+      // semantic type), never `type:` — `listField` and `semanticField` are distinct,
+      // mutually-exclusive forms in `cdl.schema.json`, so writing both would be an invalid file.
+      if ("list" in f && f.list) fw.entry("list", f.type);
+      else fw.entry("type", f.type);
       if (f.values) fw.flowList("values", f.values);
       // `required: true` is the CDL default and is left implicit, exactly as the hand-written
       // manifests do. `false` is always explicit — it is the load-bearing half (§1.2).
@@ -662,11 +678,31 @@ function renderBindingFile(
         rw.entry("baseUrl", envPlaceholder(baseUrlEnvVar(record)), observed !== undefined ? `the source names ${observed}` : undefined);
         rw.entry("method", plan.method);
         rw.entry("path", plan.path);
-        const remapped = plan.input.filter((f) => f.wireName !== undefined);
-        if (remapped.length > 0) {
-          rw.comment("the backend spells these differently on the wire; the CDL keeps the business name");
+        // #63: a `query`-location field needs a `rest.query` entry when it is remapped
+        // (`wireName`), when it is a `list` field with an explicit `explode` (Goal 1), or
+        // (Goal 2) when this operation ALSO carries a body — `invokeRest` builds the query
+        // string from ONLY the `onQuery`-marked fields in that case, so every query field must
+        // say so or it silently falls into the JSON body instead. A field needing only the
+        // plain rename keeps the pre-#63 string shorthand; anything else uses the object form.
+        const hasBody = plan.input.some((f) => f.in === "body");
+        const queryFields = plan.input.filter((f) => f.in === "query");
+        const needsEntry = queryFields.filter((f) => f.wireName !== undefined || (f.list && f.explode !== undefined) || hasBody);
+        if (needsEntry.length > 0) {
+          if (hasBody) rw.comment("query fields on a method that also has a body — sent on the URL; every other input field goes in the JSON body");
+          else rw.comment("the backend spells these differently on the wire; the CDL keeps the business name");
           rw.block("query", (qw) => {
-            for (const f of remapped) qw.entry(f.name, f.wireName!);
+            for (const f of needsEntry) {
+              const needsObjectForm = (f.list && f.explode !== undefined) || hasBody;
+              if (!needsObjectForm) {
+                qw.entry(f.name, f.wireName!);
+                continue;
+              }
+              qw.block(f.name, (fw) => {
+                if (f.wireName !== undefined) fw.entry("name", f.wireName);
+                if (f.list && f.explode !== undefined) fw.entry("explode", f.explode);
+                if (hasBody) fw.entry("onQuery", true);
+              });
+            }
           });
         }
         // Challenge 2 item 2: a declared security scheme becomes a header placeholder, never

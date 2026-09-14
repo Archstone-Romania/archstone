@@ -173,9 +173,6 @@ describe("what support does NOT cover keeps refusing (§6 step 5 DoD)", () => {
     // One CDL input field cannot be two wire values, and there is no body counterpart to
     // `rest.query` that could separate them.
     ["POST /api/v2/orders/{orderId}/transfer", "unsupported-parameter-location", /already a path or query parameter/],
-    // `invokeRest` appends a query string only when there is no body — found by the coverage
-    // audit, not by the bug report, and it predates this change.
-    ["POST /api/v2/orders/quote", "unsupported-parameter-location", /sent inside the JSON body instead of on the URL/],
     // Legal to declare, unsendable: a GET never gets a body.
     ["GET /api/v2/orders/legacy-search", "unsupported-parameter-location", /never sends/],
   ];
@@ -213,5 +210,35 @@ describe("what support does NOT cover keeps refusing (§6 step 5 DoD)", () => {
     const result = emit(orders, decisionsFor("GET /api/v2/orders/{orderId}", "orders.get"));
     expect(result.files.has("capabilities.yaml")).toBe(true);
     expect(result.capabilities).toHaveLength(1);
+  });
+});
+
+// #63 Goal 2 (BR-5): a query parameter no longer refuses an operation solely because it also
+// carries a `requestBody` — this is the exact construct `queryOnBodyMethodRefusal` used to
+// refuse, moved here from the REFUSED table above once it became expressible.
+describe("a query parameter coexists with a request body (#63 Goal 2)", () => {
+  const QUOTE = "POST /api/v2/orders/quote";
+
+  it("is no longer refused, and both the query field and the body field reach the capability", () => {
+    expect(refusals(QUOTE)).toEqual([]);
+    expect(names(QUOTE)).toEqual(["currency", "partId"]);
+    expect(input(QUOTE, "currency").in).toBe("query");
+    expect(input(QUOTE, "partId").in).toBe("body");
+  });
+
+  it("emits a binding that marks the query field `onQuery: true`, excluding it from the JSON body", () => {
+    // `quote`'s response is an inline object with no `$ref` component name, so D-9 step 3 asks
+    // for one at the gate — orthogonal to this test's point, so it is supplied directly.
+    const decisions: DecisionRecord = {
+      version: "0",
+      company: { id: "acme", name: "Acme Orders" },
+      provider: "acme-api",
+      decisions: [{ operation: QUOTE, keep: true, capabilityId: "orders.quote", effect: "read", resourceName: "Quote" }],
+    };
+    const result = emit(orders, decisions);
+    const binding = result.files.get("bindings/orders.quote.binding.yaml")!;
+    expect(binding).toMatch(/method: POST/);
+    expect(binding).toMatch(/^\s+currency:$/m);
+    expect(binding).toMatch(/^\s+onQuery: true$/m);
   });
 });
