@@ -322,15 +322,45 @@ function interpolatePath(
   return { path: out, consumed, missing };
 }
 
-// Build a query string from every input field NOT consumed by a path placeholder.
-// null/undefined fields are omitted; keys and values are URL-encoded. `queryMap` (from
-// the connector's `rest.query`, #26) renames a CDL input field to its wire query-param
-// name; a field absent from the map is appended under its CDL name unchanged.
-function buildQuery(input: Record<string, unknown>, consumed: Set<string>, queryMap?: Record<string, string>): string {
+// Build a query string from input fields NOT consumed by a path placeholder. null/undefined
+// fields are omitted; keys and values are URL-encoded. `queryMap` (from the connector's
+// `rest.query`, #26/#63) renames a CDL input field to its wire query-param name, and its
+// widened object form carries `explode` (list-field wire form) and `onQuery`; a field absent
+// from the map is appended under its CDL name unchanged.
+//
+// `listFields` (#63) names every input field whose IRType is `list` — read from `tool.input`,
+// never guessed from the runtime value's shape, so a field the manifest declares scalar is
+// never reinterpreted as a list just because a caller happened to pass an array.
+//
+// `onlyFields`, when supplied, restricts the fields serialized here to that set (#63 Goal 2:
+// when the operation also carries a body, ONLY the query-designated fields belong on the URL —
+// the rest belong in the JSON body, built separately by the caller).
+function buildQuery(
+  input: Record<string, unknown>,
+  consumed: Set<string>,
+  queryMap: Record<string, string | { name?: string; explode?: boolean; onQuery?: true }> | undefined,
+  listFields: ReadonlySet<string>,
+  onlyFields?: ReadonlySet<string>,
+): string {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(input)) {
     if (consumed.has(k) || v === undefined || v === null) continue;
-    params.append(queryMap?.[k] ?? k, serializeValue(v));
+    if (onlyFields && !onlyFields.has(k)) continue;
+    const mapped = queryMap?.[k];
+    const wireName = (typeof mapped === "object" ? mapped.name : undefined) ?? (typeof mapped === "string" ? mapped : undefined) ?? k;
+    if (listFields.has(k)) {
+      if (!Array.isArray(v)) continue; // schema validation upstream keeps this from happening
+      if (v.length === 0) continue; // a required-but-empty list (founder ruling) omits the param entirely
+      // OpenAPI's own default for `style: form` on `query` is `explode: true`.
+      const explode = typeof mapped === "object" && mapped.explode !== undefined ? mapped.explode : true;
+      if (explode) {
+        for (const item of v) params.append(wireName, serializeValue(item));
+      } else {
+        params.append(wireName, v.map((item) => serializeValue(item)).join(","));
+      }
+      continue;
+    }
+    params.append(wireName, serializeValue(v));
   }
   return params.toString();
 }
@@ -468,9 +498,22 @@ export async function invokeRest(
     };
   }
 
+  // #63: which input fields are LIST-typed (read from the IR, never guessed from the runtime
+  // value), and which query-mapped fields are marked `onQuery` — belonging on the URL even
+  // though this operation also carries a body (Goal 2).
+  const listFields = new Set(tool.input.filter((f) => f.type.kind === "list").map((f) => f.name));
+  const onQueryFields = new Set(
+    Object.entries(rest.query ?? {})
+      .filter((entry): entry is [string, { onQuery: true }] => typeof entry[1] === "object" && entry[1].onQuery === true)
+      .map(([k]) => k),
+  );
+
   let url = joinUrl(baseUrl, interpolatedPath);
   if (!hasBody) {
-    const qs = buildQuery(input, consumed, rest.query);
+    const qs = buildQuery(input, consumed, rest.query, listFields);
+    if (qs) url += `?${qs}`;
+  } else if (onQueryFields.size > 0) {
+    const qs = buildQuery(input, consumed, rest.query, listFields, onQueryFields);
     if (qs) url += `?${qs}`;
   }
 
@@ -478,10 +521,15 @@ export async function invokeRest(
     headers["content-type"] = "application/json";
   }
 
+  // The JSON body excludes every `onQuery`-marked field (#63 Goal 2): it already went on the
+  // URL above, and sending it twice would be a body that disagrees with the request it rode in
+  // on. Every existing binding has an empty `onQueryFields`, so `bodyInput` is `input` unchanged.
+  const bodyInput = onQueryFields.size > 0 ? Object.fromEntries(Object.entries(input).filter(([k]) => !onQueryFields.has(k))) : input;
+
   const body = hasBody
     ? bodyTemplate !== undefined
-      ? interpolateBody(bodyTemplate, input)
-      : JSON.stringify(input)
+      ? interpolateBody(bodyTemplate, bodyInput)
+      : JSON.stringify(bodyInput)
     : undefined;
 
   try {
