@@ -181,6 +181,49 @@ describe("the harness — a request that differs on the wire is NOT exonerated",
   });
 });
 
+describe("#67 — requestShape mirrors `providers/rest`'s object-form `rest.query` and `onQuery`", () => {
+  it("an object-form `rest.query` entry's `name` is the wire name, same as the equivalent string form", () => {
+    // `invokeRest`'s `buildQuery` reads `mapped.name` for an object entry. `requestShape` must
+    // do the same — not stringify the object into `query:[object Object]`.
+    const actual = clone(oracle);
+    const tool = toolAt(actual, "catalog.estimate-part-price");
+    tool.connector!.rest!.query!.widthCm = { name: "width_cm" };
+    const diff = diffIR(oracle, actual);
+    expect(diff.requestDivergences, formatDiff(diff)).toEqual([]);
+    expect(diff.clean).toBe(true);
+  });
+
+  it("`onQuery: true` on a body-carrying method is `query:<wire>`, not `body:<name>` (#63)", () => {
+    // Both sides are the SAME body-carrying method (POST) on the SAME endpoint, so the tool join
+    // (by connector = method + path) still matches — this isolates the `onQuery` behavior from
+    // the tool-join behavior exercised elsewhere in this file.
+    const expected = clone(oracle);
+    const expTool = toolAt(expected, "catalog.estimate-part-price");
+    expTool.connector!.rest!.method = "post";
+    expTool.connector!.rest!.query = {
+      widthCm: { name: "width_cm", onQuery: true },
+      heightCm: { name: "height_cm", onQuery: true },
+    };
+
+    // The actual manifest marks both fields `onQuery: true` too — `invokeRest` sends them on the
+    // URL even though the method carries a body, so this is the SAME wire request and must be
+    // exonerated.
+    const actual = clone(expected);
+    const diff = diffIR(expected, actual);
+    expect(diff.requestDivergences, formatDiff(diff)).toEqual([]);
+    expect(diff.clean).toBe(true);
+
+    // A manifest that (wrongly) drops `onQuery` — so the fields fall into the body instead — must
+    // still diverge from the `onQuery`-correct oracle's query-string request.
+    const wrongActual = clone(expected);
+    delete toolAt(wrongActual, "catalog.estimate-part-price").connector!.rest!.query;
+    const wrongDiff = diffIR(expected, wrongActual);
+    expect(wrongDiff.clean).toBe(false);
+    expect(wrongDiff.requestDivergences[0]!.missing).toEqual(["query:height_cm", "query:width_cm"]);
+    expect(wrongDiff.requestDivergences[0]!.extra).toEqual(["body:heightCm", "body:widthCm"]);
+  });
+});
+
 describe("NF-3 — known misses join by the connector, never by the CDL field name", () => {
   // This file's own header says the id is the axis the pass criterion EXCLUDES and therefore
   // cannot also be the join key. That argument applies one level down and was not applied

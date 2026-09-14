@@ -74,9 +74,11 @@ export const REASON_CODES = {
    *   - a `requestBody` this adapter cannot read down to named scalar properties;
    *   - a `requestBody` on `GET`/`HEAD`, which `invokeRest` never sends;
    *   - a body property colliding with a path/query parameter — one CDL field, two wire values,
-   *     and no body counterpart to `rest.query` to separate them;
-   *   - a query parameter on a method that carries a body, which `invokeRest` folds INTO the
-   *     body instead of onto the URL.
+   *     and no body counterpart to `rest.query` to separate them.
+   *
+   * A `query` parameter on a method that also carries a body is NOT in this list (#63 Goal 2):
+   * the binding writer marks it `onQuery: true` in `rest.query`, and `invokeRest` sends it on
+   * the URL alongside the JSON body, so it no longer refuses the operation.
    *
    * Every one of them is a construct that would otherwise emit a capability that compiles,
    * serves, advertises itself to an agent, and then sends the wrong request — which is worse
