@@ -18,7 +18,7 @@ pnpm test             # vitest — includes the end-to-end MCP demo
 pnpm demo:booking     # the pipeline, end to end
 ```
 
-Node 22+ · pnpm 11+.
+Node 22+ · pnpm 11+. When running a single test file directly with `pnpm exec vitest run`, build the affected package first — tests import by package name and resolve to `dist/`, so without rebuild you'll test stale code. Use `pnpm test` to build everything at once.
 
 ## Making a change
 
