@@ -25,39 +25,13 @@ import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { isolateStep } from "./release-gate.mjs";
+import { extractRunBlock } from "./release-gate.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLISH_STEP_NAME = "Publish packages to npm";
 
-/**
- * Pull the step's `run:` block out of the workflow as runnable shell.
- *
- * Deliberately not a YAML library: this repo's root has no package.json and no dependencies by
- * design (see release-gate.mjs, which parses the same file by hand for the same reason).
- */
-function extractRunBlock(workflowText, stepName) {
-  const stepText = isolateStep(workflowText, stepName);
-  assert.ok(stepText, `step "${stepName}" not found in release.yml`);
-  const lines = stepText.split("\n");
-  const runIdx = lines.findIndex((l) => /^\s*run: \|\s*$/.test(l));
-  assert.ok(runIdx >= 0, `step "${stepName}" has no "run: |" block`);
-  const body = lines.slice(runIdx + 1);
-  const first = body.find((l) => l.trim() !== "");
-  const indent = first.match(/^\s*/)[0];
-  const out = [];
-  for (const line of body) {
-    if (line.trim() === "") {
-      out.push("");
-      continue;
-    }
-    if (!line.startsWith(indent)) break; // dedented out of the block
-    out.push(line.slice(indent.length));
-  }
-  return out.join("\n");
-}
-
 const RUN_BLOCK = extractRunBlock(readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"), PUBLISH_STEP_NAME);
+assert.ok(RUN_BLOCK, `step "${PUBLISH_STEP_NAME}" or its "run: |" block not found in release.yml`);
 
 /**
  * Run the extracted shell with stub `node`/`pnpm`/`npm` on PATH.

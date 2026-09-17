@@ -39,6 +39,24 @@ All notable changes to Archstone are documented here. Format loosely follows
   scope (non-scalar list items, non-`form` styles, a header/cookie location) keeps refusing
   with the same named reason codes as before.
 
+### Fixed
+
+- **Releases now publish `server.json` to the official MCP Registry**
+  ([archstone#69](https://github.com/Archstone-Romania/archstone/issues/69)). Every release
+  stamped and verified `server.json` but no workflow step ever sent it to
+  `registry.modelcontextprotocol.io`, so `io.github.Archstone-Romania/archstone` stayed at 0.11.5
+  while npm reached 0.22.0. `release.yml` gains a "Publish server.json to the MCP Registry" step,
+  after every npm package is confirmed (the registry verifies `mcpName` against the *published*
+  `@archstone/cli`) and before the GitHub Release. It installs a pinned, sha256-verified
+  `mcp-publisher` (v1.8.1), logs in via GitHub OIDC, and confirms the version with a new
+  post-publish readback, `scripts/mcp-registry-readback.mjs`, built on the same
+  present/absent/unknown design as the npm readback. It is idempotent on a `workflow_dispatch`
+  resume, treats a refused duplicate publish of a version that is in fact present as success, and
+  runs for backports too — the registry picks its latest version by semver, so a backport cannot
+  displace it. Covered by `scripts/mcp-registry-readback.test.mjs` and
+  `scripts/mcp-registry-publish.test.mjs`, which runs the workflow step's real shell against
+  stubbed binaries; both are in the release build gate.
+
 ## [0.22.0]
 
 ### Added
