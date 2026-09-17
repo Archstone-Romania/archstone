@@ -1,9 +1,9 @@
 # Release pipeline for Archstone (the public repository — ADR-0010).
 #
-# Tagging THIS repo with vX.Y.Z publishes the 8 @archstone/* packages to npm and creates the
-# GitHub Release. The tag is the single source of what ships: versions are stamped by the
-# release-prepare PR before tagging, and this workflow verifies that instead of pushing a
-# bump commit (main is protected).
+# Tagging THIS repo with vX.Y.Z publishes the 8 @archstone/* packages to npm, publishes
+# server.json to the official MCP Registry, and creates the GitHub Release. The tag is the
+# single source of what ships: versions are stamped by the release-prepare PR before tagging,
+# and this workflow verifies that instead of pushing a bump commit (main is protected).
 #
 # npm authenticates via Trusted Publishing (OIDC) — no NPM_TOKEN secret exists. Each
 # package's Trusted Publisher on npmjs.com must point at THIS repo + this workflow file.
@@ -33,7 +33,8 @@ permissions:
   # `write` is for the GitHub Release object created after a confirmed publish — it grants
   # no way past branch protection, and nothing in this workflow pushes to any branch.
   contents: write
-  id-token: write        # OIDC token for npm Trusted Publishing (no NPM_TOKEN secret)
+  id-token: write        # OIDC token for npm Trusted Publishing (no NPM_TOKEN secret) and for
+                         # `mcp-publisher login github-oidc` (no MCP Registry secret either)
 
 concurrency:
   group: release
@@ -150,8 +151,9 @@ jobs:
           # bug in ITS timeout/retry logic — or in the loop wiring that calls it — must surface
           # before this run touches anything, not on a tag at publish time. `publish-loop` runs
           # THIS FILE's publish step against stubbed binaries, so it is a test of the shell
-          # below, not of a copy of it.
-          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs scripts/release-prepare.test.mjs
+          # below, not of a copy of it. `mcp-registry-readback` and `mcp-registry-publish` (#69)
+          # are the same pair for the MCP Registry step, for the same reasons.
+          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs scripts/release-prepare.test.mjs scripts/mcp-registry-readback.test.mjs scripts/mcp-registry-publish.test.mjs
           pnpm install --frozen-lockfile
           pnpm lint
           pnpm typecheck
@@ -357,10 +359,125 @@ jobs:
             fi
           done
 
+      - name: Publish server.json to the MCP Registry
+        # #69. Every release since 0.11.5 stamped server.json (release-prepare) and verified the
+        # stamp (release-gate, #101) — and then published it nowhere. No step here ever sent it
+        # to registry.modelcontextprotocol.io, so `io.github.Archstone-Romania/archstone` stayed
+        # at 0.11.5 while npm moved to 0.22.0, and every run was green because nothing asked.
+        #
+        # AFTER THE NPM STEP, and not merely for tidiness: the registry verifies ownership of an
+        # npm-backed server by reading `mcpName` out of the PUBLISHED `@archstone/cli` at the
+        # version server.json names. Before the npm step has confirmed every package, that
+        # package may not exist yet and the publish would be refused for a reason that has
+        # nothing to do with us.
+        #
+        # BACKPORTS PUBLISH TOO — the opposite of the npm dist-tag and GitHub "Latest" hijacks
+        # this file refuses elsewhere. The MCP Registry decides `isLatest` by semver, not by
+        # publish order, so a 0.11.8 published after 0.22.0 is recorded as a 0.11.x version and
+        # 0.22.0 stays latest. There is nothing to protect, and skipping would leave the LTS line
+        # undiscoverable there.
+        #
+        # SHAPE — the npm step's #123 design, for one artifact instead of eight:
+        #   - Idempotence is the readback with a 0s budget: already present → skip, so a
+        #     `workflow_dispatch` resume passes straight through.
+        #   - `mcp-publisher publish` exiting 0 is a claim; `scripts/mcp-registry-readback.mjs`
+        #     reading the per-version endpoint back is the evidence, same three states
+        #     (present / absent / unknown) as npm-readback.mjs.
+        #   - A NON-ZERO publish is not yet a failure either. The registry refuses a duplicate
+        #     version, which is exactly what a racing or resumed run sees if the version landed
+        #     between our idempotence probe and our publish. So the readback runs regardless,
+        #     and only an unconfirmed version fails the step.
+        #
+        # PINNED, CHECKSUMMED PUBLISHER. mcp-publisher runs holding this job's OIDC identity, so a
+        # moving `latest` download would hand that identity to whatever was uploaded last. The
+        # version and sha256 below are fixed; the archive is verified before it is extracted. To
+        # upgrade, change both together from the release's published checksums.
+        #
+        # TIMEOUT — 300s, and NOT calibrated the way the npm step's 600s is: this step has never
+        # run, so there is no measured benign lag to double. A registry publish is a write to the
+        # registry's own API rather than a packument fanned out through a CDN, so the first probe
+        # is expected to pass outright; 300s is headroom for any cache in front of the read
+        # endpoint, under the same asymmetry (too patient costs minutes of a run that is already
+        # failing, too impatient reds a good release). Recalibrate against the first observed lag.
+        #
+        # Deliberately NOT a release-gate assertion that the registry's latest equals the
+        # previous tag: that gate would block the very release that repairs the 0.11.5 gap. The
+        # readback below surfaces a missed publish at publish time instead.
+        env:
+          V: ${{ steps.v.outputs.version }}
+          MCP_PUBLISHER_VERSION: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+          MCP_READBACK_TIMEOUT_S: 300   # see TIMEOUT above
+          MCP_READBACK_GRACE_S: 20      # how long an UNANSWERED idempotence probe is retried
+        run: |
+          # Refuse an empty budget rather than defaulting — a silently-0 timeout would turn the
+          # confirmation into a single probe and quietly reopen the "exit 0 is not evidence" gap.
+          : "${MCP_READBACK_TIMEOUT_S:?must be set in this step's env: — see the TIMEOUT note above}"
+          : "${MCP_READBACK_GRACE_S:?must be set in this step's env: — see the readback notes above}"
+          : "${MCP_PUBLISHER_VERSION:?must be set in this step's env:}"
+          : "${MCP_PUBLISHER_SHA256:?must be set in this step's env: — never install an unverified publisher}"
+
+          # Before downloading or publishing anything, as in the npm step.
+          READBACK="$GITHUB_WORKSPACE/scripts/mcp-registry-readback.mjs"
+          [ -f "$READBACK" ] || { echo "::error::$READBACK is missing — refusing to publish to the MCP Registry without the post-publish readback (#69)."; exit 1; }
+
+          # The name that is checked is read from the same file that is published, so the two
+          # cannot disagree. release-gate already asserted server.json is stamped to $V (#101);
+          # re-asserted here because a mismatch would publish one version and poll for another.
+          SERVER_NAME=$(node -p "require('./server.json').name")
+          SERVER_V=$(node -p "require('./server.json').version")
+          [ "$SERVER_V" = "$V" ] || { echo "::error::server.json is at $SERVER_V but the tag says $V — refusing to publish it to the MCP Registry."; exit 1; }
+
+          on_mcp_registry() {
+            node "$READBACK" "$SERVER_NAME" "$V" --timeout-seconds "$1" --unknown-grace-seconds "$MCP_READBACK_GRACE_S"
+          }
+
+          if on_mcp_registry 0; then
+            echo "✓ $SERVER_NAME@$V already on the MCP Registry — skipping (idempotent)."
+            exit 0
+          fi
+
+          PUBLISHER_DIR="$RUNNER_TEMP/mcp-publisher"
+          mkdir -p "$PUBLISHER_DIR"
+          ARCHIVE="$PUBLISHER_DIR/mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL -o "$ARCHIVE" "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  $ARCHIVE" | sha256sum -c - || { echo "::error::mcp-publisher $MCP_PUBLISHER_VERSION does not match its pinned sha256 — refusing to run it with this job's OIDC identity."; exit 1; }
+          tar -xzf "$ARCHIVE" -C "$PUBLISHER_DIR" mcp-publisher
+          PUBLISHER="$PUBLISHER_DIR/mcp-publisher"
+
+          "$PUBLISHER" login github-oidc
+          PUBLISH_RC=0
+          "$PUBLISHER" publish || PUBLISH_RC=$?
+          if [ "$PUBLISH_RC" = 0 ]; then
+            echo "✓ mcp-publisher reported success for $SERVER_NAME@$V — confirming with the registry"
+          else
+            echo "mcp-publisher exited $PUBLISH_RC for $SERVER_NAME@$V — checking the registry before calling that a failure (a duplicate-version refusal from a racing or resumed run means it is already published)"
+          fi
+
+          if on_mcp_registry "$MCP_READBACK_TIMEOUT_S"; then
+            echo "✓ published $SERVER_NAME@$V to the MCP Registry"
+            exit 0
+          fi
+
+          echo "  Release state: every npm package is on npm and confirmed. $SERVER_NAME@$V is NOT"
+          echo "  confirmed on the MCP Registry (mcp-publisher exit: $PUBLISH_RC), and the GitHub Release"
+          echo "  has deliberately not been created."
+          echo "  Check the registry yourself:"
+          echo "    curl -s https://registry.modelcontextprotocol.io/v0/servers/$(node -p 'encodeURIComponent(process.argv[1])' "$SERVER_NAME")/versions/$V"
+          echo "  If it answers 200 with version $V, this was lag and the release is fine: re-run this"
+          echo "  workflow via workflow_dispatch with version=$V. It is idempotent — npm packages and"
+          echo "  the registry entry already present are skipped, and the GitHub Release is created."
+          echo "  If it answers 404, read the mcp-publisher output above. An ownership refusal usually"
+          echo "  means the published @archstone/cli@$V does not carry mcpName=$SERVER_NAME (or npm had"
+          echo "  not yet served it to the registry — resume after a few minutes)."
+          echo "::error::$SERVER_NAME@$V was not confirmed on the MCP Registry within ${MCP_READBACK_TIMEOUT_S}s (#69). Recovery instructions are in the log immediately above this annotation."
+          exit 1
+
       - name: Create the GitHub Release
-        # Runs only after every package is CONFIRMED on the registry — a GitHub Release is an
-        # announcement, and announcing an unconfirmed publish is the #123 failure with a
-        # megaphone. Idempotent: a resumed run skips it if the release already exists.
+        # Runs only after every package is CONFIRMED on npm AND server.json is CONFIRMED on the
+        # MCP Registry — a GitHub Release is an announcement, and announcing an unconfirmed
+        # publish is the #123 failure with a megaphone. Idempotent: a resumed run skips it if the
+        # release already exists.
         #
         # A backport is explicitly --latest=false: GitHub, like npm, marks the newest release
         # "Latest" by default, so a 0.11.7 cut after 0.12.0 would replace the banner everyone

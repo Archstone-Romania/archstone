@@ -152,6 +152,33 @@ export function isolateStep(workflowText, stepName) {
   return nextMatch ? rest.slice(0, nextMatch.index) : rest;
 }
 
+/** Pure — a named step's `run: |` block, dedented to runnable shell, or null if the step or its
+ *  block is missing. Lives here beside `isolateStep` because two tests execute release.yml's
+ *  real shell against stubbed binaries (publish-loop, mcp-registry-publish) and must extract it
+ *  identically. Deliberately not a YAML library: this repo's root has no dependencies by design,
+ *  and this file already parses the workflow by hand for the same reason. */
+export function extractRunBlock(workflowText, stepName) {
+  const stepText = isolateStep(workflowText, stepName);
+  if (!stepText) return null;
+  const lines = stepText.split("\n");
+  const runIdx = lines.findIndex((l) => /^\s*run: \|\s*$/.test(l));
+  if (runIdx < 0) return null;
+  const body = lines.slice(runIdx + 1);
+  const first = body.find((l) => l.trim() !== "");
+  if (first === undefined) return null;
+  const indent = first.match(/^\s*/)[0];
+  const out = [];
+  for (const line of body) {
+    if (line.trim() === "") {
+      out.push("");
+      continue;
+    }
+    if (!line.startsWith(indent)) break; // dedented out of the block
+    out.push(line.slice(indent.length));
+  }
+  return out.join("\n");
+}
+
 /** Pure — parses the "for p in ...; do" loop out of ONE named step's `run:` block (BF-1:
  *  scoped to that named step, never the whole file — an unrelated same-shaped loop elsewhere
  *  in release.yml must never be mistaken for a real package list). */

@@ -163,8 +163,10 @@ export async function waitForVersion({
   }
 }
 
-/** Pure — argv → options. Exported so the flag parsing is covered too. */
-export function parseArgs(argv) {
+/** Pure — argv → options. Exported so the flag parsing is covered too. `usage` is the only
+ *  thing that differs for mcp-registry-readback.mjs, which shares this parser rather than growing
+ *  a second copy of the "an empty or negative timeout must not quietly disable the wait" rule. */
+export function parseArgs(argv, usage = "usage: npm-readback.mjs <name> <version> [--timeout-seconds N]") {
   const positional = [];
   const opts = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -188,7 +190,7 @@ export function parseArgs(argv) {
     }
   }
   const [name, version] = positional;
-  if (!name || !version) throw new Error("usage: npm-readback.mjs <name> <version> [--timeout-seconds N]");
+  if (!name || !version) throw new Error(usage);
   return { name, version, ...opts };
 }
 
