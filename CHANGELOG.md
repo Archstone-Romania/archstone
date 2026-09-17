@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.22.1]
+
 ### Added
 
 - **List-valued CDL inputs** (#63) — a new `list:` field form (`cdl.schema.json`), a new
