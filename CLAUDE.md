@@ -65,7 +65,7 @@ pnpm serve   examples/manifests/tourism     # emit MCP tools over stdio
 pnpm verify  examples/manifests/tourism     # replay a fixture, report drift
 ```
 
-Node 22+ · pnpm 11+. A single test file: `pnpm exec vitest run packages/compiler/test/compile.test.ts`. When editing a test's dependencies, build the affected package first (`pnpm --filter @archstone/runtime build`), since tests import by package name and resolve to `dist/` — without rebuild, vitest runs the last-built code, not your edits. `pnpm test` builds everything first, so use that when in doubt.
+Node 22+ · pnpm 11+. A single test file: `pnpm exec vitest run packages/compiler/test/compile.test.ts`. Tests import workspace packages by name, which resolves to their `dist/`, so after editing a package's `src/`, rebuild it first (`pnpm --filter @archstone/<package> build`) — otherwise vitest runs the last-built code, not your edits. `pnpm test` builds everything first, so use that when in doubt.
 
 ## The pipeline
 
