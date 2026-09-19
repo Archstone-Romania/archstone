@@ -1,0 +1,253 @@
+openapi: 3.1.0
+
+# ISSUE #64 — omitting unsupported OPTIONAL inputs instead of refusing the whole operation.
+#
+# Every variant #64 covers:
+#   - an optional nested-object body property, omitted
+#   - an optional array-of-objects body property, omitted
+#   - an optional object-valued query parameter, omitted
+#   - a required-but-nullable body property, still refused (BR-4 — nullability never rescues it)
+#   - a required-but-nullable query parameter, still refused (the parameter-side twin of BR-4)
+#   - a non-scalar property listed in the schema's own `required[]`, inside a `requestBody` that
+#     is ITSELF optional (`required: false`/absent) — still refused (BR-2/BR-3/EC-1: the body's
+#     own optionality never rescues a property the schema's `required[]` still names)
+#   - an operation whose only property is optional-and-unsupported, with no parameters — the
+#     BR-9 floor: omission would leave zero inputs, so the operation is refused instead
+#
+# SYNTHETIC, invented for this test. "Crate" has no relationship to any real API.
+
+info:
+  title: Crate API
+  version: 1.0.0
+
+servers:
+  - url: https://api.crate.test/v1
+
+paths:
+  /shipments:
+    post:
+      summary: Create a shipment; an optional nested-object property is omitted
+      operationId: createShipment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination:
+                  type: string
+                preferences:
+                  type: object
+                  properties:
+                    packaging:
+                      type: string
+                    insured:
+                      type: boolean
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+
+  /shipments/{id}/labels:
+    post:
+      summary: Attach labels; an optional array-of-objects property is omitted
+      operationId: addShipmentLabels
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [carrier]
+              properties:
+                carrier:
+                  type: string
+                annotations:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      key:
+                        type: string
+                      value:
+                        type: string
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+
+  /shipments/search:
+    get:
+      summary: Search shipments; an optional object-valued query parameter is omitted
+      operationId: searchShipments
+      security: []
+      parameters:
+        - name: carrier
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+      responses:
+        '200':
+          description: Matching shipments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shipments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+
+  /shipments/{id}/schedule:
+    post:
+      summary: Schedule a pickup; a required-but-nullable body property still refuses (BR-4)
+      operationId: scheduleShipment
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [window]
+              properties:
+                window:
+                  type: object
+                  nullable: true
+      responses:
+        '200':
+          description: Scheduled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+
+  /shipments/nearby:
+    get:
+      summary: A required-but-nullable object-valued query parameter still refuses
+      operationId: nearbyShipments
+      security: []
+      parameters:
+        - name: area
+          in: query
+          required: true
+          schema:
+            type: object
+            nullable: true
+            properties:
+              lat:
+                type: number
+              lng:
+                type: number
+      responses:
+        '200':
+          description: Matching shipments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shipments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+
+  /shipments/{id}/manifest:
+    post:
+      summary: Body itself is OPTIONAL, but a non-scalar property in its required[] still refuses (BR-2/BR-3/EC-1)
+      operationId: setShipmentManifest
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contents]
+              properties:
+                contents:
+                  type: object
+                  properties:
+                    weightKg:
+                      type: number
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+
+  /shipments/metadata:
+    post:
+      summary: The BR-9 floor — the only body property is optional-and-unsupported, no parameters
+      operationId: setShipmentMetadata
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags:
+                  type: object
+      responses:
+        '204':
+          description: Updated.

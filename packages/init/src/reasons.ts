@@ -188,6 +188,28 @@ export const REASON_CODES = {
   /** *(adapter)* Pagination is visible in the source but is not modeled as a capability input. */
   "pagination-not-modeled": { skipsOperation: false, summary: "pagination is not modeled in v1" },
   /**
+   * *(adapter)* #64: an OPTIONAL request-body property or query parameter whose shape the
+   * connector cannot carry (nested object, array of non-scalars, object-valued/`deepObject`
+   * query parameter) is left out of the capability's `input:` fields instead of refusing the
+   * whole operation.
+   *
+   * FIELD-scoped, NON-skipping, and deliberately a NEW member rather than a reuse of
+   * `unsupported-parameter-location` (that code is `skipsOperation: true` everywhere else — a
+   * code is never sometimes one and sometimes the other) or `nested-object-not-mapped` (whose
+   * summary is about the RESPONSE side; this is the input side, with the opposite consequence:
+   * the agent cannot set the field at all, rather than "not mapped into the resource").
+   *
+   * "Optional" here means the schema's own raw `required[]` membership — NEVER the D-12-lowered
+   * value, and independent of whether the enclosing `requestBody` itself is required. A property
+   * or parameter genuinely listed in `required[]` still refuses with `unsupported-parameter-
+   * location`, because omitting it would send a request the backend's own contract calls
+   * invalid — exactly the mis-send D-7 forbids.
+   */
+  "input-property-omitted": {
+    skipsOperation: false,
+    summary: "an optional input the connector cannot carry was left out — the agent cannot set it",
+  },
+  /**
    * *(adapter)* The source declares a construct the adapter never reads.
    *
    * A NEW MEMBER, and R-6 makes that a scope decision, so here is the argument in the open —

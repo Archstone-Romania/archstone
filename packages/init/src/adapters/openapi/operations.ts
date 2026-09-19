@@ -10,6 +10,7 @@
 import {
   absent,
   declared,
+  valueOrUndefined,
   type DraftInputField,
   type DraftNode,
   type DraftOperation,
@@ -175,6 +176,10 @@ interface ParameterResult {
   fields: DraftInputField[];
   /** Set when a parameter lives somewhere v1 does not model. */
   refusal?: Note;
+  /** #64: `input-property-omitted` notes for OPTIONAL parameters this collector left out rather
+   *  than refusing the whole operation over. Dropped by the caller (BR-9) when omitting them
+   *  would leave the operation with no input at all. */
+  omissions: Note[];
 }
 
 function collectParameters(
@@ -184,7 +189,8 @@ function collectParameters(
   seenNames: Set<string>,
 ): ParameterResult {
   const fields: DraftInputField[] = [];
-  if (!Array.isArray(raw)) return { fields };
+  const omissions: Note[] = [];
+  if (!Array.isArray(raw)) return { fields, omissions };
 
   for (const [index, entry] of raw.entries()) {
     if (!isObject(entry)) continue;
@@ -194,7 +200,7 @@ function collectParameters(
     if (typeof ref === "string") {
       const resolved = resolveRef(ctx.docs, docKey, ref);
       if (typeof resolved === "string" || !isObject(resolved.node)) {
-        return { fields, refusal: note("unsupported-ref", "operation", ctx.target, `parameter ${ref} (${typeof resolved === "string" ? resolved : "not an object"})`) };
+        return { fields, omissions, refusal: note("unsupported-ref", "operation", ctx.target, `parameter ${ref} (${typeof resolved === "string" ? resolved : "not an object"})`) };
       }
       parameter = resolved.node;
       source = ref;
@@ -207,7 +213,7 @@ function collectParameters(
       // `header`/`cookie` parameters have no CDL construct: a business capability's input is
       // business data, and a transport header is not. Refused per operation rather than
       // dropped, because dropping one silently emits a binding that cannot work.
-      return { fields, refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is in: ${location}`) };
+      return { fields, omissions, refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is in: ${location}`) };
     }
     // A duplicate name across the path-level and operation-level parameter lists is the same
     // parameter; the operation-level one is processed first and wins.
@@ -220,6 +226,7 @@ function collectParameters(
     if (parameter["content"] !== undefined) {
       return {
         fields,
+        omissions,
         refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is declared with \`content:\` rather than \`schema:\`, so it is not a plain scalar on the wire`),
       };
     }
@@ -238,6 +245,7 @@ function collectParameters(
       if (node.items.kind !== "scalar") {
         return {
           fields,
+          omissions,
           refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is a list whose items are a ${node.items.kind}; CDL list fields carry only scalar items`),
         };
       }
@@ -247,6 +255,7 @@ function collectParameters(
         // interpolation would be SILENTLY_WRONG — refused, named, instead.
         return {
           fields,
+          omissions,
           refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' is a list-valued \`in: path\` parameter; the REST connector has no path-list serialization, so only query-location lists are supported`),
         };
       }
@@ -254,10 +263,15 @@ function collectParameters(
       if (style !== undefined && style !== "form") {
         // EC-3: `deepObject`/`spaceDelimited`/`pipeDelimited`/etc. either imply non-scalar
         // structure or are not legal for `query` — never a scalar-list style this adapter models.
-        return {
-          fields,
-          refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' declares style '${String(style)}', which is not a scalar-list style this adapter models`),
-        };
+        const detail = `parameter '${name}' declares style '${String(style)}', which is not a scalar-list style this adapter models`;
+        // #64/BR-5/BR-6: a REQUIRED parameter in this shape still refuses the whole operation —
+        // omitting it would send a request missing a value the backend's own contract demands
+        // (D-7). An OPTIONAL one is left out instead, named with the new non-skipping code.
+        if (parameter["required"] === true) {
+          return { fields, omissions, refusal: note("unsupported-parameter-location", "operation", ctx.target, detail) };
+        }
+        omissions.push(note("input-property-omitted", "field", `${ctx.target}#${name}`, detail));
+        continue;
       }
       isList = true;
       // EC-4: OpenAPI's own default for `style: form` on `query` is `explode: true`.
@@ -267,10 +281,13 @@ function collectParameters(
       // Same rule as a body property, for the same reason: a CDL input field is a scalar, and an
       // object-valued parameter degrading to `type: string` advertises a parameter the backend
       // cannot accept.
-      return {
-        fields,
-        refusal: note("unsupported-parameter-location", "operation", ctx.target, `parameter '${name}' has a ${node.kind} schema; CDL input fields are scalars or (query-location only, #63) lists of scalars`),
-      };
+      const detail = `parameter '${name}' has a ${node.kind} schema; CDL input fields are scalars or (query-location only, #63) lists of scalars`;
+      // #64/BR-5/BR-6: required still refuses (D-7); optional is omitted instead (F1/F3).
+      if (parameter["required"] === true) {
+        return { fields, omissions, refusal: note("unsupported-parameter-location", "operation", ctx.target, detail) };
+      }
+      omissions.push(note("input-property-omitted", "field", `${ctx.target}#${name}`, detail));
+      continue;
     }
     const { type, values } = inputSemanticType(name, itemNode, source, "parameter");
 
@@ -310,7 +327,7 @@ function collectParameters(
       example,
     });
   }
-  return { fields };
+  return { fields, omissions };
 }
 
 function oneLine(text: string): string {
@@ -409,14 +426,15 @@ function collectRequestBody(
   seenNames: Set<string>,
 ): ParameterResult {
   const fields: DraftInputField[] = [];
+  const omissions: Note[] = [];
   const raw = operation["requestBody"];
-  if (raw === undefined) return { fields };
+  if (raw === undefined) return { fields, omissions };
 
   // A `GET` may legally DECLARE a body; nothing can send one. `invokeRest` gives a body only to
   // methods that are not `GET`/`HEAD`, so every field here would vanish between the manifest and
   // the wire — the exact silence this whole change exists to end.
   if (method === "get" || method === "head") {
-    return { fields, refusal: inputRefusal(key, `a \`requestBody\` on ${method.toUpperCase()}, which the REST connector never sends — its fields could not reach the backend`) };
+    return { fields, omissions, refusal: inputRefusal(key, `a \`requestBody\` on ${method.toUpperCase()}, which the REST connector never sends — its fields could not reach the backend`) };
   }
 
   let body = raw;
@@ -425,27 +443,27 @@ function collectRequestBody(
   if (isObject(body) && typeof body["$ref"] === "string") {
     const resolved = resolveRef(ctx.docs, docKey, body["$ref"]);
     if (typeof resolved === "string") {
-      return { fields, refusal: note("unsupported-ref", "operation", key, `requestBody ${body["$ref"]}: ${resolved}`) };
+      return { fields, omissions, refusal: note("unsupported-ref", "operation", key, `requestBody ${body["$ref"]}: ${resolved}`) };
     }
     source = body["$ref"];
     body = resolved.node;
     docKey = resolved.docKey;
   }
-  if (!isObject(body)) return { fields, refusal: inputRefusal(key, "the `requestBody` is not an object") };
+  if (!isObject(body)) return { fields, omissions, refusal: inputRefusal(key, "the `requestBody` is not an object") };
   ctx.notes.push(...unreadKeys(body, REQUEST_BODY_KEYS, "operation", key));
 
   const content = body["content"];
-  if (!isObject(content)) return { fields, refusal: inputRefusal(key, "the `requestBody` declares no `content`") };
+  if (!isObject(content)) return { fields, omissions, refusal: inputRefusal(key, "the `requestBody` declares no `content`") };
   const mediaTypes = Object.keys(content);
   const jsonType = mediaTypes.find((m) => JSON_MEDIA_RE.test(m));
   if (jsonType === undefined) {
     // The same line §4 already draws for responses. A multipart or XML body is not a shape this
     // version can turn into named business inputs, and guessing at one would be worse.
-    return { fields, refusal: note("unsupported-media-type", "operation", key, `requestBody content is ${mediaTypes.join(", ")}`) };
+    return { fields, omissions, refusal: note("unsupported-media-type", "operation", key, `requestBody content is ${mediaTypes.join(", ")}`) };
   }
   const media = content[jsonType];
   if (!isObject(media) || !isObject(media["schema"])) {
-    return { fields, refusal: inputRefusal(key, `the \`requestBody\`'s ${jsonType} media type declares no schema`) };
+    return { fields, omissions, refusal: inputRefusal(key, `the \`requestBody\`'s ${jsonType} media type declares no schema`) };
   }
   ctx.notes.push(...unreadKeys(media, MEDIA_TYPE_KEYS, "operation", key));
 
@@ -454,12 +472,12 @@ function collectRequestBody(
   // already one: `ctx.fatal` carries the `unsupported-ref` / `unsupported-composition` the
   // lowering raised, and the caller turns it into the operation's skip. Adding a second refusal
   // here would only bury the real cause under a vaguer one.
-  if (ctx.fatal) return { fields };
+  if (ctx.fatal) return { fields, omissions };
   if (node.kind !== "object") {
-    return { fields, refusal: inputRefusal(key, `the \`requestBody\` schema is a ${node.kind}, which has no named fields that could become capability inputs`) };
+    return { fields, omissions, refusal: inputRefusal(key, `the \`requestBody\` schema is a ${node.kind}, which has no named fields that could become capability inputs`) };
   }
   if (node.properties.length === 0) {
-    return { fields, refusal: inputRefusal(key, "the `requestBody` schema declares no properties, so there is nothing to name as an input") };
+    return { fields, omissions, refusal: inputRefusal(key, "the `requestBody` schema declares no properties, so there is nothing to name as an input") };
   }
 
   // A body that is not itself required makes every one of its properties optional, whatever the
@@ -472,30 +490,43 @@ function collectRequestBody(
     // that collides with a path or query parameter is genuinely inexpressible — and picking a
     // winner silently is how one of the two values disappears.
     if (seenNames.has(property.name)) {
-      return { fields, refusal: inputRefusal(key, `the \`requestBody\` declares '${property.name}', which is already a path or query parameter — one CDL input field cannot carry both`) };
+      return { fields, omissions, refusal: inputRefusal(key, `the \`requestBody\` declares '${property.name}', which is already a path or query parameter — one CDL input field cannot carry both`) };
     }
+
+    // #64/BR-1/BR-3/BR-4: "optional" is the schema's OWN raw `required[]` fact — NEVER the
+    // `bodyRequired`-gated / D-12-lowered value used below for CDL's `required:` field, and
+    // independent of whether the enclosing body itself is required. A property genuinely listed
+    // in `required[]` still refuses (D-7: omitting it would send a request the backend's own
+    // contract calls invalid); an optional one is left out instead.
+    const rawRequired = valueOrUndefined(property.declaredRequired) === true;
 
     // CDL input fields are SCALARS, or (#63 Goal 3) a LIST of scalars. A nested object still has
     // no semantic type, and letting it degrade to `string` would advertise a string parameter
     // for a field the backend needs an object in — a capability that compiles, serves, and
-    // fails every call. An array whose ITEMS are non-scalar is refused the same way (BR-9).
+    // fails every call. An array whose ITEMS are non-scalar is refused the same way when
+    // required, or omitted when optional (#64/BR-1).
     let isList = false;
     let itemNode: DraftNode = property.node;
     if (property.node.kind === "array") {
       if (property.node.items.kind !== "scalar") {
-        return {
-          fields,
-          refusal: inputRefusal(key, `the \`requestBody\` property '${property.name}' is an array of ${property.node.items.kind}; CDL list fields carry only scalar items`),
-        };
+        const detail = `the \`requestBody\` property '${property.name}' is an array of ${property.node.items.kind}; CDL list fields carry only scalar items`;
+        if (rawRequired) return { fields, omissions, refusal: inputRefusal(key, detail) };
+        seenNames.add(property.name);
+        omissions.push(note("input-property-omitted", "field", `${key}#${property.name}`, `array of ${property.node.items.kind}`));
+        continue;
       }
       isList = true;
       itemNode = property.node.items;
     } else if (property.node.kind !== "scalar") {
-      return { fields, refusal: inputRefusal(key, `the \`requestBody\` property '${property.name}' is a ${property.node.kind}; CDL input fields are scalars, and there is no connector construct that could place a nested value`) };
+      const detail = `the \`requestBody\` property '${property.name}' is a ${property.node.kind}; CDL input fields are scalars, and there is no connector construct that could place a nested value`;
+      if (rawRequired) return { fields, omissions, refusal: inputRefusal(key, detail) };
+      seenNames.add(property.name);
+      omissions.push(note("input-property-omitted", "field", `${key}#${property.name}`, property.node.kind));
+      continue;
     }
     // After the guard above, `itemNode` is a DraftScalarNode: either `property.node` itself
     // (the `scalar` branch), or `property.node.items` (the `array` branch, whose own
-    // `.items.kind !== "scalar"` check already refused anything else).
+    // `.items.kind !== "scalar"` check already refused/omitted anything else).
     const scalarItem = itemNode as DraftScalarNode;
 
     seenNames.add(property.name);
@@ -521,7 +552,7 @@ function collectRequestBody(
     });
   }
 
-  return { fields };
+  return { fields, omissions };
 }
 
 export function reduceSecurityScheme(scheme: JsonObject): { headerName: string; valuePrefix: string; scheme?: string } | undefined {
@@ -670,7 +701,24 @@ export function collectOperations(docs: DocumentSet, notes: Note[]): OperationsR
       const response = responseNode(operation, "", ctx);
       const operationNotes = [...ctx.notes, ...response.notes];
 
-      const refusal = parameterRefusal ?? securityRefusal;
+      // #64/BR-9, the floor: omitting every optional-and-unsupported property/parameter must not
+      // leave a candidate with NO input at all — a tool with nothing for the agent to set is not
+      // what the operation meant. Checked only when nothing else already refuses the operation.
+      const allInputFields = [...parameterFields, ...body.fields];
+      const omissionNotes = [...own.omissions, ...shared.omissions, ...body.omissions];
+      let floorRefusal: Note | undefined;
+      if (!parameterRefusal && !securityRefusal && !ctx.fatal && allInputFields.length === 0 && omissionNotes.length > 0) {
+        floorRefusal = inputRefusal(
+          key,
+          "every declared input property/parameter was optional and unsupported; omitting all of them would leave nothing to name as an input, so the operation is refused instead",
+        );
+      }
+
+      const refusal = parameterRefusal ?? securityRefusal ?? floorRefusal;
+      // A refused-by-the-floor operation carries only the refusal, per BR-9 — no phantom
+      // `input-property-omitted` notes for fields nobody will ever see named in a report line
+      // about a tool that does not exist.
+      if (!floorRefusal) operationNotes.push(...omissionNotes);
       if (refusal) operationNotes.push(refusal);
       if (ctx.fatal) operationNotes.push(note(ctx.fatal.code, "operation", key, ctx.fatal.detail));
 
@@ -686,7 +734,7 @@ export function collectOperations(docs: DocumentSet, notes: Note[]): OperationsR
         suggestedAction: action === undefined ? absent<string>() : declared(action, typeof operationId === "string" ? `${key}/operationId` : key),
         description: description === undefined ? absent<string>() : declared(description, key),
         ...(hint ? { effectHint: hint } : {}),
-        input: [...parameterFields, ...body.fields],
+        input: allInputFields,
         // An operation the adapter had to refuse carries an `unknown` response, so the emitter
         // cannot accidentally map half of it: the refusal note is the whole story, and the
         // human sees it at the gate before anything is written.

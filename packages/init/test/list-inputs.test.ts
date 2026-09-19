@@ -98,8 +98,9 @@ describe("Goal 1 boundaries — still refused", () => {
   const REFUSED: ReadonlyArray<readonly [string, ReasonCode, RegExp]> = [
     // BR-2: list items that are themselves non-scalar.
     ["GET /api/v2/items-object-filter", "unsupported-parameter-location", /items are a object/],
-    // EC-3: a style OpenAPI reserves for non-scalar structure.
-    ["GET /api/v2/items-deep-object", "unsupported-parameter-location", /style 'deepObject'/],
+    // #64/BR-6: a REQUIRED `deepObject`-style parameter still refuses — omitting it would send a
+    // request missing a value the backend's own contract demands.
+    ["GET /api/v2/items-deep-object-required", "unsupported-parameter-location", /style 'deepObject'/],
     // EC-5 / founder ruling: query-location lists only.
     ["GET /api/v2/items/{ids}", "unsupported-parameter-location", /in: path` parameter/],
   ];
@@ -112,6 +113,31 @@ describe("Goal 1 boundaries — still refused", () => {
   it.each(REFUSED)("%s emits ZERO files (D-7)", (key) => {
     const result = emit(lists, decisionsFor(key, "items.thing"));
     expect(result.files.size).toBe(0);
+  });
+});
+
+// #64: an OPTIONAL non-form-style (`deepObject`) query parameter used to refuse the whole
+// operation (EC-3). It is now omitted instead — the surviving sibling parameter keeps the
+// candidate alive, and the omission is named with the new reason code.
+describe("#64 — an optional deepObject-style query parameter is omitted, not refused", () => {
+  const KEY = "GET /api/v2/items-deep-object";
+
+  it("is not refused, and `filters` is absent from the candidate's input fields", () => {
+    expect(refusals(KEY)).toEqual([]);
+    expect(operation(KEY).input.find((f) => f.name === "filters")).toBeUndefined();
+    expect(operation(KEY).input.find((f) => f.name === "q")).toBeDefined();
+  });
+
+  it("carries an `input-property-omitted` note naming `filters`", () => {
+    const omissionNotes = operation(KEY).notes.filter((n) => n.code === "input-property-omitted");
+    expect(omissionNotes).toHaveLength(1);
+    expect(omissionNotes[0]!.target).toMatch(/#filters$/);
+    expect(omissionNotes[0]!.detail).toMatch(/style 'deepObject'/);
+  });
+
+  it("emits a capability file (the candidate is not skipped)", () => {
+    const result = emit(lists, decisionsFor(KEY, "items.search-deep-object", "Item"));
+    expect(result.files.get("items.search-deep-object.capability.yaml")).toBeDefined();
   });
 });
 
@@ -154,7 +180,7 @@ describe("no new reason code — R-6's enum is the scope boundary", () => {
     const used = new Set(lists.operations.flatMap((o) => o.notes.map((n) => n.code)));
     for (const code of used) {
       expect(
-        ["unsupported-parameter-location", "unsupported-media-type", "unsupported-ref", "unsupported-composition", "composition-conflict", "semantic-type-degraded", "failures-not-emitted", "identity-ref-not-inferred", "pagination-not-modeled"],
+        ["unsupported-parameter-location", "unsupported-media-type", "unsupported-ref", "unsupported-composition", "composition-conflict", "semantic-type-degraded", "failures-not-emitted", "identity-ref-not-inferred", "pagination-not-modeled", "input-property-omitted"],
         `unexpected reason code '${code}' — adding one is a scope decision`,
       ).toContain(code);
     }
