@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.23.0]
+
 ### Added
 
 - **`archstone init`: an unsupported OPTIONAL input is omitted, not a full-operation refusal**
