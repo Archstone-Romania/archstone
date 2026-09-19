@@ -119,6 +119,18 @@ describe("#64/BR-3/BR-4 — required (even if nullable) always refuses, never om
     const result = emit(crate, decisionsFor(key, "shipments.thing"));
     expect(result.files.size).toBe(0);
   });
+
+  it("a non-scalar property in required[] still refuses even when the requestBody itself is optional (BR-2/BR-3/EC-1)", () => {
+    // Trap 2 (PM note) / EC-1: `requestBody.required: false` makes every property optional
+    // WHEN nothing else says otherwise — but the schema's own `required[]` is a stronger,
+    // independent fact, and it still names `contents`. Reading `bodyRequired` as if it
+    // rescued this property would omit a field the backend's own contract demands.
+    const key = "POST /v1/shipments/{id}/manifest";
+    expect(refusals(key)).toContain("unsupported-parameter-location");
+    expect(omissionsOf(key)).toEqual([]);
+    const result = emit(crate, decisionsFor(key, "shipments.thing"));
+    expect(result.files.size).toBe(0);
+  });
 });
 
 describe("#64/BR-9 — the floor: omission cannot leave a tool with no inputs", () => {
