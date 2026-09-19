@@ -1,0 +1,227 @@
+openapi: 3.1.0
+
+# ISSUE #63'S OWN E2E DOCUMENT — a small, self-contained OpenAPI document exercising every
+# Goal this issue touches, plus its two still-refused boundaries, in one place:
+#   - an exploded list-valued query parameter (Goal 1)
+#   - a non-exploded (comma-joined) list-valued query parameter (Goal 1)
+#   - an ordinary scalar query parameter on a DELETE
+#   - a query parameter coexisting with a JSON body carrying an array-of-scalars property
+#     (Goal 2 + Goal 3 together)
+#   - a body property that is an array of OBJECTS — still refused (BR-9)
+#   - a path parameter whose schema is an array — still refused (query-location lists only)
+#
+# SYNTHETIC, invented for this test. "Bookshelf" has no relationship to any real API.
+
+info:
+  title: Bookshelf API
+  version: 1.0.0
+
+servers:
+  - url: https://api.bookshelf.test/v1
+
+paths:
+  /books:
+    get:
+      summary: List books, filterable by an exploded list of tags
+      operationId: listBooks
+      security: []
+      parameters:
+        - name: tags
+          in: query
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching books.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [books]
+                properties:
+                  books:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Book'
+
+  /books/search:
+    get:
+      summary: Search books by a comma-joined list of authors
+      operationId: searchBooks
+      security: []
+      parameters:
+        - name: authors
+          in: query
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching books.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [books]
+                properties:
+                  books:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Book'
+
+  /books/{id}:
+    delete:
+      summary: Delete a book, optionally skipping the confirmation step
+      operationId: deleteBook
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: confirm
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '204':
+          description: Deleted.
+
+  /books/{id}/reviews:
+    post:
+      summary: Add a review to a book, tagging it with a list of scalar labels
+      operationId: addBookReview
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: notify
+          in: query
+          required: false
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+
+  /books/{id}/links:
+    post:
+      summary: Attach related links to a book — an array-of-objects body property, still refused
+      operationId: addBookLinks
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [references]
+              properties:
+                references:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                      note:
+                        type: string
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+
+  /books/batch/{isbns}:
+    get:
+      summary: Fetch several books by a list-valued PATH parameter — still refused
+      operationId: getBooksByIsbns
+      security: []
+      parameters:
+        - name: isbns
+          in: path
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching books.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [books]
+                properties:
+                  books:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Book'
+
+components:
+  schemas:
+    Book:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+    Review:
+      type: object
+      properties:
+        id:
+          type: string
+        body:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
