@@ -15,6 +15,22 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **`archstone init`: an unsupported OPTIONAL input is omitted, not a full-operation refusal**
+  (`@archstone/init`, #64) — a request-body property or query parameter whose shape the
+  connector cannot carry (a nested object, an array of non-scalars, or an object-valued/
+  `deepObject` query parameter) used to skip the whole operation the moment it appeared, even
+  when the source itself declared the field optional. It is now left out of the candidate's
+  `input:` fields instead, named with a new non-skipping reason code
+  (`input-property-omitted`), and reported at the confirmation gate; the emitted
+  `*.capability.yaml` carries a comment next to `input:` naming every field left out and why. A
+  property or parameter genuinely listed in the schema's own `required[]` — regardless of a
+  `nullable: true` declaration, and regardless of whether the enclosing request body is itself
+  required — still refuses exactly as before, since omitting it would send a request the
+  backend's own contract calls invalid. An operation whose only inputs are optional-and-
+  unsupported still refuses too: omission never leaves a tool with nothing for the agent to set.
+
 ## [0.22.1]
 
 ### Added

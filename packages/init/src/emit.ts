@@ -610,6 +610,19 @@ function renderCapabilityFile(draft: DraftModel, record: DecisionRecord, plan: P
     // value, which is why the emitter cannot see the adapter's hint at all (D-3).
     cw.entry("effect", plan.decision.effect, "confirmed at the gate — never inferred");
 
+    // #64/BR-11, MANDATORY: every OPTIONAL input this run left out (a nested object, an array
+    // of non-scalars, or an object-valued/`deepObject` query parameter — none of which the
+    // connector can carry) is named here, adjacent to `input:`. The report line is a one-time
+    // fact; this comment is what a reviewer reads in a PR six months later.
+    const omitted = plan.operation.notes.filter((n) => n.code === "input-property-omitted");
+    if (omitted.length > 0) {
+      cw.blank();
+      cw.comment([
+        "omitted by init — optional, and not expressible as a CDL input:",
+        ...omitted.map((n) => `  ${n.target?.split("#").pop() ?? "?"} (${n.detail ?? "unsupported shape"})`),
+      ]);
+    }
+
     if (plan.input.length > 0) {
       cw.blank();
       cw.block("input", (iw) => writeFieldMap(iw, plan.input));

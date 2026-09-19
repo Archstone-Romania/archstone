@@ -56,8 +56,20 @@ What it deliberately does **not** do, and why each one matters:
 | write anything to your backend | probes are opt-in (`--probe`), read-only, gated on a confirmed `effect: read` **and** the HTTP method, and refused outright without a terminal for anything but `GET`/`HEAD` |
 | emit a `contract:` it did not record | a fingerprint without a real response makes `archstone verify` green against a fiction |
 
-Anything it cannot express faithfully is **skipped with a named reason and emitted as nothing**
-— never half-written. The report lists every one, plus the per-field things only you can
+Anything it cannot express faithfully is either **omitted** or **refused**, and the two are not
+the same outcome:
+
+- **Omitted** — an OPTIONAL request-body property or query parameter with a shape the connector
+  cannot carry (a nested object, an array of objects, an object-valued query parameter) is left
+  out of the tool's inputs, but the capability is still emitted. The report names it, and the
+  emitted `*.capability.yaml` carries a comment next to `input:` naming every field left out and
+  why. The agent gets a tool that can't set that one field, rather than no tool at all.
+- **Refused** — anything else it cannot express faithfully, including a *required* property or
+  parameter of one of those same unsupported shapes, is **skipped with a named reason and
+  emitted as nothing** — never half-written, and never a request sent without a value the
+  backend's own contract demands.
+
+The report lists every omission and every refusal, plus the per-field things only you can
 decide: which `string` is really a `money`, and which `identifier` is really a `ref:` to a
 resource another capability returns.
 

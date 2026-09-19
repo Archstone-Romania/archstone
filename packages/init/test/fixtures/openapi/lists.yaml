@@ -7,7 +7,8 @@ openapi: 3.1.0
 # `type: array` with scalar items, and a `query` parameter coexisting with a `requestBody`.
 # This document is every variant the adapter has to have an answer for: exploded and
 # non-exploded query lists, the OpenAPI style default, a still-refused path-location list, a
-# still-refused non-scalar-item list, and a still-refused `deepObject` style.
+# still-refused non-scalar-item list, and an OPTIONAL `deepObject`-style parameter, which #64
+# changed from "always refuses" to "omitted, unless required (still refused, #64/BR-6)".
 #
 # SYNTHETIC, same house style as its siblings.
 
@@ -135,13 +136,45 @@ paths:
 
   /items-deep-object:
     get:
-      summary: A list-shaped query parameter declaring a non-form style — still refused
+      summary: An OPTIONAL non-form-style list parameter — omitted (#64), a sibling query param survives
       operationId: listItemsDeepObject
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: filters
+          in: query
+          required: false
+          style: deepObject
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Matching items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+
+  /items-deep-object-required:
+    get:
+      summary: A REQUIRED non-form-style list parameter — still refused (#64/BR-6)
+      operationId: listItemsDeepObjectRequired
       security: []
       parameters:
         - name: filters
           in: query
-          required: false
+          required: true
           style: deepObject
           schema:
             type: array
