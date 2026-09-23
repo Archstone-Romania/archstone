@@ -19,6 +19,12 @@ const read = (p: string): string => readFileSync(resolve(here, p), "utf8");
 const cliSource = read("../src/index.ts");
 const irSource = read("../../compiler/src/ir.ts");
 const restSource = read("../../../providers/rest/src/index.ts");
+// ADR-0012 D-3: `auditSink` (and the rest of the connector-agnostic `InvokeOptions` base)
+// moved out of `providers/rest` into the shared `@archstone/emitter-support` substrate, so
+// every connector (`rest`, `sql`) declares it once, by inheritance, rather than each carrying
+// its own copy. `providers/rest`'s own `InvokeOptions` now only widens the base with what is
+// genuinely REST-specific (`allowedHosts`, `onResponse`).
+const callerSource = read("../../emitter-support/src/caller.ts");
 
 describe("archstone CLI — no audit sink surface anywhere (BR-25, D-8, S-US7.4)", () => {
   it("the CLI source never references an audit sink, a record, or a log path", () => {
@@ -65,12 +71,14 @@ describe("layer purity (BR-42, S-US9.4, S-US9.5)", () => {
     expect(irSource).toMatch(/version: "0"/); // the IR version is unchanged by this increment
   });
 
-  it("providers/rest carries the sink field but NEVER reads it — the type import is the only mention outside the doc comment", () => {
+  it("providers/rest carries the sink field (by inheritance, ADR-0012 D-3) but NEVER reads it", () => {
     // `invokeRest`'s body must not branch on, call, or destructure the sink. Everything after
     // the InvokeOptions declaration is implementation.
     const body = restSource.slice(restSource.indexOf("function fireOnResponse"));
     expect(body).not.toMatch(/auditSink/);
-    // …and it is genuinely declared on the bag, so a deployer keeps one options object.
-    expect(restSource).toMatch(/auditSink\?: AuditSink;/);
+    // …and it is genuinely declared on the shared base every connector's own InvokeOptions
+    // extends, so a deployer keeps ONE options object across `rest` and `sql` bindings alike.
+    expect(callerSource).toMatch(/auditSink\?: AuditSink;/);
+    expect(restSource).toMatch(/extends BaseInvokeOptions/);
   });
 });

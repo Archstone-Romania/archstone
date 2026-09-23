@@ -79,10 +79,28 @@ export interface IRRestConnector {
   query?: Record<string, string | { name?: string; explode?: boolean; onQuery?: true }>;
 }
 
+/**
+ * ADR-0012: a database bound directly as a capability's backend. Postgres only, read-only,
+ * in v1. `dsn` is `${VAR}`-templated exactly as authored (BR-2) — resolved at invoke time by
+ * the sql provider, never at compile time (no network call from `apply`, ADR-0005). `query` is
+ * the entire, author-controlled, statically-declared SQL text; `params` binds it positionally
+ * (`$1..$n`) to declared CDL input field names — there is deliberately no templating mechanism
+ * here for a caller-influenced value (D-1's "the YAML author is not part of the security
+ * boundary").
+ */
+export interface IRSqlConnector {
+  engine: "postgres";
+  dsn: string;
+  statementKind: "select";
+  query: string;
+  params: string[];
+}
+
 /** Backend invocation data copied from the binding (not an emit-target concern). */
 export interface IRConnector {
   type: "rest" | "graphql" | "grpc" | "sql" | "soap";
   rest?: IRRestConnector;
+  sql?: IRSqlConnector; // ADR-0012 D-7 — additive, IR.version stays "0"
 }
 
 /** One resource field ← provider path (ADD-12). `path`/`collection` are validated

@@ -24,7 +24,11 @@ import {
   type ExecutionStatus,
   type ExecutionDenialReason,
 } from "@archstone/emitter-support";
-import { invokeRest, type FetchLike, type CallerContext, type InvokeOptions } from "@archstone/provider-rest";
+import type { FetchLike, CallerContext } from "@archstone/provider-rest";
+import { invokeConnector, type ConnectorInvokeOptions } from "@archstone/runtime/connector";
+
+// ADR-0012 D-6: the union options type (rest fields + sql fields).
+type InvokeOptions = ConnectorInvokeOptions;
 
 export interface ExecuteOptions {
   /** Injected, Workers-style — execute() never falls back to `process.env` (ADD-0008
@@ -62,6 +66,12 @@ export interface ExecuteOptions {
    *  `invokeRest`. No-store default: a capability declaring `spec.rateLimit` with this absent
    *  DENIES rather than proceeding unlimited — see `evaluateRateLimit`'s doc comment. */
   rateLimitCounter?: InvokeOptions["rateLimitCounter"];
+  /** ADR-0012 D-3 — pure pass-through to `invokeSql` for a `sql`-bound capability; ignored by
+   *  `invokeRest`. See `IdentityAdapter`'s own doc comment (`@archstone/emitter-support`) — set
+   *  once, statically, at construction time, never derived from `input`. */
+  identityAdapter?: InvokeOptions["identityAdapter"];
+  /** ADR-0012 D-4 — pure pass-through to `invokeSql`; ignored by `invokeRest`. */
+  sqlSessionGucPrefix?: InvokeOptions["sqlSessionGucPrefix"];
 }
 
 /** #43 ADD-43 D-11: the embedded rendering of a policy refusal — the `ExecuteResult` sibling of
@@ -216,12 +226,14 @@ export async function executeCapability(
   }
 
   const env = opts?.env ?? {};
-  const result = await invokeRest(tool, input, {
+  const result = await invokeConnector(tool, input, {
     env,
     fetchImpl: opts?.fetchImpl,
     caller: opts?.caller,
     allowedHosts: opts?.allowedHosts,
     onResponse: opts?.onResponse,
+    identityAdapter: opts?.identityAdapter,
+    sqlSessionGucPrefix: opts?.sqlSessionGucPrefix,
   });
   if (!result.ok) {
     // ADD-44 Amendment 2 (archstone#34): `reachedConnector` mirrors `callTool`'s derivation —

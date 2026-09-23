@@ -22,9 +22,12 @@ import {
   type ShapeDiff,
   type ShapeMap,
 } from "@archstone/compiler";
-import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
 import { evaluatePolicy, lifecycleExposure } from "@archstone/emitter-support";
 import { applyResponseMapping } from "./mapping";
+import { invokeConnector, type ConnectorInvokeOptions } from "./connector";
+
+// ADR-0012 D-6: the union options type (rest fields + sql fields, incl. `identityAdapter`).
+type InvokeOptions = ConnectorInvokeOptions;
 // ADD-24: HealthStatus's canonical home moved to @archstone/emitter-support (registry.ts's
 // exposure composition needs it, and runtime depends on emitter-support, never the reverse) —
 // re-exported here, unchanged, so nothing downstream (e.g. the CLI's `HealthStatus` import
@@ -156,6 +159,13 @@ export interface GoldenFixture {
   recordedAt?: string;
   request: Record<string, unknown>;
   expects?: { collectionNonEmpty?: boolean };
+  /**
+   * ADR-0012 D-8 — a DIFFERENT tenant's principal, `sql`-connector bindings only. Every `sql`
+   * binding with a recorded `contract` must also have this recorded, or `runVerify` marks it
+   * 🔴 (BR-17). Unschema'd, exactly like the rest of `GoldenFixture` (internal ADD-37 O-11) —
+   * a `verify`-time artifact, not a manifest input.
+   */
+  negativeIdentity?: { principal: string };
 }
 
 function readFixture(dir: string, path: string): GoldenFixture | undefined {
@@ -190,6 +200,46 @@ function narrateShapeChange(
   const drift = diffShape(contract.shape, liveShape);
   if (!hasShapeDrift(drift)) return { detail: `response shape changed (${fingerprints})` };
   return { detail: `response shape ${shapeDriftSummary(drift)}`, drift };
+}
+
+/**
+ * ADR-0012 D-8 — the mandatory negative isolation test, `sql`-connector bindings only.
+ * Returns `undefined` when there is nothing to report (not a `sql` binding, or the negative
+ * replay proved isolation by returning zero rows); otherwise the exact `detail` string
+ * `verifyTool` reports as a hard 🔴.
+ *
+ * D-8 case 4 (confirmed behavior, not left implicit): a recorded `negativeIdentity` the
+ * configured `identityAdapter` cannot resolve is the IDENTICAL build-failing outcome as an
+ * absent one — distinguished only by the detail string, never a silent skip or an automatic
+ * green.
+ */
+async function checkNegativeIsolation(tool: IRTool, fixture: GoldenFixture, opts?: InvokeOptions): Promise<string | undefined> {
+  if (tool.connector?.type !== "sql") return undefined;
+
+  const negativeIdentity = fixture.negativeIdentity;
+  if (!negativeIdentity) {
+    return "isolation not verified: no negative identity recorded";
+  }
+  const claims = opts?.identityAdapter?.(negativeIdentity.principal);
+  if (!claims) {
+    return "isolation not verified: negative identity did not resolve to any claims";
+  }
+
+  // The IDENTICAL recorded request, replayed under a DIFFERENT principal via the same
+  // `identityAdapter` (D-8 mechanics step 2) — `invokeSql` itself reads `opts.caller.principal`
+  // and resolves claims from it, so overriding `caller` here is the only change needed.
+  const negativeOpts: InvokeOptions = { ...opts, caller: { ...opts?.caller, principal: negativeIdentity.principal } };
+  const result = await invokeConnector(tool, fixture.request, negativeOpts);
+  if (!result.ok) {
+    // The replay itself could not be attempted (e.g. a connection failure) — this proves
+    // NOTHING about isolation either way, so it is reported as unverified, not as a pass.
+    return `isolation not verified: negative replay failed — ${result.error ?? `status ${result.status}`}`;
+  }
+  const rows = Array.isArray(result.data) ? result.data.length : 0;
+  if (rows > 0) {
+    return `isolation test failed: ${rows} foreign row${rows === 1 ? "" : "s"} returned for capability '${tool.id}'`;
+  }
+  return undefined;
 }
 
 /** Verify one tool's contract against the live backend. Returns green/yellow/red — never
@@ -240,7 +290,14 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
     };
   }
 
-  const result = await invokeRest(tool, fixture.request, opts);
+  // ADR-0012 D-8 — for `sql` bindings only, the mandatory negative isolation test runs BEFORE
+  // the positive replay below: an isolation failure is reported on its own terms, with its own
+  // distinct detail string, never conflated with (or masked by) whatever the positive replay
+  // would otherwise report.
+  const isolationDetail = await checkNegativeIsolation(tool, fixture, opts);
+  if (isolationDetail) return { ...base, status: "red", detail: isolationDetail };
+
+  const result = await invokeConnector(tool, fixture.request, opts);
   if (!result.ok) return { ...base, status: "red", detail: `live request failed: ${result.error ?? `status ${result.status}`}` };
 
   const liveFingerprint = fingerprintShape(result.data);
@@ -487,7 +544,7 @@ export async function recordContract(
     return { ...base, outcome: "not-attempted", detail: `policy denied before any request was made: ${decision.denial.message}` };
   }
 
-  const result = await invokeRest(tool, input, opts);
+  const result = await invokeConnector(tool, input, opts);
   if (!result.ok) {
     const error = result.error ?? `status ${result.status}`;
     if (result.status === 0 && NOT_ATTEMPTED_RE.test(error)) {

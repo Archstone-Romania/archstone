@@ -58,6 +58,21 @@ function lowerFields(map: Record<string, unknown> | undefined, canon: Canonicali
 function lowerConnector(raw: Record<string, unknown>): IRConnector | undefined {
   const type = raw.type;
   if (typeof type !== "string" || !CONNECTOR_TYPES.has(type as IRConnector["type"])) return undefined;
+  if (type === "sql") {
+    const connector: IRConnector = { type: "sql" };
+    const sql = raw.sql;
+    if (sql && typeof sql === "object") {
+      const s = sql as Record<string, unknown>;
+      connector.sql = {
+        engine: "postgres",
+        dsn: typeof s.dsn === "string" ? s.dsn : "",
+        statementKind: "select",
+        query: typeof s.query === "string" ? s.query : "",
+        params: Array.isArray(s.params) ? s.params.filter((p): p is string => typeof p === "string") : [],
+      };
+    }
+    return connector;
+  }
   if (type !== "rest") return { type: type as IRConnector["type"] };
 
   const connector: IRConnector = { type: "rest" };

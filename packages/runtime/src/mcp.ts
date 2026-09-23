@@ -7,9 +7,14 @@
 // back-compat so nothing downstream breaks.
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { InvokeOptions } from "@archstone/provider-rest";
 import { buildRegistry } from "./registry";
 import { toolDefinitions, createMcpServer } from "./server";
+import type { ConnectorInvokeOptions } from "./connector";
+
+// ADR-0012 D-6/D-3: the union options type — one child process per conversation (stdio), so a
+// static `invoke.identityAdapter` set here is architecturally sound, same reasoning as
+// `invoke.caller` below.
+type InvokeOptions = ConnectorInvokeOptions;
 
 export { toolName, inputJsonSchema, objectJsonSchema } from "@archstone/emitter-support";
 /** #44: the audit sink surface, re-exported so a deployer wiring `serveStdio`/`createMcpServer`

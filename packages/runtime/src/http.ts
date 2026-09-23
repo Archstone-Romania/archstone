@@ -9,8 +9,14 @@
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Registry } from "@archstone/emitter-support";
-import type { CallerContext, InvokeOptions } from "@archstone/provider-rest";
+import type { CallerContext } from "@archstone/provider-rest";
 import { createMcpServer } from "./server";
+import type { ConnectorInvokeOptions } from "./connector";
+
+// ADR-0012 D-6: the union options type, so a deployer configuring `identityAdapter`/
+// `sqlSessionGucPrefix` here (SF-7 — a construction-time, deployer-supplied option, never a
+// CLI flag or CDL field) reaches every `sql`-bound capability this handler serves.
+type InvokeOptions = ConnectorInvokeOptions;
 
 export { createMcpServer } from "./server";
 
