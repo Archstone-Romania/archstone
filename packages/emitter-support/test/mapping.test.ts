@@ -189,3 +189,196 @@ describe("applyResponseMapping — extract (extends ADD-12)", () => {
     expect(r.data).toEqual({ items: [{ name: "Widget A", price: 9, tag: "sale" }], count: 1 });
   });
 });
+
+// #81 (ADD-12 §8.1) — row-level errors: a `response.onError` discriminator classifies each
+// collection item before the success mapping runs. `shop.RowError` mirrors the "code/message"
+// error shape the ADD names.
+const errorResources: IRResourceRegistry = {
+  ...resources,
+  "shop.RowError": [
+    { name: "code", required: true, type: { kind: "scalar", semantic: "identifier" } },
+    { name: "message", required: false, type: { kind: "scalar", semantic: "text" } },
+  ],
+};
+
+const onErrorMapping: IRTool["response"] = {
+  ...collectionMapping,
+  onError: { errorResource: "shop.RowError", when: { path: "$.code", exists: true } },
+};
+
+describe("applyResponseMapping — onError row-level errors (#81, ADD-12 §8.1)", () => {
+  it("a mixed collection returns the valid row fully mapped, and is not a whole-response violation", () => {
+    const body = {
+      results: [
+        { n: "Widget A", p: 9, t: "sale" },
+        { code: "out-of-stock", message: "no longer available" },
+      ],
+    };
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    expect(r.status).toBe("ok");
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toContainEqual({ $row: "ok", name: "Widget A", price: 9, tag: "sale" });
+  });
+
+  it("a declared error row is present, distinguishable from a succeeding row, without loosening required fields", () => {
+    const body = {
+      results: [
+        { n: "Widget A", p: 9, t: "sale" },
+        { code: "out-of-stock", message: "no longer available" },
+      ],
+    };
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toContainEqual({ $row: "error", code: "out-of-stock", message: "no longer available" });
+    expect(items).toHaveLength(2);
+  });
+
+  it("a row missing a required field, not declared as a row-level error, is a PER-ROW violation — other rows unaffected", () => {
+    const body = {
+      results: [
+        { n: "Widget A", p: 9, t: "sale" }, // valid
+        { n: "Widget B" }, // missing required `price`, no `code` — matches neither shape
+      ],
+    };
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    expect(r.status).toBe("ok"); // at least one usable row — not a whole-response violation
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toEqual([{ $row: "ok", name: "Widget A", price: 9, tag: "sale" }]);
+    expect(r.rowViolations).toEqual([{ index: 1, missing: ["price"] }]);
+  });
+
+  it("every row failing (all declared error rows) reports zero usable rows, distinguishable from an empty collection", () => {
+    const body = { results: [{ code: "a" }, { code: "b" }] };
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    expect(r.status).toBe("ok");
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toHaveLength(2);
+    expect(items.every((i) => i.$row === "error")).toBe(true);
+  });
+
+  it("a successful row is never loosened to accommodate error rows elsewhere in the same call", () => {
+    const body = {
+      results: [
+        { code: "a" }, // declared error row — usable on its own terms
+        { n: "Widget B" }, // missing required `price` — a per-row violation, NOT a DEGRADED pass
+      ],
+    };
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    // The error row is usable, so this is not a whole-response violation — but `price` on the
+    // second row is still enforced as required: it is named as a per-row violation, never
+    // silently dropped to DEGRADED and never present in `data` with `price` missing.
+    expect(r.status).toBe("ok");
+    expect(r.rowViolations).toEqual([{ index: 1, missing: ["price"] }]);
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items.some((i) => i.name === "Widget B")).toBe(false);
+  });
+
+  it("every row failing for real (no usable row at all) IS a whole-response violation", () => {
+    const body = { results: [{ n: "Widget B" }] }; // missing required `price`, no `code` either
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    expect(r.status).toBe("violation");
+    expect(r.missing).toEqual(["price"]);
+    expect(r.rowViolations).toEqual([{ index: 0, missing: ["price"] }]);
+  });
+
+  it("the mixed collection AC scenario: one valid row, one declared error row, one successful-shape row missing a required field", () => {
+    const body = {
+      results: [
+        { n: "Widget A", p: 9, t: "sale" }, // valid
+        { code: "out-of-stock", message: "no longer available" }, // declared error row
+        { n: "Widget C" }, // successful shape, missing required `price`
+      ],
+    };
+    const r = applyResponseMapping(tool(onErrorMapping), body, errorResources);
+    expect(r.status).toBe("ok"); // one usable row keeps this from being a whole-response violation
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toEqual([
+      { $row: "ok", name: "Widget A", price: 9, tag: "sale" },
+      { $row: "error", code: "out-of-stock", message: "no longer available" },
+    ]);
+    expect(r.rowViolations).toEqual([{ index: 2, missing: ["price"] }]);
+  });
+
+  it("without onError declared, a row missing a required field still whole-response VIOLATES exactly as before #81", () => {
+    const body = { results: [{ n: "Widget A", p: 9, t: "sale" }, { n: "Widget B" }] };
+    const r = applyResponseMapping(tool(collectionMapping), body, resources);
+    expect(r.status).toBe("violation");
+    expect(r.missing).toEqual(["price"]);
+    expect(r.rowViolations).toBeUndefined();
+  });
+
+  it("onError.map reads a renamed error field by its own JSONPath, not the same-named-key default", () => {
+    const renamedOnErrorMapping: IRTool["response"] = {
+      ...collectionMapping,
+      onError: {
+        errorResource: "shop.RowError",
+        when: { path: "$.errCode", exists: true },
+        map: [
+          { name: "code", path: "$.errCode" }, // provider calls it `errCode`, not `code`
+          { name: "message", path: "$.errMsg" },
+        ],
+      },
+    };
+    const body = { results: [{ errCode: "out-of-stock", errMsg: "no longer available" }] };
+    const r = applyResponseMapping(tool(renamedOnErrorMapping), body, errorResources);
+    expect(r.status).toBe("ok");
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toEqual([{ $row: "error", code: "out-of-stock", message: "no longer available" }]);
+  });
+
+  it("onError.map omitting a field falls back to the same-named-key default for that field only", () => {
+    const partialMapMapping: IRTool["response"] = {
+      ...collectionMapping,
+      onError: {
+        errorResource: "shop.RowError",
+        when: { path: "$.errCode", exists: true },
+        map: [{ name: "code", path: "$.errCode" }], // `message` has no entry — falls back to $.message
+      },
+    };
+    const body = { results: [{ errCode: "out-of-stock", message: "no longer available" }] };
+    const r = applyResponseMapping(tool(partialMapMapping), body, errorResources);
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toEqual([{ $row: "error", code: "out-of-stock", message: "no longer available" }]);
+  });
+});
+
+// #82 (ADD-12 §8.2) — arrays outside the collection: `extract:` admits an array of one scalar
+// semantic type; all matches, not just the first.
+describe("applyResponseMapping — extract: scalar arrays (#82, ADD-12 §8.2)", () => {
+  const warningsOutput: IRField[] = [{ name: "warnings", required: true, type: { kind: "list", items: "text" } }];
+
+  function toolWithArray(output: IRField[], extract: IRTool["extract"]): IRTool {
+    return {
+      id: "shop.search",
+      description: "",
+      effect: "read",
+      provider: "",
+      policies: [],
+      lifecycle: "stable",
+      input: [],
+      output,
+      extract,
+    };
+  }
+
+  it("a scalar array field is declarable and returns item for item", () => {
+    const t = toolWithArray(warningsOutput, [{ name: "warnings", path: "$.warnings[*]" }]);
+    const r = applyResponseMapping(t, { warnings: ["low stock", "price changed"] }, {});
+    expect(r.status).toBe("ok");
+    expect(r.data).toEqual({ warnings: ["low stock", "price changed"] });
+  });
+
+  it("an empty array is OK, not DEGRADED — the field is present as an empty array", () => {
+    const t = toolWithArray(warningsOutput, [{ name: "warnings", path: "$.warnings[*]" }]);
+    const r = applyResponseMapping(t, { warnings: [] }, {});
+    expect(r.status).toBe("ok");
+    expect(r.data).toEqual({ warnings: [] });
+  });
+
+  it("an undeclared array never reaches structuredContent", () => {
+    const t = toolWithArray(warningsOutput, [{ name: "warnings", path: "$.warnings[*]" }]);
+    const r = applyResponseMapping(t, { warnings: ["a"], extra: ["b", "c"] }, {});
+    expect(r.data).toEqual({ warnings: ["a"] });
+    expect(Object.keys(r.data!)).not.toContain("extra");
+  });
+});

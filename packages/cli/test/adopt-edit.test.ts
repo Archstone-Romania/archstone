@@ -6,12 +6,14 @@ import { applyAdoption, applyContractRecording, type AdoptionEdit } from "../src
 const root = resolve(__dirname, "../../..");
 const resourceYaml = readFileSync(resolve(root, "examples/manifests/tourism/tourism.Stay.resource.yaml"), "utf8");
 const bindingYaml = readFileSync(resolve(root, "examples/manifests/tourism/bindings/tourism.search.binding.yaml"), "utf8");
+const capabilityYaml = readFileSync(resolve(root, "examples/manifests/tourism/tourism.search.capability.yaml"), "utf8");
 
 const boardType: AdoptionEdit = {
   field: "boardType",
   itemPath: "$.boardType",
   semantic: "text",
   description: "What the rate includes — ROOM_ONLY, BREAKFAST, HALF_BOARD or ALL_INCLUSIVE.",
+  kind: "resource-field",
 };
 
 function ok(r: ReturnType<typeof applyAdoption>) {
@@ -21,21 +23,22 @@ function ok(r: ReturnType<typeof applyAdoption>) {
 
 describe("applyAdoption — a review surface survives the edit (ADD-117)", () => {
   it("appends the field to the resource, with required:false and the human's description", () => {
-    const r = ok(applyAdoption(resourceYaml, bindingYaml, [boardType]));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [boardType]));
     expect(r.resource).toContain("    boardType:\n      type: text\n      required: false\n      description:");
     expect(r.resource).toContain("ROOM_ONLY, BREAKFAST, HALF_BOARD or ALL_INCLUSIVE.");
   });
 
   it("appends the JSONPath to the binding's response map, quoted like its neighbours", () => {
-    const r = ok(applyAdoption(resourceYaml, bindingYaml, [boardType]));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [boardType]));
     expect(r.binding).toContain('      boardType: "$.boardType"');
   });
 
   it("changes NOTHING else — every original line survives, in order", () => {
-    const r = ok(applyAdoption(resourceYaml, bindingYaml, [boardType]));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [boardType]));
     for (const [before, after] of [
       [resourceYaml, r.resource],
       [bindingYaml, r.binding],
+      [capabilityYaml, r.capability],
     ]) {
       const originals = before.split("\n");
       const result = after.split("\n");
@@ -53,13 +56,13 @@ describe("applyAdoption — a review surface survives the edit (ADD-117)", () =>
 
   it("keeps every comment the human wrote", () => {
     const comments = (s: string) => s.split("\n").filter((l) => l.trim().startsWith("#"));
-    const r = ok(applyAdoption(resourceYaml, bindingYaml, [boardType]));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [boardType]));
     expect(comments(r.resource)).toEqual(comments(resourceYaml));
     expect(comments(r.binding)).toEqual(comments(bindingYaml));
   });
 
   it("appends inside the block, not after the blank line that ends it", () => {
-    const r = ok(applyAdoption(resourceYaml, bindingYaml, [boardType]));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [boardType]));
     const lines = r.binding.split("\n");
     const mapIdx = lines.findIndex((l) => l.trim() === "map:");
     const addedIdx = lines.findIndex((l) => l.includes("boardType:"));
@@ -71,9 +74,15 @@ describe("applyAdoption — a review surface survives the edit (ADD-117)", () =>
 
   it("applies several fields in one pass", () => {
     const r = ok(
-      applyAdoption(resourceYaml, bindingYaml, [
+      applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [
         boardType,
-        { field: "distanceToBeachM", itemPath: "$.distanceToBeachM", semantic: "quantity", description: "Metres to the nearest beach." },
+        {
+          field: "distanceToBeachM",
+          itemPath: "$.distanceToBeachM",
+          semantic: "quantity",
+          description: "Metres to the nearest beach.",
+          kind: "resource-field",
+        },
       ]),
     );
     expect(r.resource).toContain("    distanceToBeachM:");
@@ -81,30 +90,75 @@ describe("applyAdoption — a review surface survives the edit (ADD-117)", () =>
   });
 
   it("quotes a description that would otherwise break the document", () => {
-    const r = ok(
-      applyAdoption(resourceYaml, bindingYaml, [
-        { ...boardType, description: "Board: what it includes # and a hash" },
-      ]),
-    );
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [{ ...boardType, description: "Board: what it includes # and a hash" }]));
     expect(r.resource).toContain('description: "Board: what it includes # and a hash"');
   });
 
   it("is a no-op for no edits", () => {
-    const r = ok(applyAdoption(resourceYaml, bindingYaml, []));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, []));
     expect(r.resource).toBe(resourceYaml);
     expect(r.binding).toBe(bindingYaml);
+    expect(r.capability).toBe(capabilityYaml);
   });
 
   it("refuses rather than guessing when the block is missing", () => {
-    const r = applyAdoption("resource:\n  name: tourism.Stay\n", bindingYaml, [boardType]);
+    const r = applyAdoption("resource:\n  name: tourism.Stay\n", bindingYaml, capabilityYaml, [boardType]);
     expect(r).toEqual({ ok: false, problem: expect.stringContaining("could not find a 'fields:' block") });
   });
 
   it("refuses rather than guessing when a block is ambiguous", () => {
     const twoMaps = bindingYaml.replace("  contract:", "  response:\n    map:\n      x: \"$.x\"\n\n  contract:");
-    const r = applyAdoption(resourceYaml, twoMaps, [boardType]);
+    const r = applyAdoption(resourceYaml, twoMaps, capabilityYaml, [boardType]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.problem).toContain("refusing to guess");
+  });
+});
+
+// #82 (ADD-12 §8.2): a scalar-array candidate (`kind: "output-array"`) writes the CAPABILITY's
+// own `output:` (a `list:` field) and the binding's `extract:`, never the resource file.
+describe("applyAdoption — output-array edits (#82, ADD-12 §8.2)", () => {
+  const warnings: AdoptionEdit = {
+    field: "warnings",
+    itemPath: "$.warnings[*]",
+    semantic: "text",
+    description: "Non-fatal issues the backend flagged with this search.",
+    kind: "output-array",
+  };
+
+  it("appends a list: field to the capability's output:, not the resource", () => {
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [warnings]));
+    expect(r.capability).toContain("    warnings:\n      list: text\n      required: false\n      description:");
+    expect(r.resource).toBe(resourceYaml); // the resource file is untouched by an output-array edit
+  });
+
+  it("appends to an EXISTING extract: block instead of creating a second one", () => {
+    // The tourism fixture already declares `extract: { totalMatches: ... }`.
+    expect(bindingYaml).toContain("extract:");
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [warnings]));
+    expect(r.binding.match(/^\s*extract:$/gm)).toHaveLength(1);
+    expect(r.binding).toContain('    totalMatches: "$.totalMatches"');
+    expect(r.binding).toContain('    warnings: "$.warnings[*]"');
+  });
+
+  it("appends the JSONPath to the binding's extract:, CREATING the block when a binding has none", () => {
+    const noExtract = bindingYaml.replace(/\n {2}# Extract[\s\S]*?extract:\n {4}totalMatches: "\$\.totalMatches"\n/, "\n");
+    expect(noExtract).not.toContain("extract:");
+    const r = ok(applyAdoption(resourceYaml, noExtract, capabilityYaml, [warnings]));
+    expect(r.binding).toContain('  extract:\n    warnings: "$.warnings[*]"');
+  });
+
+  it("keeps every comment the human wrote in the capability document", () => {
+    const comments = (s: string) => s.split("\n").filter((l) => l.trim().startsWith("#"));
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [warnings]));
+    expect(comments(r.capability)).toEqual(comments(capabilityYaml));
+  });
+
+  it("a resource-field edit and an output-array edit in the same call touch the right files each", () => {
+    const r = ok(applyAdoption(resourceYaml, bindingYaml, capabilityYaml, [boardType, warnings]));
+    expect(r.resource).toContain("boardType:"); // resource-field
+    expect(r.binding).toContain('boardType: "$.boardType"');
+    expect(r.capability).toContain("warnings:"); // output-array
+    expect(r.binding).toContain('warnings: "$.warnings[*]"');
   });
 });
 

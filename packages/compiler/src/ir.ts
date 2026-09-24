@@ -93,6 +93,30 @@ export interface IRFieldMapping {
   requiredOverride?: false; // an explicit loosen: this field may be absent without a VIOLATION
 }
 
+/** A row-level classifier (ADD-12 §8.1): checked, per collection item, either by presence
+ *  (`exists`) or by JSON equality (`equals`) against the value at `path` (relative to
+ *  `collection`, else the body root). Exactly the shape an OpenAPI `oneOf[success,error]`
+ *  `const` discriminator maps onto directly. */
+export interface IRDiscriminator {
+  path: string;
+  equals?: unknown;
+  exists?: boolean;
+}
+
+/** #81 (ADD-12 §8.1): a `response:` mapping's row-level error discriminator. `errorResource`
+ *  is a second, error-shaped resource, resolved the same way `resource` is (P-7); `when`
+ *  classifies each collection item BEFORE the success mapping runs — a match maps against
+ *  `errorResource` and never touches the success resource's required-ness; a non-match maps
+ *  against `resource` exactly as without this block. */
+export interface IRResponseOnError {
+  errorResource: string; // canonical (P-7) resource name
+  when: IRDiscriminator;
+  /** errorResource field ← provider path, same shape as the success `map:` (IRFieldMapping[]).
+   *  Optional: a field with no entry here falls back to a same-named key on the item
+   *  (`$.<fieldName>`) — the pre-existing default when the block omits its own `map:`. */
+  map?: IRFieldMapping[];
+}
+
 /**
  * How a live provider response maps onto a named resource (binding `response:`).
  * The RESOURCE is the anchor: `map` binds resource fields to provider paths, and the
@@ -105,6 +129,7 @@ export interface IRResponseMapping {
   field: string; // the output field the mapped array/object populates (D-7)
   collection?: string; // JSONPath to the item list; absent = single object at the body root
   fields: IRFieldMapping[];
+  onError?: IRResponseOnError; // #81 (ADD-12 §8.1); absent = every row mapped against `resource`
 }
 
 /**

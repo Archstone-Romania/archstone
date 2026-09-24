@@ -351,6 +351,65 @@ rules are identical to `response:`'s, just sourced from the output field itself 
 resource registry entry for a scalar), and a missing field from either block merges into
 the same single violation rather than reporting two.
 
+**A scalar ARRAY field outside the collection** (ADD-12 §8.2's amendment, issue #82) — a
+`warnings` list, a set of tags — declares its output field as a **List** (`list: text`,
+§4.3 of the CDL spec), then `extract:` reads it the same way, except every match counts,
+not just the first:
+
+```yaml
+  # capability output: warnings: { list: text }
+  extract:
+    warnings: "$.warnings[*]"   # every match, body-root — an empty match set is OK, not DEGRADED
+```
+
+An array of scalars is the only shape `extract:` admits this way — an array of *objects*
+still has no home outside `response:`'s one resource-typed output field (D-7), and
+`archstone adopt` refuses one it observes with `array-of-objects-unresolved` rather than
+guessing a shape for it.
+
+**Row-level errors inside the collection** (ADD-12 §8.1, issue #81) — when a provider's
+collection can return a mix of successful rows and per-row failures in the SAME response
+(a batch search where one leg 500s, one line item is back-ordered), declare a second,
+error-shaped Resource (`code`/`message` is the common case) and point `response.onError` at
+it with a discriminator that classifies each row BEFORE the success mapping runs:
+
+```yaml
+  response:
+    collection: "$.results[*]"
+    resource: Accommodation
+    map:
+      name: "$.name"
+      # ...
+    onError:
+      errorResource: SearchRowError    # a second Resource: code (required), message (optional)
+      when:
+        path: "$.error"                # relative to one collection item, same as `map:`'s paths
+        exists: true                   # or: equals: <a literal, e.g. a status discriminator>
+      map:                             # optional — omit entirely if the provider's error row
+        code: "$.error.code"           # already uses the same-named keys as `errorResource`
+        message: "$.error.reason"
+```
+
+`onError.map` is optional and, when present, the same shape as the top-level `map:` (JSONPath
+or `{path, required: false}`), keyed by `errorResource` field name — a field with no entry
+there falls back to a same-named key on the item (`$.code`, `$.message` above). Declare it
+whenever the provider's error shape doesn't already match `errorResource`'s field names
+verbatim.
+
+A row matching `when` is mapped against `errorResource` and tagged `$row: "error"` in
+`structuredContent`; every other row is mapped against `resource` exactly as without
+`onError`, tagged `$row: "ok"`, required fields enforced **in full** — a successful row is
+never loosened just because another row in the same call failed. A row matching neither
+shape (missing a required success field, and not a declared error) is a **per-row**
+violation: named, dropped from the returned array, never silently folded into every other
+row's result. The whole call still fails closed (`isError: true`, the usual
+`contract_violation` shape) only when **every** row in a non-empty collection turns out
+unusable — one good row is enough to make the call succeed. `outputSchema` reflects this
+directly: a collection field bound by an `onError`-bearing mapping advertises
+`items: { oneOf: [<success shape, tagged>, <error shape, tagged>] }`, so a reference MCP
+client validates either row kind without complaint. `onError` requires `collection:` — it
+classifies rows of a collection, and a single-object mapping has none to classify.
+
 #### `rest.query` — renaming, list serialization, and query-alongside-body
 
 A REST connector's `rest.query` maps a CDL input field to its wire query-parameter name. The
@@ -1084,8 +1143,11 @@ That is the point rather than a limitation. What lands in your repository is an 
 you review like any other change.
 
 Some fields it will not adopt, and it says why rather than skipping them silently: a boolean
-(CDL has no boolean type), a nested object or array, or anything outside the collection your
-capability maps.
+(CDL has no boolean type), a nested object, an array of objects (refused with reason
+`array-of-objects-unresolved`; such a shape needs a row-level resource declaration core #49
+has not ratified yet), or anything outside the collection your capability maps. **Scalar
+arrays** — an observed set of strings, numbers or other semantic types — **are now adoptable**
+(ADD-12 §8.2) as `list:` fields, populating them via `extract:` paths.
 
 ---
 

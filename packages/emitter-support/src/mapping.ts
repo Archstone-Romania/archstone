@@ -14,22 +14,89 @@
 // (there is no resource registry entry for a scalar field). Both mechanisms write into the SAME
 // `data`/`missing`/`degraded` accumulators below: one `MappingResult`, one merged violation
 // message when either side is missing a required field, never two separate error paths.
+//
+// #82 (ADD-12 §8.2): `extract:` also admits an array of one semantic scalar type — the loop
+// below switches from `firstMatch` to "all matches" when the declared output field's IRType is
+// `list` (issue #63's kind), and an empty match set is OK (mirrors `collection`'s existing
+// empty-is-OK rule below), never DEGRADED.
+//
+// #81 (ADD-12 §8.1): a `response:` mapping may declare `onError` — a row-level discriminator
+// that classifies each collection item BEFORE the success mapping runs. A row matching `when`
+// is mapped against `onError.errorResource` (via `onError.map`, same shape as the success
+// `map:` — a field with no entry there falls back to a same-named key on the item) and tagged
+// `$row: "error"`; every other row is mapped against `resource` exactly as without this block
+// and tagged `$row: "ok"`, required fields enforced in full. A non-error row missing one of
+// those required fields is a PER-ROW violation, named but never silently dropped and never
+// loosening any other row's required-ness. The whole-response VIOLATION fires only when the
+// collection is non-empty and zero rows end up usable (mapped, whether `ok` or `error`).
 
-import { evalPath, type IRResourceRegistry, type IRTool } from "@archstone/compiler";
+import { evalPath, type IRField, type IRResourceRegistry, type IRTool, type IRDiscriminator } from "@archstone/compiler";
 
 export type MappingStatus = "ok" | "degraded" | "violation";
+
+/** One collection row that matched neither the success shape (fully) nor the declared error
+ *  shape — #81's "row missing a required field, and not declared as a row-level error, still
+ *  violates" scenario. Named so a caller can tell it apart from a declared error row (which
+ *  lands in `data`, tagged `$row: "error"`) and from the whole-response VIOLATION (which this
+ *  is deliberately NOT, as long as some other row is usable). */
+export interface RowViolation {
+  index: number; // position in the collection (0-based)
+  missing: string[]; // the resource's required field(s) this row did not carry
+}
 
 export interface MappingResult {
   status: MappingStatus;
   data?: Record<string, unknown>; // { [outputField]: mappedArray | mappedObject } — matches outputSchema
   missing?: string[]; // required fields absent → VIOLATION (fail-closed, no raw fallback)
   degraded?: string[]; // optional fields absent → DEGRADED (returned, field omitted)
+  /** #81: present iff `response.onError` is declared AND at least one row failed to match
+   *  either the success or the declared error shape. Never present without `onError` — without
+   *  it, a row missing a required field is exactly the whole-response VIOLATION it always was. */
+  rowViolations?: RowViolation[];
 }
 
 /** First JSONPath match, or undefined when the path resolves to nothing. */
 function firstMatch(json: unknown, path: string): unknown {
   const matches = evalPath(json, path);
   return matches.length > 0 ? matches[0] : undefined;
+}
+
+/** #81 — does one collection item match a row-error discriminator? `exists` checks presence at
+ *  `path`; `equals` checks JSON equality against the first match; declaring neither (shape-valid
+ *  but pointless) matches on plain presence, the same floor `exists` alone would give. */
+function matchesDiscriminator(item: unknown, when: IRDiscriminator): boolean {
+  const matches = evalPath(item, when.path);
+  const present = matches.length > 0 && matches[0] !== undefined && matches[0] !== null;
+  if (when.exists !== undefined) return present === when.exists;
+  if ("equals" in when) return present && JSON.stringify(matches[0]) === JSON.stringify(when.equals);
+  return present;
+}
+
+/** Map one declared row (success or #81 error) shape against an item, by field name → path —
+ *  a field with no entry in `byPath` falls back to a same-named key on the item (`$.<name>`),
+ *  the default for both shapes when their own `map:` omits a field. Returns the mapped object
+ *  plus which required fields were absent. */
+function mapRow(
+  item: unknown,
+  fields: IRField[],
+  byPath: Map<string, string> | undefined,
+  tag: "ok" | "error" | undefined,
+): { obj: Record<string, unknown>; missing: string[]; degraded: string[] } {
+  const obj: Record<string, unknown> = {};
+  if (tag) obj.$row = tag;
+  const missing: string[] = [];
+  const degraded: string[] = [];
+  for (const f of fields) {
+    const path = byPath?.get(f.name) ?? `$.${f.name}`;
+    const value = firstMatch(item, path);
+    if (value === undefined || value === null) {
+      if (f.required) missing.push(f.name);
+      else degraded.push(f.name);
+      continue;
+    }
+    obj[f.name] = value;
+  }
+  return { obj, missing, degraded };
 }
 
 /**
@@ -48,38 +115,95 @@ export function applyResponseMapping(tool: IRTool, body: unknown, resources: IRR
 
   const missing = new Set<string>();
   const degraded = new Set<string>();
+  const rowViolations: RowViolation[] = [];
   const data: Record<string, unknown> = {};
+  let wholeResponseViolation = false;
 
   if (mapping) {
     const resourceFields = resources[mapping.resource] ?? [];
     const requiredByName = new Map(resourceFields.map((f) => [f.name, f.required]));
+    const pathByName = new Map(mapping.fields.map((fm) => [fm.name, fm.path]));
+    // The success shape's field list is `mapping.fields` (only the fields THIS binding
+    // declares a path for — a resource field with no `map:` entry is simply never populated,
+    // exactly as before #81), with required-ness read from the resource registry and
+    // `requiredOverride` folded in so `mapRow`'s generic required check applies uniformly.
+    const successFields: IRField[] = mapping.fields.map((fm) => ({
+      name: fm.name,
+      required: (requiredByName.get(fm.name) ?? true) && fm.requiredOverride !== false,
+      type: { kind: "scalar", semantic: "text" }, // unused by mapRow below; required-ness is all that matters here
+    }));
     const items: unknown[] = mapping.collection ? evalPath(body, mapping.collection) : [body];
-    const mapped: Record<string, unknown>[] = [];
+    const onError = mapping.onError;
+    // errorResource's OWN `map:` (optional — a delta ratified after §8.1's initial shipment):
+    // same field-mapping shape as the success `map:`. A field with no entry here falls back to
+    // `mapRow`'s same-named-key default (`$.<fieldName>`) — the pre-existing behaviour.
+    const errorPathByName = new Map((onError?.map ?? []).map((fm) => [fm.name, fm.path]));
+    const errorRequiredOverrideByName = new Map((onError?.map ?? []).map((fm) => [fm.name, fm.requiredOverride]));
+    const errorFields: IRField[] = (resources[onError?.errorResource ?? ""] ?? []).map((f) => ({
+      name: f.name,
+      required: f.required && errorRequiredOverrideByName.get(f.name) !== false,
+      type: { kind: "scalar", semantic: "text" }, // unused by mapRow below; required-ness is all that matters here
+    }));
 
-    for (const item of items) {
-      const obj: Record<string, unknown> = {};
-      for (const fm of mapping.fields) {
-        const value = firstMatch(item, fm.path);
-        const required = (requiredByName.get(fm.name) ?? true) && fm.requiredOverride !== false;
-        if (value === undefined || value === null) {
-          if (required) missing.add(fm.name);
-          else degraded.add(fm.name);
-          continue;
-        }
-        obj[fm.name] = value;
+    if (!onError) {
+      // Unchanged pre-#81 behaviour: every row mapped against `resource`, any missing required
+      // field anywhere is a whole-response VIOLATION (no per-row distinction to make).
+      const mapped: Record<string, unknown>[] = [];
+      for (const item of items) {
+        const { obj, missing: rowMissing, degraded: rowDegraded } = mapRow(item, successFields, pathByName, undefined);
+        rowMissing.forEach((m) => missing.add(m));
+        rowDegraded.forEach((d) => degraded.add(d));
+        mapped.push(obj);
       }
-      mapped.push(obj);
+      data[mapping.field] = mapping.collection ? mapped : mapped[0];
+    } else {
+      // #81: classify each row first. A declared error row is mapped against `errorResource`
+      // and tagged; everything else is mapped against `resource`, tagged, and a row that fails
+      // required-ness there is a PER-ROW violation — named, dropped from `data`, never folded
+      // into the shared `missing` set (which would wrongly fail every OTHER row too).
+      const mapped: Record<string, unknown>[] = [];
+      let usable = 0;
+      items.forEach((item, index) => {
+        if (matchesDiscriminator(item, onError.when)) {
+          const { obj, missing: rowMissing } = mapRow(item, errorFields, errorPathByName, "error");
+          if (rowMissing.length > 0) {
+            rowViolations.push({ index, missing: rowMissing });
+          } else {
+            mapped.push(obj);
+            usable++;
+          }
+          return;
+        }
+        const { obj, missing: rowMissing, degraded: rowDegraded } = mapRow(item, successFields, pathByName, "ok");
+        if (rowMissing.length > 0) {
+          rowViolations.push({ index, missing: rowMissing });
+        } else {
+          rowDegraded.forEach((d) => degraded.add(d));
+          mapped.push(obj);
+          usable++;
+        }
+      });
+      data[mapping.field] = mapped;
+      if (items.length > 0 && usable === 0) wholeResponseViolation = true;
     }
-    data[mapping.field] = mapping.collection ? mapped : mapped[0];
   }
 
   if (extract) {
     // Body-root only, deliberately: `extract:` never scopes into `mapping.collection`'s items —
     // it reaches capability-level scalars, not per-item fields (that stays `response.map`'s job).
-    const requiredByName = new Map(tool.output.map((f) => [f.name, f.required]));
+    const outputByName = new Map(tool.output.map((f) => [f.name, f]));
     for (const fm of extract) {
+      const field = outputByName.get(fm.name);
+      const required = (field?.required ?? true) && fm.requiredOverride !== false;
+
+      if (field?.type.kind === "list") {
+        // #82: an array output field — ALL matches, not just the first. An empty match set is
+        // OK (mirrors `collection`'s existing empty-is-OK rule above), never DEGRADED.
+        data[fm.name] = evalPath(body, fm.path);
+        continue;
+      }
+
       const value = firstMatch(body, fm.path);
-      const required = (requiredByName.get(fm.name) ?? true) && fm.requiredOverride !== false;
       if (value === undefined || value === null) {
         if (required) missing.add(fm.name);
         else degraded.add(fm.name);
@@ -89,8 +213,21 @@ export function applyResponseMapping(tool: IRTool, body: unknown, resources: IRR
     }
   }
 
-  if (missing.size > 0) return { status: "violation", missing: [...missing] };
-  return degraded.size > 0 ? { status: "degraded", data, degraded: [...degraded] } : { status: "ok", data };
+  if (missing.size > 0 || wholeResponseViolation) {
+    // Every row failed (#81's "every row fails" scenario): `missing` never accumulated
+    // per-row failures (that would wrongly implicate every OTHER row), so when it is what
+    // makes this a whole-response VIOLATION, name the union of what each failing row lacked —
+    // `contractViolationMessage` still has something to say.
+    if (missing.size === 0) for (const rv of rowViolations) rv.missing.forEach((m) => missing.add(m));
+    const result: MappingResult = { status: "violation", missing: [...missing] };
+    if (rowViolations.length > 0) result.rowViolations = rowViolations;
+    return result;
+  }
+  const status: MappingStatus = degraded.size > 0 ? "degraded" : "ok";
+  const result: MappingResult = { status, data };
+  if (degraded.size > 0) result.degraded = [...degraded];
+  if (rowViolations.length > 0) result.rowViolations = rowViolations;
+  return result;
 }
 
 /**

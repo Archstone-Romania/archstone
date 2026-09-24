@@ -13,16 +13,26 @@ import { yamlKey, yamlScalar } from "@archstone/init";
 import type { SemanticType } from "@archstone/compiler";
 
 export interface AdoptionEdit {
-  /** The resource field name, e.g. `boardType`. */
+  /** The resource field name (`"resource-field"`) or output field name (`"output-array"`,
+   *  #82), e.g. `boardType` or `warnings`. */
   field: string;
-  /** The JSONPath written into the binding's `response.map`, relative to a collection item. */
+  /** The path written into the binding's `response.map` (relative to a collection item) or,
+   *  for `"output-array"`, into `extract:` (body-root, all-matches — `$.foo[*]`). */
   itemPath: string;
   semantic: SemanticType;
   /** Typed by a human at the gate — never generated (ADD-117 D-4). */
   description: string;
+  /** Mirrors `AdoptableField.kind` (#82, `@archstone/runtime`'s `planAdoption`) — which file(s)
+   *  this edit targets and how. `"resource-field"` (pre-#82, the default): the mapped
+   *  RESOURCE gains a `type:` field, the binding's `response.map` gains an entry.
+   *  `"output-array"`: the CAPABILITY's own `output:` gains a `list:` field, the binding's
+   *  `extract:` (created if the binding declares none yet) gains an entry. */
+  kind: "resource-field" | "output-array";
 }
 
-export type ApplyResult = { ok: true; resource: string; binding: string } | { ok: false; problem: string };
+export type ApplyResult =
+  | { ok: true; resource: string; binding: string; capability: string }
+  | { ok: false; problem: string };
 
 /** One document in, one document out — `applyAdoption`'s two-file result would leave a caller
  *  holding an empty `resource` that means nothing. */
@@ -103,40 +113,105 @@ function insert(lines: string[], at: number, added: string[]): string[] {
 }
 
 /**
- * Append adopted fields to a resource document and to a binding's response map.
+ * Locate `path` as a nested block, or CREATE it as a fresh, empty child of the block one level
+ * up when it does not exist yet (#82) — a binding with no `extract:` at all is the ordinary
+ * case (most bindings only ever needed `response:`), and refusing to adopt a scalar-array
+ * candidate for that reason would make `archstone adopt` offer something it cannot do.
+ *
+ * Only the LAST path segment is created; every segment before it must already exist (a binding
+ * missing `binding:` itself is not this function's problem to solve).
+ */
+function nestOrCreate(lines: string[], path: string[]): { lines: string[]; block: Block } | { problem: string } {
+  const parentPath = path.slice(0, -1);
+  const key = path[path.length - 1];
+
+  const existing = nest(lines, path);
+  if (!("problem" in existing)) return { lines, block: existing };
+
+  const parent = parentPath.length === 0 ? { end: lines.length, indent: "" } : nest(lines, parentPath);
+  if ("problem" in parent) return parent;
+
+  // The new header joins the parent's other direct children, so it MUST be inserted before the
+  // parent's own body ends — `parent.end` is exactly that boundary.
+  const headerIndent = parent.indent.length > 0 ? parent.indent : "  ";
+  const withHeader = insert(lines, parent.end, [`${headerIndent}${key}:`]);
+  const block = nest(withHeader, path);
+  if ("problem" in block) return block; // defensive — the header we just wrote should always resolve
+  return { lines: withHeader, block };
+}
+
+/**
+ * Append adopted fields to a resource document, a capability document, and a binding.
  *
  * `required: false` is written unconditionally (ADD-117 D-3): one observation is not evidence
  * the provider always returns the field, and a wrongly-required field turns the next absent
  * value into a fail-closed VIOLATION on a capability that worked yesterday.
+ *
+ * Branches on `edit.kind` (#82): a `"resource-field"` edit appends a `type:` field to the
+ * RESOURCE document and an entry to the binding's `response.map`; an `"output-array"` edit
+ * appends a `list:` field to the CAPABILITY document's `output:` and an entry to the binding's
+ * `extract:` (created via `nestOrCreate` if the binding declares none yet). The two kinds never
+ * mix within one call in practice (`archstone adopt` batches by tool), but nothing here assumes
+ * that — each edit is routed by its own `kind`.
  */
-export function applyAdoption(resourceYaml: string, bindingYaml: string, edits: AdoptionEdit[]): ApplyResult {
-  if (edits.length === 0) return { ok: true, resource: resourceYaml, binding: bindingYaml };
+export function applyAdoption(resourceYaml: string, bindingYaml: string, capabilityYaml: string, edits: AdoptionEdit[]): ApplyResult {
+  if (edits.length === 0) return { ok: true, resource: resourceYaml, binding: bindingYaml, capability: capabilityYaml };
+
+  const resourceEdits = edits.filter((e) => e.kind === "resource-field");
+  const arrayEdits = edits.filter((e) => e.kind === "output-array");
 
   let resourceLines = resourceYaml.split("\n");
-  const fields = nest(resourceLines, ["resource", "fields"]);
-  if ("problem" in fields) return { ok: false, problem: `resource: ${fields.problem}` };
+  let bindingLines = bindingYaml.split("\n");
+  let capabilityLines = capabilityYaml.split("\n");
 
-  const added: string[] = [];
-  for (const e of edits) {
-    added.push(
-      `${fields.indent}${yamlKey(e.field)}:`,
-      `${fields.indent}  type: ${yamlScalar(e.semantic)}`,
-      `${fields.indent}  required: false`,
-      `${fields.indent}  description: ${yamlScalar(e.description)}`,
+  if (resourceEdits.length > 0) {
+    const fields = nest(resourceLines, ["resource", "fields"]);
+    if ("problem" in fields) return { ok: false, problem: `resource: ${fields.problem}` };
+    const added: string[] = [];
+    for (const e of resourceEdits) {
+      added.push(
+        `${fields.indent}${yamlKey(e.field)}:`,
+        `${fields.indent}  type: ${yamlScalar(e.semantic)}`,
+        `${fields.indent}  required: false`,
+        `${fields.indent}  description: ${yamlScalar(e.description)}`,
+      );
+    }
+    resourceLines = insert(resourceLines, fields.end, added);
+
+    const map = nest(bindingLines, ["binding", "response", "map"]);
+    if ("problem" in map) return { ok: false, problem: `binding: ${map.problem}` };
+    bindingLines = insert(
+      bindingLines,
+      map.end,
+      resourceEdits.map((e) => `${map.indent}${yamlKey(e.field)}: ${yamlScalar(e.itemPath)}`),
     );
   }
-  resourceLines = insert(resourceLines, fields.end, added);
 
-  let bindingLines = bindingYaml.split("\n");
-  const map = nest(bindingLines, ["binding", "response", "map"]);
-  if ("problem" in map) return { ok: false, problem: `binding: ${map.problem}` };
-  bindingLines = insert(
-    bindingLines,
-    map.end,
-    edits.map((e) => `${map.indent}${yamlKey(e.field)}: ${yamlScalar(e.itemPath)}`),
-  );
+  if (arrayEdits.length > 0) {
+    const output = nestOrCreate(capabilityLines, ["capability", "output"]);
+    if ("problem" in output) return { ok: false, problem: `capability: ${output.problem}` };
+    capabilityLines = output.lines;
+    const added: string[] = [];
+    for (const e of arrayEdits) {
+      added.push(
+        `${output.block.indent}${yamlKey(e.field)}:`,
+        `${output.block.indent}  list: ${yamlScalar(e.semantic)}`,
+        `${output.block.indent}  required: false`,
+        `${output.block.indent}  description: ${yamlScalar(e.description)}`,
+      );
+    }
+    capabilityLines = insert(capabilityLines, output.block.end, added);
 
-  return { ok: true, resource: resourceLines.join("\n"), binding: bindingLines.join("\n") };
+    const extract = nestOrCreate(bindingLines, ["binding", "extract"]);
+    if ("problem" in extract) return { ok: false, problem: `binding: ${extract.problem}` };
+    bindingLines = insert(
+      extract.lines,
+      extract.block.end,
+      arrayEdits.map((e) => `${extract.block.indent}${yamlKey(e.field)}: ${yamlScalar(e.itemPath)}`),
+    );
+  }
+
+  return { ok: true, resource: resourceLines.join("\n"), binding: bindingLines.join("\n"), capability: capabilityLines.join("\n") };
 }
 
 /**

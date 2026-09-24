@@ -451,3 +451,76 @@ describe("validateSemantics — response/extract mapping (ADD-12, extended by th
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// #81 (ADD-12 §8.1): row-level errors — `response.onError`.
+describe("validateSemantics — response.onError (#81, ADD-12 §8.1)", () => {
+  function withOnErrorBinding(onError: string, opts?: { noCollection?: boolean }): string {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-onerror-"));
+    const collection = opts?.noCollection ? "" : '    collection: "$.results[*]"\n';
+    const files: Record<string, string> = {
+      "capabilities.yaml": "company:\n  id: acme\ncapabilities:\n  - shop.search\nproviders:\n  - store\n",
+      "shop.search.capability.yaml":
+        "capability:\n  id: shop.search\n  description: find\n  effect: read\n  provider: store\n  output:\n    items:\n      collection: Widget\n",
+      "shop.Widget.resource.yaml": "resource:\n  name: shop.Widget\n  fields:\n    name:\n      type: text\n",
+      "shop.RowError.resource.yaml": "resource:\n  name: shop.RowError\n  fields:\n    code:\n      type: identifier\n    message:\n      type: text\n      required: false\n",
+      "bindings/shop.search.binding.yaml":
+        `binding:\n  capabilityId: shop.search\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /x\n  response:\n${collection}    resource: Widget\n    map:\n      name: "$.n"\n    onError:\n${onError}`,
+    };
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(dir, rel);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
+    return dir;
+  }
+
+  it("a clean onError block (errorResource resolves, when.path parses) is silent", () => {
+    const dir = withOnErrorBinding('      errorResource: RowError\n      when:\n        path: "$.code"\n        exists: true\n');
+    expect(errors(validateSemantics(load(dir)))).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an onError.errorResource that does not resolve (unknown-response-onerror-resource)", () => {
+    const dir = withOnErrorBinding('      errorResource: Ghost\n      when:\n        path: "$.code"\n        exists: true\n');
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("unknown-response-onerror-resource");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an invalid onError.when JSONPath (bad-response-path)", () => {
+    const dir = withOnErrorBinding('      errorResource: RowError\n      when:\n        path: "$.["\n        exists: true\n');
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-response-path");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags onError declared without a collection (response-onerror-without-collection)", () => {
+    const dir = withOnErrorBinding('      errorResource: RowError\n      when:\n        path: "$.code"\n        exists: true\n', { noCollection: true });
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("response-onerror-without-collection");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a clean onError.map (renamed field) is silent", () => {
+    const dir = withOnErrorBinding(
+      '      errorResource: RowError\n      when:\n        path: "$.errCode"\n        exists: true\n      map:\n        code: "$.errCode"\n        message: "$.errMsg"\n',
+    );
+    expect(errors(validateSemantics(load(dir)))).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an onError.map key that is not a field of errorResource (unknown-response-onerror-field)", () => {
+    const dir = withOnErrorBinding(
+      '      errorResource: RowError\n      when:\n        path: "$.code"\n        exists: true\n      map:\n        bogus: "$.x"\n',
+    );
+    const e = errors(validateSemantics(load(dir))).find((x) => x.code === "unknown-response-onerror-field");
+    expect(e).toBeDefined();
+    expect(e!.message).toMatch(/bogus/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an invalid onError.map JSONPath (bad-response-path)", () => {
+    const dir = withOnErrorBinding(
+      '      errorResource: RowError\n      when:\n        path: "$.code"\n        exists: true\n      map:\n        code: "$.["\n',
+    );
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-response-path");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
