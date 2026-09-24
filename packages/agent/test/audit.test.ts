@@ -86,7 +86,7 @@ describe("execute() — one record per attempt, consumer fixed to function-calli
     });
     expect(s.records[0].status.phase).toBe("failed");
     expect(s.records[0].status.message).toBe(r.error);
-    expect(s.records[0].status.message).toBe("capability 'banking.generate-statement' has no REST connector");
+    expect(s.records[0].status.message).toBe("capability 'banking.generate-statement' has no connector");
   });
 
   it("records a violation as failed with the SAME sentence the MCP path returns, and a degraded as succeeded (BR-15, BR-17, BR-44)", async () => {

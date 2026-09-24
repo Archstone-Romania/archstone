@@ -61,6 +61,35 @@ describe("emitter-support — no MCP SDK / node:fs / node:path reachable from sr
     }
     expect(violations).toEqual([]);
   });
+
+  // ADR-0012 D-3/D-5 — `caller.ts` carries the shared `CallerContext`/base `InvokeOptions`/
+  // `IdentityAdapter` types both `providers/rest` and `providers/sql` extend, but it must
+  // import NEITHER of them back (that would be a circular WORKSPACE dependency — both providers
+  // already depend on `@archstone/emitter-support` for these very types) — and it must never
+  // import `pg` directly. A manifest with a `sql`-bound capability compiles fine (D-5's own
+  // claim), which requires this package to stay completely unaware of the Postgres driver.
+  it("no source file imports @archstone/provider-sql or pg (D-5 edge/stateless exclusion)", () => {
+    const violations: { file: string; spec: string }[] = [];
+    for (const file of walk(src)) {
+      for (const spec of collectImports(file)) {
+        if (/^@archstone\/provider-sql/.test(spec) || spec === "pg") violations.push({ file: relative(file), spec });
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});
+
+describe("@archstone/compiler — no pg/provider-sql reachable (D-5)", () => {
+  const compilerSrc = resolve(here, "../../compiler/src");
+  it("the IR/compiler layer stays unaware of the sql provider — data only, IRConnector.sql is a plain object", () => {
+    const violations: { file: string; spec: string }[] = [];
+    for (const file of walk(compilerSrc)) {
+      for (const spec of collectImports(file)) {
+        if (/^@archstone\/provider-sql/.test(spec) || spec === "pg") violations.push({ file: relative(file), spec });
+      }
+    }
+    expect(violations).toEqual([]);
+  });
 });
 
 function relative(file: string): string {

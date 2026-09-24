@@ -11,7 +11,15 @@ import type { IRTool } from "@archstone/compiler";
 // below. The type is owned by the layer that acts on it (beside the policy evaluator and the
 // record builder), and this package merely carries the field so a deployer keeps ONE options
 // bag. Same shape of dependency as @archstone/agent type-importing `CallerContext` from here.
-import type { AuditSink, RateLimitCounter } from "@archstone/emitter-support";
+// ADR-0012 D-3: `CallerContext` and the connector-agnostic half of `InvokeOptions` moved to
+// `@archstone/emitter-support` — the shared substrate every connector (`rest`, `sql`, and
+// whatever comes next) extends. Re-exported here as a TYPE ALIAS, non-breaking: every existing
+// `import type { CallerContext } from "@archstone/provider-rest"` call site keeps working
+// unchanged (internal ADD-32 D-2 explicitly deferred this move to "the first non-REST
+// connector" — this is that connector).
+import type { CallerContext, FetchLike, InvokeOptions as BaseInvokeOptions } from "@archstone/emitter-support";
+
+export type { CallerContext, FetchLike } from "@archstone/emitter-support";
 
 export interface InvokeResult {
   ok: boolean;
@@ -20,62 +28,7 @@ export interface InvokeResult {
   error?: string;
 }
 
-export type FetchLike = typeof globalThis.fetch;
-
-/**
- * A fact about ONE invocation — never about the compiled artifact (ADD-32 D-1). The IR is
- * reused across many invocations by many different end users; a caller credential lives only
- * in invoke-context types (here, and threaded through `agent`'s `ExecuteOptions` / `runtime`'s
- * `serveStdio`/`createHttpHandler`), never in `IRTool`/`IR`.
- */
-export interface CallerContext {
-  /** The end user's bearer token, supplied by a host that has already authenticated them
-   *  (Archstone does not host an OIDC broker). Undefined means "no caller supplied" — the
-   *  fail-closed gate below distinguishes that from an explicit `""`, which is treated as
-   *  present (ADD-32 §3/R-6, mirrors this file's existing env-var precedent). */
-  accessToken?: string;
-  /** Reserved for `tenant-scoped` policy enforcement — NOT enforced by ADD-32 (D-4/R-5), and
-   *  deliberately still not enforced by #43 (BR-39: tenant scoping is a third axis, distinct
-   *  from credential-presence and identity, and is refused rather than absorbed as a side
-   *  effect of a policy increment). The shape carries this now so a future increment doesn't
-   *  need a second breaking change to `CallerContext`; nothing reads this field yet. */
-  tenantId?: string;
-  /**
-   * WHO this invocation acts on behalf of — the caller's identity, as opposed to `accessToken`,
-   * which is a credential to act WITH (ADD-42 D-2/D-3; two fields, never merged: #44's audit
-   * record must always carry the principal and must never carry the credential).
-   *
-   * **Asserted by the host, never verified by Archstone.** Archstone does not parse, decode,
-   * split, normalize, or validate this value at any entry point, ever (ADD-42 D-1) — it is an
-   * opaque, deployer-chosen string, matched byte-for-byte against a policy's `allow`/`deny`
-   * entries and nothing more. Its trustworthiness is exactly the trustworthiness of the host's
-   * own authentication and no more: if the host reads a JWT's `sub` without verifying the
-   * signature against the issuer's JWKS, Archstone will faithfully authorize on an
-   * attacker-controlled string and #44 will faithfully record it. Archstone cannot detect this.
-   *
-   * Absent means ANONYMOUS, not denied (ADD-42 D-4) — there is no sentinel value. An absent
-   * principal simply satisfies no `allow` entry, so a capability that must not be invoked
-   * anonymously says so by declaring one. Supplying a principal does NOT satisfy
-   * `policies: [authenticated]`, which still requires `accessToken` (D-7).
-   *
-   * Usable in `${caller.principal}` interpolation with zero new mechanism, via the existing
-   * `resolveCaller()` pass below (ADD-42 D-10) — the common enterprise shape where a backend is
-   * reached with a service account that accepts a trusted identity header.
-   */
-  principal?: string;
-}
-
-export interface InvokeOptions {
-  env?: Record<string, string | undefined>;
-  fetchImpl?: FetchLike;
-  /** ADD-32: the end user this specific invocation acts on behalf of. `invokeRest` uses it for
-   *  `${caller.NAME}` placeholder substitution ONLY — it makes no authorization decision from
-   *  it, so an absent caller changes nothing here beyond leaving those placeholders unresolved
-   *  (which fails closed on its own, as a missing value rather than a refusal).
-   *
-   *  Whether a caller is REQUIRED — `policies: [authenticated]` — is decided upstream at the
-   *  one evaluation point (#43), not in this file. Do not look for that gate here. */
-  caller?: CallerContext;
+export interface InvokeOptions extends BaseInvokeOptions {
   /**
    * Security-hardening follow-up to ADD-32: a **deployer-level policy**, static for the whole
    * process/deployment — set once at construction time, like `bearerToken` elsewhere in this
@@ -143,73 +96,9 @@ export interface InvokeOptions {
   // Return type is `void | Promise<void>` (not just `void`) so a caller may supply an async
   // callback (OQ-1) — invokeRest never awaits either variant; see fireOnResponse below.
   onResponse?: (info: { capabilityId: string; status: number; data: unknown; durationMs: number }) => void | Promise<void>;
-  /**
-   * Issue #44 / ADD-44: the `Execution` audit sink — one record per invocation ATTEMPT.
-   *
-   * **`invokeRest` never reads, calls, or branches on this field.** It rides this bag so that a
-   * deployer wires one options object (the same one they already pass `env`/`caller` in) and so
-   * that every shipped pass-through — `ExecuteOptions`, `serveStdio`'s `invoke`,
-   * `createHttpHandler`'s/`mcpHandler`'s `invoke` — forwards it with zero new plumbing. The
-   * record is built and emitted by the two AUDITED CONSUMERS, `@archstone/runtime`'s `callTool`
-   * and `@archstone/agent`'s `executeCapability` — the same two sites that call the policy
-   * evaluator, so a path that skips the gate also skips the record instead of emitting one that
-   * falsely implies a gate ran. Do not look for the emission here, and do not add one:
-   * `verifyTool` forwards this identical bag into `invokeRest`, so a sink read in this file
-   * would make "the contract prober emits nothing" unimplementable without a special case.
-   * (This file now does the same for `authenticated`, whose gate #43 moved out of it.)
-   *
-   * See `AuditSink` in `@archstone/emitter-support` for the fire-and-forget contract and for
-   * the statement that the trail is best-effort and lossy.
-   */
-  auditSink?: AuditSink;
-  /**
-   * #44: correlation ids, **passed through to the audit record exactly as the host supplied
-   * them** — never synthesized, defaulted, or derived, and never read by `invokeRest`. Absent
-   * means the key is absent from the record.
-   *
-   * **Scope trap, and it differs from `caller`'s.** On `serveStdio` a value set here is
-   * per-process and architecturally correct — one child process per conversation. On
-   * `createHttpHandler`/`mcpHandler` the handler rebuilds this bag per request as
-   * `{...invoke, caller: resolveCaller?.(request)}`: `caller` is overwritten and therefore
-   * fails loudly, but these two **survive the spread** and silently stamp every concurrent
-   * request with one session. There is no per-request correlation seam on the HTTP surface
-   * today and this increment does not invent one.
-   */
-  sessionId?: string;
-  workflowId?: string;
-  /**
-   * #48: set by `@archstone/runtime`'s `createHttpHandler` for ONE request, when that
-   * request's `resolveCaller` (ADD-32) threw instead of returning. `invokeRest` never reads
-   * this — like `auditSink`/`sessionId` above, it rides the shared options bag purely so the
-   * one caller that needs it (`callTool`, ADD-43's policy evaluation point) can see it without
-   * a second, parallel options type.
-   *
-   * A throwing resolver is strictly less trustworthy than one that returned `undefined`
-   * (identity extraction itself failed, not merely "no credential offered"), so this is
-   * deliberately NOT the same as an absent `caller`: an absent caller still lets an
-   * unauthenticated capability proceed and only fails closed via `policies:[authenticated]`
-   * (`authenticated_no_credential`). This flag instead short-circuits `callTool`'s policy step
-   * straight to a `policy_unevaluatable` denial for EVERY capability in the request, matching
-   * ADD-42 R-11 — an identity-extraction failure must resolve to fail-closed, never to treating
-   * the caller as merely anonymous.
-   */
-  callerResolutionFailed?: boolean;
-  /**
-   * #45 / ADD-45: TYPE-ONLY, exactly like `auditSink` above. `invokeRest` never reads, calls, or
-   * branches on this field — it rides the shared options bag so a deployer wires ONE options
-   * object and every shipped pass-through forwards it with zero new plumbing. The state-owning
-   * counter/store implementation itself must never live in this package (layer purity, ADD-45)
-   * — this is only the deployer-supplied hook, threaded through by the two consumers that call
-   * the rate-limit evaluation step (`@archstone/runtime`'s `callTool`, `@archstone/agent`'s
-   * `executeCapability` — the same two sites that call the policy evaluator). `verifyTool`
-   * deliberately does NOT read this field: rate-limiting `archstone verify` probes is
-   * out-of-scope for #45.
-   *
-   * No-store default: a capability declaring `spec.rateLimit` with this field absent DENIES
-   * (fails closed) rather than silently proceeding unlimited — see `evaluateRateLimit` in
-   * `@archstone/emitter-support` for the full reasoning.
-   */
-  rateLimitCounter?: RateLimitCounter;
+  // `auditSink`, `sessionId`, `workflowId`, `callerResolutionFailed`, `rateLimitCounter` moved
+  // to the shared base (`@archstone/emitter-support`'s `InvokeOptions`, ADR-0012 D-3) — inherited
+  // above, unchanged in meaning and doc comment, now shared verbatim with `providers/sql`.
 }
 
 // Issue #39 (OQ-1/OQ-2/BR-6): fire onResponse synchronously but never await it. A thrown

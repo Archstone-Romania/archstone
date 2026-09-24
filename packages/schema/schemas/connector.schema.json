@@ -65,12 +65,49 @@
         "endpoint": { "type": "string", "format": "uri" },
         "operation": { "type": "string" }
       }
+    },
+    "sql": {
+      "type": "object",
+      "description": "ADR-0012: a database as a first-class backend. Postgres only, read-only, in v1.",
+      "additionalProperties": false,
+      "required": ["engine", "dsn", "statementKind", "query", "params"],
+      "properties": {
+        "engine": {
+          "type": "string",
+          "enum": ["postgres"],
+          "description": "The Postgres wire family only in v1 (ADR-0012 D-2) — not a portable multi-engine abstraction."
+        },
+        "dsn": {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+          "description": "An env-placeholder ONLY — exactly one ${VAR}, nothing else. A literal connection string is refused at `apply` (BR-2)."
+        },
+        "statementKind": {
+          "type": "string",
+          "enum": ["select"],
+          "description": "Closed to `select` in v1 (BR-3) — writes are a later, narrower increment, not built here."
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The entire declared, parameterized SQL text. Never templated with a caller-influenced value — there is no ${caller.NAME} substitution in this grammar, on purpose (D-1)."
+        },
+        "params": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered list of declared CDL input field names, bound positionally to the query's $1..$n placeholders (BR-5)."
+        }
+      }
     }
   },
   "allOf": [
     {
       "if": { "properties": { "type": { "const": "rest" } }, "required": ["type"] },
       "then": { "required": ["rest"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "sql" } }, "required": ["type"] },
+      "then": { "required": ["sql"], "not": { "required": ["rest"] } }
     }
   ]
 }

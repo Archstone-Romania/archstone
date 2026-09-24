@@ -154,6 +154,107 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
     }
   }
 
+  // 3d. ADR-0012 D-2/BR-9 — a pre-existing gap this ADR's dispatch work makes visible, not new
+  // scope for the `sql` provider itself: `graphql`/`grpc`/`soap` are reserved, unimplemented
+  // connector `type` enum members that today compile, are treated as invocable, and fail only
+  // at the moment of invocation with an opaque error. Refuse at `apply` instead — the one place
+  // `invokeConnector` (ADR-0012 D-6) already has to know the closed set of implemented types.
+  const UNIMPLEMENTED_CONNECTOR_TYPES = new Set(["graphql", "grpc", "soap"]);
+  for (const b of bindings) {
+    const type = (b.binding.connector as { type?: unknown } | undefined)?.type;
+    if (typeof type === "string" && UNIMPLEMENTED_CONNECTOR_TYPES.has(type)) {
+      diags.push({
+        severity: "error",
+        code: "connector-type-not-implemented",
+        message: `binding ${b.file} (capability '${b.binding.capabilityId}') declares connector.type: '${type}', which is not implemented — it would compile as invocable and fail only at the moment of invocation`,
+      });
+    }
+  }
+
+  // 3e. ADR-0012 D-1/D-9 layer 1 — static, offline validation of a `sql` binding's own
+  // declared query text, params/CDL-input consistency, and dsn placeholder discipline. No
+  // network call — `apply` stays fully offline for `sql` exactly as it already is for `rest`.
+  const SQL_LEADING_KEYWORD_RE = /^\s*(?:--[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*(select|with)\b/i;
+  const POSITIONAL_PARAM_RE = /\$(\d+)/g;
+  for (const b of bindings) {
+    const connector = b.binding.connector as { type?: unknown; sql?: Record<string, unknown> } | undefined;
+    if (connector?.type !== "sql" || !connector.sql) continue;
+    const cid = b.binding.capabilityId;
+    const cap = byId.get(cid);
+    const sql = connector.sql;
+    const at = `binding ${b.file} (capability '${cid}')`;
+
+    // BR-4 / D-9 layer 1 — the query's own leading keyword must agree with `statementKind`.
+    const query = typeof sql.query === "string" ? sql.query : "";
+    const match = SQL_LEADING_KEYWORD_RE.exec(query);
+    const leadingKeyword = match?.[1]?.toLowerCase();
+    if (leadingKeyword !== "select" && leadingKeyword !== "with") {
+      diags.push({
+        severity: "error",
+        code: "sql-statement-not-read-only",
+        message: `${at}: connector.sql.query must begin with SELECT or WITH … SELECT (after stripping leading whitespace/comments) — statementKind: select does not match the query's own leading keyword`,
+      });
+    } else if (leadingKeyword === "with" && !/\bselect\b/i.test(query)) {
+      // A WITH … that never actually SELECTs is not a read-only CTE.
+      diags.push({
+        severity: "error",
+        code: "sql-statement-not-read-only",
+        message: `${at}: connector.sql.query begins with WITH but contains no SELECT — a CTE must terminate in a read-only SELECT`,
+      });
+    }
+
+    // BR-5 — every `params` entry must be a declared CDL input field; every positional
+    // placeholder ($1, $2, …) in `query` must have a corresponding `params` entry, and vice
+    // versa. "Ambiguous is a refusal, not a guess" (compiler/src/resolve.ts's existing
+    // discipline for resource names, applied here to positional binding).
+    const params = Array.isArray(sql.params) ? sql.params.filter((p): p is string => typeof p === "string") : [];
+    const declaredInputs = new Set(Object.keys((cap?.capability.input ?? {}) as Record<string, unknown>));
+    for (const p of params) {
+      if (cap && !declaredInputs.has(p)) {
+        diags.push({
+          severity: "error",
+          code: "sql-param-unresolved",
+          message: `${at}: connector.sql.params references '${p}', which is not a declared input field of capability '${cid}'`,
+        });
+      }
+    }
+    const placeholderIndices = new Set<number>();
+    for (const m of query.matchAll(POSITIONAL_PARAM_RE)) placeholderIndices.add(Number(m[1]));
+    const maxPlaceholder = placeholderIndices.size > 0 ? Math.max(...placeholderIndices) : 0;
+    if (maxPlaceholder > params.length) {
+      diags.push({
+        severity: "error",
+        code: "sql-param-count-mismatch",
+        message: `${at}: connector.sql.query references $${maxPlaceholder}, but params has only ${params.length} entr${params.length === 1 ? "y" : "ies"}`,
+      });
+    }
+    // A declared params entry that the query never references is equally a mismatch — the two
+    // must agree in both directions (BR-5).
+    for (let i = 1; i <= params.length; i++) {
+      if (!placeholderIndices.has(i)) {
+        diags.push({
+          severity: "error",
+          code: "sql-param-count-mismatch",
+          message: `${at}: connector.sql.params[${i - 1}] ('${params[i - 1]}') has no corresponding $${i} placeholder in the query`,
+        });
+      }
+    }
+
+    // BR-2 — `dsn` must be an environment-variable placeholder ONLY, never a literal
+    // connection string. connector.schema.json's pattern already enforces the exact `${VAR}`
+    // shape at shape-validation time (#2); this is the semantic-layer restatement so the error
+    // is reported alongside every other `sql` diagnostic with a consistent, named message, and
+    // so a schema bypass (e.g. a hand-built IR) is still caught here.
+    const dsn = typeof sql.dsn === "string" ? sql.dsn : "";
+    if (!/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(dsn)) {
+      diags.push({
+        severity: "error",
+        code: "sql-dsn-not-env-placeholder",
+        message: `${at}: connector.sql.dsn must be a single \${VAR} environment-variable placeholder — a literal connection string is not permitted`,
+      });
+    }
+  }
+
   // 4. Resource resolution (P-7) — every `ref`/`collection`/resource-typed name in a
   // capability's input/output AND in a resource's fields (transitively, since every
   // resource's fields are checked here) must resolve to a loaded resource.

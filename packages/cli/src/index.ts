@@ -25,7 +25,7 @@
 //        the real compiler has already compiled (ADD-37). Thin by design — argv, the terminal
 //        gate and report rendering only; everything of substance is in @archstone/init.
 
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createRequire } from "node:module";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,6 +33,7 @@ import { load } from "@archstone/schema";
 import { validateSemantics, compile, type IR } from "@archstone/compiler";
 import { Registry, buildRegistry, serveStdio, runVerify, type HealthStatus } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
+import type { ConnectorInvokeOptions } from "@archstone/runtime/connector";
 import { INIT_USAGE, runInitCmd } from "./init";
 import { runAuditCmd } from "./audit-cmd";
 import { diagnose, formatReport } from "./doctor";
@@ -67,11 +68,15 @@ function printUsage(opts?: { toStderr?: boolean }): void {
     // which is exactly how it came to be missing from the one line a user actually scans.
     "usage: archstone <apply|serve|verify|build|doctor|init|adopt|audit>\n\n" +
       "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
-      "       archstone verify <manifest-dir> [--json] [--sandbox]\n" +
+      "       archstone verify <manifest-dir> [--json] [--sandbox] [--identity-map <file>]\n" +
       "         --sandbox: also replay `write`/`irreversible` fixtures — they are skipped by default,\n" +
       "         because a replay is a real invocation. Only for a backend you know is a sandbox tenant.\n" +
-      "       archstone serve --http <manifest-dir> [--port <n>] [--token <value>]\n" +
-      "         bearer token: --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
+      "       archstone serve [--http] <manifest-dir> [--port <n>] [--token <value>] [--identity-map <file>] [--sql-guc-prefix <prefix>]\n" +
+      "         bearer token (--http only): --token <value>, or the ARCHSTONE_HTTP_TOKEN env var (required — never serves open)\n" +
+      "         --identity-map <file> / ARCHSTONE_IDENTITY_MAP: a JSON file mapping a resolved caller\n" +
+      "         principal to sql session identity claims (ADR-0012) — required for any sql-bound capability\n" +
+      "         to be invocable at all; absent means every sql invocation refuses (fail-closed)\n" +
+      "         --sql-guc-prefix <prefix> / ARCHSTONE_SQL_GUC_PREFIX: session GUC name prefix (default \"app.\")\n" +
       "       archstone doctor <manifest-dir> [--json]  — pre-production checks, offline\n" +
       "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n" +
       "       archstone adopt <manifest-dir>\n" +
@@ -204,7 +209,7 @@ function runBuild(dir: string, outPath: string | undefined): void {
   process.exit(0);
 }
 
-function runServeHttp(dir: string, port: number, token: string | undefined): void {
+function runServeHttp(dir: string, port: number, token: string | undefined, connectorOpts: ConnectorInvokeOptions | undefined): void {
   // Rule #7 / ADD-0008 R-5: fail closed before touching the network — a missing token is a
   // startup error, never a silently-open endpoint. `--token` wins over the env var if both
   // are set; createHttpHandler itself would also throw on empty, but checking here first
@@ -224,7 +229,14 @@ function runServeHttp(dir: string, port: number, token: string | undefined): voi
     process.exit(1);
   }
 
-  const handler = createHttpHandler(built.registry, { bearerToken: token });
+  // ADR-0012: keep the historical, sink-free/callback-free call-site text intact on the
+  // (still default) no-`--identity-map` path — `cli/test/audit-surface.test.ts` and
+  // `cli/test/onresponse-surface.test.ts` pin `createHttpHandler(built.registry, { bearerToken:
+  // token })` byte-for-byte as proof that no options bag reaches this call site by default.
+  // Only WITH `--identity-map`/`ARCHSTONE_IDENTITY_MAP` configured does `invoke` appear at all.
+  const handler = connectorOpts
+    ? createHttpHandler(built.registry, { bearerToken: token, invoke: connectorOpts })
+    : createHttpHandler(built.registry, { bearerToken: token });
   const server = createServer((req, res) => {
     // #49 belt-and-braces: this used to be `void handleHttpRequest(...)`. Fire-and-forget
     // means nothing is attached to the returned promise, so ANY rejection escaping the
@@ -585,7 +597,7 @@ const READ_TWIN_TIP =
   "  Archstone cannot tell you which capability it is: nothing in CDL declares that relationship.\n" +
   "  If this backend really is a sandbox tenant, pass --sandbox.";
 
-async function runVerifyCmd(dir: string, json: boolean, sandbox: boolean): Promise<void> {
+async function runVerifyCmd(dir: string, json: boolean, sandbox: boolean, connectorOpts: ConnectorInvokeOptions | undefined): Promise<void> {
   const res = load(dir);
   const diags = validateSemantics(res);
   const errors = diags.filter((d) => d.severity === "error");
@@ -608,9 +620,19 @@ async function runVerifyCmd(dir: string, json: boolean, sandbox: boolean): Promi
   // audit sink and no per-response callback can reach it. The `--sandbox` path passes an
   // explicit `undefined` in that slot for the same reason, so the scope argument can never be
   // the reason such a bag starts being constructed here.
-  const { results, skipped } = sandbox
-    ? await runVerify(registry.listCapabilities(), dir, registry.ir.resources, undefined, { includeNonRead: true })
-    : await runVerify(registry.listCapabilities(), dir, registry.ir.resources);
+  // ADR-0012: when `--identity-map`/`ARCHSTONE_IDENTITY_MAP` (or `--sql-guc-prefix`) is
+  // configured, forward it as the 4th argument. Absent either flag/env var, both call sites
+  // stay BYTE-FOR-BYTE what they were before this ADR — `cli/test/audit-surface.test.ts` and
+  // `cli/test/onresponse-surface.test.ts` pin the exact source text of both branches as proof
+  // that no options bag (an audit sink, or any other programmatic-only callback) reaches
+  // `runVerify` by default.
+  const { results, skipped } = connectorOpts
+    ? sandbox
+      ? await runVerify(registry.listCapabilities(), dir, registry.ir.resources, connectorOpts, { includeNonRead: true })
+      : await runVerify(registry.listCapabilities(), dir, registry.ir.resources, connectorOpts)
+    : sandbox
+      ? await runVerify(registry.listCapabilities(), dir, registry.ir.resources, undefined, { includeNonRead: true })
+      : await runVerify(registry.listCapabilities(), dir, registry.ir.resources);
 
   // ADD-124 D-6: computed from `results` ONLY, exactly as before. A skip never fails the gate —
   // an all-skipped run exits 0, the same code an all-empty run already produced. Inventing a
@@ -653,6 +675,43 @@ async function runVerifyCmd(dir: string, json: boolean, sandbox: boolean): Promi
 function flagArg(argv: string[], name: string): { value?: string; idx: number } {
   const idx = argv.indexOf(name);
   return { value: idx !== -1 ? argv[idx + 1] : undefined, idx };
+}
+
+/**
+ * ADR-0012 (open question #1 — "verify-time identity source"): the ADR itself leaves the exact
+ * CLI/CI wiring for the deployer-supplied `identityAdapter` (SF-7) unresolved beyond "an env
+ * var? a `--verify-caller` flag?". This CLI's answer: `--identity-map <file>` (or the
+ * `ARCHSTONE_IDENTITY_MAP` env var, so CI needs no flag at all) names a JSON file mapping a
+ * principal string to the identity claims `identityAdapter` would return for it —
+ * `{"tenant-a-session": {"tenantId": "acme"}, "tenant-b-session": {"tenantId": "beta"}}`. This
+ * is deliberately the SIMPLEST mechanism that satisfies D-3's "a pure function of the resolved
+ * principal" contract from a static CLI invocation, not a general identity-provider
+ * integration — a deployer embedding Archstone directly still supplies a real
+ * `identityAdapter` function (SF-7 remains a programmatic, non-CLI surface there).
+ *
+ * `--sql-guc-prefix`/`ARCHSTONE_SQL_GUC_PREFIX` is the same treatment for D-4's
+ * `sqlSessionGucPrefix` (default `"app."`, unchanged if neither is set).
+ *
+ * Returns `undefined` when neither is configured, so every existing CLI surface test pinning
+ * "no `InvokeOptions` bag at all" on the default path is unaffected (`archstone verify` without
+ * `--identity-map` still calls `runVerify` with its exact historical argument count).
+ */
+function resolveConnectorOptions(argv: string[]): ConnectorInvokeOptions | undefined {
+  const identityMapPath = flagArg(argv, "--identity-map").value ?? process.env.ARCHSTONE_IDENTITY_MAP;
+  const gucPrefix = flagArg(argv, "--sql-guc-prefix").value ?? process.env.ARCHSTONE_SQL_GUC_PREFIX;
+  if (!identityMapPath && !gucPrefix) return undefined;
+
+  let map: Record<string, Record<string, string>> = {};
+  if (identityMapPath) {
+    try {
+      map = JSON.parse(readFileSync(resolve(process.cwd(), identityMapPath), "utf8")) as Record<string, Record<string, string>>;
+    } catch (err) {
+      console.error(`archstone: --identity-map '${identityMapPath}' could not be read/parsed — every sql invocation will refuse (fail-closed): ${(err as Error).message}`);
+    }
+  }
+  const opts: ConnectorInvokeOptions = { identityAdapter: (principal) => (principal !== undefined ? map[principal] : undefined) };
+  if (gucPrefix) opts.sqlSessionGucPrefix = gucPrefix;
+  return opts;
 }
 
 /**
@@ -709,9 +768,11 @@ async function main(): Promise<void> {
   const out = flagArg(argv, "--out");
   const port = flagArg(argv, "--port");
   const token = flagArg(argv, "--token");
+  const identityMap = flagArg(argv, "--identity-map");
+  const sqlGucPrefix = flagArg(argv, "--sql-guc-prefix");
 
   const consumed = new Set<number>();
-  for (const f of [out, port, token]) {
+  for (const f of [out, port, token, identityMap, sqlGucPrefix]) {
     if (f.idx !== -1) {
       consumed.add(f.idx);
       consumed.add(f.idx + 1);
@@ -724,18 +785,26 @@ async function main(): Promise<void> {
     runApply(dir);
     return;
   }
+  const connectorOpts = resolveConnectorOptions(argv);
   if (cmd === "serve" && dir && http) {
     // Bearer token: --token wins over ARCHSTONE_HTTP_TOKEN if both are set (Rule #7 —
     // required, never defaults open).
-    runServeHttp(dir, Number(port.value ?? 8787), token.value ?? process.env.ARCHSTONE_HTTP_TOKEN);
+    runServeHttp(dir, Number(port.value ?? 8787), token.value ?? process.env.ARCHSTONE_HTTP_TOKEN, connectorOpts);
     return; // blocks on the HTTP server
   }
   if (cmd === "serve" && dir) {
-    await serveStdio(dir); // blocks on the stdio transport
+    // ADR-0012: same byte-for-byte-preservation discipline as `runServeHttp`/`runVerifyCmd`
+    // above — `serveStdio(dir)` (no second argument) stays the exact call-site text on the
+    // default, no-`--identity-map` path.
+    if (connectorOpts) {
+      await serveStdio(dir, connectorOpts);
+    } else {
+      await serveStdio(dir); // blocks on the stdio transport
+    }
     return;
   }
   if (cmd === "verify" && dir) {
-    await runVerifyCmd(dir, json, sandbox);
+    await runVerifyCmd(dir, json, sandbox, connectorOpts);
     return;
   }
   if (cmd === "build" && dir) {

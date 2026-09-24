@@ -34,7 +34,12 @@ import {
   type ExecutionStatus,
   type PolicyDecision,
 } from "@archstone/emitter-support";
-import { invokeRest, type InvokeOptions } from "@archstone/provider-rest";
+import { invokeConnector, type ConnectorInvokeOptions } from "./connector";
+
+// ADR-0012 D-6: every invocation call site now takes the UNION options type (`rest` fields +
+// `sql` fields), since one registry/manifest may bind some capabilities to `rest` and others to
+// `sql`. Aliased locally as `InvokeOptions` so this file's own signatures read unchanged.
+type InvokeOptions = ConnectorInvokeOptions;
 
 type JsonSchema = Record<string, unknown>;
 
@@ -381,7 +386,7 @@ export async function callTool(
     };
   }
 
-  const result = await invokeRest(tool, args, opts);
+  const result = await invokeConnector(tool, args, opts);
   if (!result.ok) {
     // #44: every attempt that never completed a usable round-trip — unbound capability, missing
     // env var, missing caller credential, no baseUrl, an allowlist rejection, a missing path

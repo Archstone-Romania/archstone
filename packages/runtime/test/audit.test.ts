@@ -222,7 +222,7 @@ describe("callTool — one record per attempt, on every termination point (BR-2,
     await callTool(bankRegistry, "banking.generate-statement", {}, { auditSink: s.sink, fetchImpl: fetchSpy, caller: { accessToken: "caller-token-7d1e" } });
     expect(s.records).toHaveLength(1);
     expect(s.records[0].status.phase).toBe("failed");
-    expect(s.records[0].status.message).toBe("capability 'banking.generate-statement' has no REST connector");
+    expect(s.records[0].status.message).toBe("capability 'banking.generate-statement' has no connector");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
