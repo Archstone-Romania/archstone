@@ -171,7 +171,12 @@ export function toolDefinitions(registry: Registry): McpToolDef[] {
         description: hint ? `${t.description} (${hint.text})` : t.description,
         inputSchema: inputJsonSchema(t.input, resources),
       };
-      if (t.output.length > 0) def.outputSchema = objectJsonSchema(t.output, resources);
+      if (t.output.length > 0) {
+        // #81 (ADD-12 §8.1): a declared `onError` widens the ONE collection field it targets to
+        // admit both row shapes in outputSchema — see objectJsonSchema's own doc comment.
+        const onError = t.response?.onError ? { field: t.response.field, errorResource: t.response.onError.errorResource } : undefined;
+        def.outputSchema = objectJsonSchema(t.output, resources, undefined, onError);
+      }
       const annotations = effectAnnotations(t.effect);
       if (annotations) def.annotations = annotations;
       return def;

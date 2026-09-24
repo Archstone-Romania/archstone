@@ -262,3 +262,37 @@ describe("#7: the open lowering is untouched by the strict one", () => {
     expect(schema.properties.x.type).toBe("object");
   });
 });
+
+// #81 (ADD-12 §8.1): a `response.onError` discriminator widens the outputSchema of the ONE
+// collection field it targets to admit both row shapes.
+describe("objectJsonSchema — onError row shapes in outputSchema (#81, ADD-12 §8.1)", () => {
+  const resources: IRResourceRegistry = {
+    Widget: [{ name: "name", required: true, type: { kind: "scalar", semantic: "text" } }],
+    RowError: [
+      { name: "code", required: true, type: { kind: "scalar", semantic: "identifier" } },
+      { name: "message", required: false, type: { kind: "scalar", semantic: "text" } },
+    ],
+  };
+  const fields: IRField[] = [{ name: "items", required: true, type: { kind: "collection", of: "Widget" } }];
+
+  it("admits both a success-row and an error-row shape for collection items", () => {
+    const schema = objectJsonSchema(fields, resources, undefined, { field: "items", errorResource: "RowError" }) as {
+      properties: { items: { type: string; items: { oneOf: Record<string, unknown>[] } } };
+    };
+    const itemsSchema = schema.properties.items;
+    expect(itemsSchema.type).toBe("array");
+    expect(itemsSchema.items.oneOf).toHaveLength(2);
+    const [success, error] = itemsSchema.items.oneOf as { properties: Record<string, unknown>; required: string[] }[];
+    expect(success.properties).toHaveProperty("name");
+    expect(success.properties).toHaveProperty("$row", { const: "ok" });
+    expect(success.required).toEqual(["name", "$row"]);
+    expect(error.properties).toHaveProperty("code");
+    expect(error.properties).toHaveProperty("$row", { const: "error" });
+    expect(error.required).toEqual(["code", "$row"]);
+  });
+
+  it("leaves every other field, and a tool with no onError, untouched", () => {
+    const plain = objectJsonSchema(fields, resources) as { properties: { items: { items: Record<string, unknown> } } };
+    expect(plain.properties.items.items).not.toHaveProperty("oneOf");
+  });
+});

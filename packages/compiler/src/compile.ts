@@ -5,7 +5,7 @@
 // pass (validateSemantics); it builds what it can regardless.
 
 import type { LoadResult, CapabilityDoc, PolicyDoc } from "@archstone/schema";
-import { SEMANTIC_TYPES, LIFECYCLE_STATES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRFieldMapping, type IRContract, type IRPolicyRule, type Lifecycle, type SemanticType } from "./ir";
+import { SEMANTIC_TYPES, LIFECYCLE_STATES, type IR, type IRTool, type IRField, type IRType, type IRConnector, type IRRestConnector, type IRResourceRegistry, type IRResponseMapping, type IRResponseOnError, type IRDiscriminator, type IRFieldMapping, type IRContract, type IRPolicyRule, type Lifecycle, type SemanticType } from "./ir";
 import { JSON_TYPES, type JsonType, type ShapeMap } from "./fingerprint";
 import { domainOf, resolveResourceName, resourceIndex } from "./resolve";
 
@@ -113,6 +113,20 @@ function lowerFieldMappings(map: Record<string, unknown> | undefined): IRFieldMa
   return fields;
 }
 
+/** Lower a shape-valid `onError` block (#81, ADD-12 §8.1) to a neutral IRResponseOnError.
+ *  Canonicalizes `errorResource` the same way `lowerResponse` canonicalizes `resource`. */
+function lowerOnError(raw: unknown, canon: Canonicalize): IRResponseOnError | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const v = raw as Record<string, unknown>;
+  if (typeof v.errorResource !== "string") return undefined;
+  const whenRaw = v.when as Record<string, unknown> | undefined;
+  if (!whenRaw || typeof whenRaw.path !== "string") return undefined;
+  const when: IRDiscriminator = { path: whenRaw.path };
+  if ("equals" in whenRaw) when.equals = whenRaw.equals;
+  if (typeof whenRaw.exists === "boolean") when.exists = whenRaw.exists;
+  return { errorResource: canon(v.errorResource), when };
+}
+
 /** Lower a shape-valid binding `response:` to a neutral IRResponseMapping. Canonicalizes the
  *  resource name and binds it to its output field; the required set is NOT copied here (the
  *  runtime reads it from the resource registry, so mapping + outputSchema cannot disagree). */
@@ -124,6 +138,8 @@ function lowerResponse(raw: Record<string, unknown>, canon: Canonicalize, output
 
   const mapping: IRResponseMapping = { resource, field, fields: lowerFieldMappings(raw.map as Record<string, unknown> | undefined) };
   if (typeof raw.collection === "string") mapping.collection = raw.collection;
+  const onError = lowerOnError(raw.onError, canon);
+  if (onError) mapping.onError = onError;
   return mapping;
 }
 

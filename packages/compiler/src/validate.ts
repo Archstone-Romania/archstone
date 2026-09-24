@@ -261,6 +261,39 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
             if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} collection has an invalid JSONPath '${resp.collection}': ${p.error}` });
           }
 
+          // #81 (ADD-12 §8.1) — `onError`: `errorResource` resolves (P-7), `when.path` parses,
+          // and the block is meaningless without a `collection` (there is no "row" to classify
+          // for a single-object response).
+          const onError = (resp as Record<string, unknown>).onError as Record<string, unknown> | undefined;
+          if (onError) {
+            if (typeof resp.collection !== "string") {
+              diags.push({ severity: "error", code: "response-onerror-without-collection", message: `${at} declares onError but no collection — onError classifies rows of a collection, and this mapping has none` });
+            }
+            const rawErrorResource = onError.errorResource;
+            if (typeof rawErrorResource !== "string") {
+              diags.push({ severity: "error", code: "bad-response-onerror", message: `${at} onError is missing errorResource` });
+            } else {
+              const resolvedErr = resolveResourceName(rawErrorResource, domain, index);
+              if (!resolvedErr.ok) {
+                const detail =
+                  resolvedErr.reason === "ambiguous"
+                    ? `is ambiguous — it matches both ${resolvedErr.candidates[0]} and ${resolvedErr.candidates[1]}; qualify it`
+                    : `is not defined by any *.resource.yaml`;
+                diags.push({ severity: "error", code: "unknown-response-onerror-resource", message: `${at} onError.errorResource '${rawErrorResource}' ${detail}` });
+              } else if (resolvedErr.canonical === canonical) {
+                diags.push({ severity: "error", code: "bad-response-onerror", message: `${at} onError.errorResource must differ from resource '${canonical}'` });
+              }
+            }
+            const when = onError.when as Record<string, unknown> | undefined;
+            const whenPath = when?.path;
+            if (typeof whenPath !== "string") {
+              diags.push({ severity: "error", code: "bad-response-onerror", message: `${at} onError.when is missing path` });
+            } else {
+              const p = parsePath(whenPath);
+              if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} onError.when has an invalid JSONPath '${whenPath}': ${p.error}` });
+            }
+          }
+
           // D-7: exactly one output field must reference the mapped resource, so the mapped
           // result has one unambiguous home in the tool's output (structuredContent = outputSchema).
           const targets = Object.entries(outputRaw).filter(([, raw]) => {

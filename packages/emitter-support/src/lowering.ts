@@ -78,10 +78,41 @@ function resourceJsonSchema(name: string, resources: IRResourceRegistry, visited
   return lowerObject(fields, resources, next, strict);
 }
 
-function fieldJsonSchema(f: IRField, resources: IRResourceRegistry, visited: ReadonlySet<string>, strict: boolean): JsonSchema {
+/** #81 (ADD-12 §8.1): tag a resource's object schema with `$row: "ok" | "error"` (a `const`
+ *  discriminator — the same shape an OpenAPI `oneOf` import maps its own `const` onto), and
+ *  add `$row` to `required` so a client can always branch on it. */
+function taggedRowSchema(schema: JsonSchema, tag: "ok" | "error"): JsonSchema {
+  const properties = { ...(schema.properties as JsonSchema | undefined), $row: { const: tag } };
+  const required = [...((schema.required as string[] | undefined) ?? []), "$row"];
+  return { ...schema, properties, required };
+}
+
+/** #81: when a `collection:` field is the one `response.onError` targets, its `outputSchema`
+ *  items admit BOTH row shapes (`items: { oneOf: [...] }`) instead of only the success
+ *  resource's — the MCP scenario and the OpenAPI `oneOf` import scenario fall out of the same
+ *  discriminator shape (ADD-12 §8.1). */
+export interface OnErrorFieldSchema {
+  field: string; // the output field name `response:` binds to (D-7)
+  errorResource: string;
+}
+
+function fieldJsonSchema(
+  f: IRField,
+  resources: IRResourceRegistry,
+  visited: ReadonlySet<string>,
+  strict: boolean,
+  onError: OnErrorFieldSchema | undefined,
+): JsonSchema {
   const base: JsonSchema = f.description ? { description: f.description } : {};
   if (f.type.kind === "list") return { ...base, type: "array", items: semanticJsonSchema(f.type.items, f.type.values, strict) };
-  if (f.type.kind === "collection") return { ...base, type: "array", items: resourceJsonSchema(f.type.of, resources, visited, strict) };
+  if (f.type.kind === "collection") {
+    if (onError && onError.field === f.name) {
+      const success = taggedRowSchema(resourceJsonSchema(f.type.of, resources, visited, strict), "ok");
+      const error = taggedRowSchema(resourceJsonSchema(onError.errorResource, resources, visited, strict), "error");
+      return { ...base, type: "array", items: { oneOf: [success, error] } };
+    }
+    return { ...base, type: "array", items: resourceJsonSchema(f.type.of, resources, visited, strict) };
+  }
   if (f.type.kind === "resource") {
     // `ref:`-originated ("by identity") fields are a bare id — never expand through the
     // resource registry (ADD-25 D-2). `type:`/resource-typed ("by representation") fields
@@ -104,11 +135,17 @@ function fieldJsonSchema(f: IRField, resources: IRResourceRegistry, visited: Rea
 }
 
 /** The one walker. Both public lowerings below go through it; neither re-implements it. */
-function lowerObject(fields: IRField[], resources: IRResourceRegistry, visited: ReadonlySet<string>, strict: boolean): JsonSchema {
+function lowerObject(
+  fields: IRField[],
+  resources: IRResourceRegistry,
+  visited: ReadonlySet<string>,
+  strict: boolean,
+  onError?: OnErrorFieldSchema,
+): JsonSchema {
   const properties: JsonSchema = {};
   const required: string[] = [];
   for (const f of fields) {
-    properties[f.name] = fieldJsonSchema(f, resources, visited, strict);
+    properties[f.name] = fieldJsonSchema(f, resources, visited, strict, onError);
     if (f.required) required.push(f.name);
   }
   const schema: JsonSchema = { type: "object", properties };
@@ -118,9 +155,17 @@ function lowerObject(fields: IRField[], resources: IRResourceRegistry, visited: 
 }
 
 /** Lower an IR field list to a JSON Schema object, resolving resource/collection field
- *  types through the registry (typed, described). Used for both input and output schemas. */
-export function objectJsonSchema(fields: IRField[], resources: IRResourceRegistry = {}, visited: ReadonlySet<string> = new Set()): JsonSchema {
-  return lowerObject(fields, resources, visited, false);
+ *  types through the registry (typed, described). Used for both input and output schemas.
+ *  `onError` (#81, ADD-12 §8.1) widens the ONE collection field it names to admit both the
+ *  success and the declared error row shape — pass `tool.response`'s `field`/`onError` when
+ *  generating a tool's outputSchema; omit for input schemas and for every other caller. */
+export function objectJsonSchema(
+  fields: IRField[],
+  resources: IRResourceRegistry = {},
+  visited: ReadonlySet<string> = new Set(),
+  onError?: OnErrorFieldSchema,
+): JsonSchema {
+  return lowerObject(fields, resources, visited, false, onError);
 }
 
 /** Lower IR input fields to a JSON Schema object (the tool's inputSchema). */

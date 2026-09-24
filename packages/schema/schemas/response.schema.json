@@ -38,6 +38,36 @@
           }
         ]
       }
+    },
+    "onError": {
+      "type": "object",
+      "description": "Row-level error discriminator for a `collection:` mapping (ADD-12 §8.1). A row matching `when` is classified as an error row and mapped against `errorResource`; every other row is mapped against `resource` exactly as without this block, required fields enforced in full.",
+      "additionalProperties": false,
+      "required": ["errorResource", "when"],
+      "properties": {
+        "errorResource": {
+          "$ref": "https://archstone.dev/schema/v1/cdl.schema.json#/$defs/resourceName",
+          "description": "A second, error-shaped resource (e.g. code/message), resolved the same way `resource` is (P-7)."
+        },
+        "when": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "JSONPath into a single item (relative to `collection`, else the response root) — the discriminator field."
+            },
+            "equals": {
+              "description": "The row is an error row iff the value at `path` equals this (JSON equality)."
+            },
+            "exists": {
+              "type": "boolean",
+              "description": "The row is an error row iff the value at `path` does/does not resolve to anything."
+            }
+          }
+        }
+      }
     }
   }
 }
