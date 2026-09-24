@@ -497,4 +497,30 @@ describe("validateSemantics — response.onError (#81, ADD-12 §8.1)", () => {
     expect(codes(errors(validateSemantics(load(dir))))).toContain("response-onerror-without-collection");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("a clean onError.map (renamed field) is silent", () => {
+    const dir = withOnErrorBinding(
+      '      errorResource: RowError\n      when:\n        path: "$.errCode"\n        exists: true\n      map:\n        code: "$.errCode"\n        message: "$.errMsg"\n',
+    );
+    expect(errors(validateSemantics(load(dir)))).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an onError.map key that is not a field of errorResource (unknown-response-onerror-field)", () => {
+    const dir = withOnErrorBinding(
+      '      errorResource: RowError\n      when:\n        path: "$.code"\n        exists: true\n      map:\n        bogus: "$.x"\n',
+    );
+    const e = errors(validateSemantics(load(dir))).find((x) => x.code === "unknown-response-onerror-field");
+    expect(e).toBeDefined();
+    expect(e!.message).toMatch(/bogus/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an invalid onError.map JSONPath (bad-response-path)", () => {
+    const dir = withOnErrorBinding(
+      '      errorResource: RowError\n      when:\n        path: "$.code"\n        exists: true\n      map:\n        code: "$.["\n',
+    );
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-response-path");
+    rmSync(dir, { recursive: true, force: true });
+  });
 });

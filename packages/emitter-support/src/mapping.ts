@@ -22,11 +22,11 @@
 //
 // #81 (ADD-12 §8.1): a `response:` mapping may declare `onError` — a row-level discriminator
 // that classifies each collection item BEFORE the success mapping runs. A row matching `when`
-// is mapped against `onError.errorResource` (fields read by same-named key on the item — the
-// error resource has no separate `map:`, it IS the row, per its own field declarations) and
-// tagged `$row: "error"`; every other row is mapped against `resource` exactly as without this
-// block and tagged `$row: "ok"`, required fields enforced in full. A non-error row missing one
-// of those required fields is a PER-ROW violation, named but never silently dropped and never
+// is mapped against `onError.errorResource` (via `onError.map`, same shape as the success
+// `map:` — a field with no entry there falls back to a same-named key on the item) and tagged
+// `$row: "error"`; every other row is mapped against `resource` exactly as without this block
+// and tagged `$row: "ok"`, required fields enforced in full. A non-error row missing one of
+// those required fields is a PER-ROW violation, named but never silently dropped and never
 // loosening any other row's required-ness. The whole-response VIOLATION fires only when the
 // collection is non-empty and zero rows end up usable (mapped, whether `ok` or `error`).
 
@@ -72,13 +72,14 @@ function matchesDiscriminator(item: unknown, when: IRDiscriminator): boolean {
   return present;
 }
 
-/** Map one declared row (success or #81 error) shape against an item, by field name → path
- *  (success) or field name → same-named key on the item (error — no separate `map:`, see file
- *  header). Returns the mapped object plus which required fields were absent. */
+/** Map one declared row (success or #81 error) shape against an item, by field name → path —
+ *  a field with no entry in `byPath` falls back to a same-named key on the item (`$.<name>`),
+ *  the default for both shapes when their own `map:` omits a field. Returns the mapped object
+ *  plus which required fields were absent. */
 function mapRow(
   item: unknown,
   fields: IRField[],
-  byPath: Map<string, string> | undefined, // fieldName -> path, for the success shape only
+  byPath: Map<string, string> | undefined,
   tag: "ok" | "error" | undefined,
 ): { obj: Record<string, unknown>; missing: string[]; degraded: string[] } {
   const obj: Record<string, unknown> = {};
@@ -133,7 +134,16 @@ export function applyResponseMapping(tool: IRTool, body: unknown, resources: IRR
     }));
     const items: unknown[] = mapping.collection ? evalPath(body, mapping.collection) : [body];
     const onError = mapping.onError;
-    const errorFields = onError ? resources[onError.errorResource] ?? [] : [];
+    // errorResource's OWN `map:` (optional — a delta ratified after §8.1's initial shipment):
+    // same field-mapping shape as the success `map:`. A field with no entry here falls back to
+    // `mapRow`'s same-named-key default (`$.<fieldName>`) — the pre-existing behaviour.
+    const errorPathByName = new Map((onError?.map ?? []).map((fm) => [fm.name, fm.path]));
+    const errorRequiredOverrideByName = new Map((onError?.map ?? []).map((fm) => [fm.name, fm.requiredOverride]));
+    const errorFields: IRField[] = (resources[onError?.errorResource ?? ""] ?? []).map((f) => ({
+      name: f.name,
+      required: f.required && errorRequiredOverrideByName.get(f.name) !== false,
+      type: { kind: "scalar", semantic: "text" }, // unused by mapRow below; required-ness is all that matters here
+    }));
 
     if (!onError) {
       // Unchanged pre-#81 behaviour: every row mapped against `resource`, any missing required
@@ -155,7 +165,7 @@ export function applyResponseMapping(tool: IRTool, body: unknown, resources: IRR
       let usable = 0;
       items.forEach((item, index) => {
         if (matchesDiscriminator(item, onError.when)) {
-          const { obj, missing: rowMissing } = mapRow(item, errorFields, undefined, "error");
+          const { obj, missing: rowMissing } = mapRow(item, errorFields, errorPathByName, "error");
           if (rowMissing.length > 0) {
             rowViolations.push({ index, missing: rowMissing });
           } else {

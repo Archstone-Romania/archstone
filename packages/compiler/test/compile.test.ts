@@ -268,6 +268,32 @@ describe("compile — response.onError (#81, ADD-12 §8.1)", () => {
     });
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("lowers onError.map alongside errorResource/when, same shape as the success map:", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-onerror-map-"));
+    writeFileSync(join(dir, "capabilities.yaml"), "company:\n  id: acme\ncapabilities:\n  - shop.search\nproviders:\n  - store\n");
+    writeFileSync(
+      join(dir, "shop.search.capability.yaml"),
+      "capability:\n  id: shop.search\n  description: find\n  effect: read\n  provider: store\n  output:\n    items:\n      collection: Widget\n",
+    );
+    writeFileSync(join(dir, "shop.Widget.resource.yaml"), "resource:\n  name: shop.Widget\n  fields:\n    name:\n      type: text\n");
+    writeFileSync(
+      join(dir, "shop.RowError.resource.yaml"),
+      "resource:\n  name: shop.RowError\n  fields:\n    code:\n      type: identifier\n    message:\n      type: text\n      required: false\n",
+    );
+    mkdirSync(join(dir, "bindings"), { recursive: true });
+    writeFileSync(
+      join(dir, "bindings", "shop.search.binding.yaml"),
+      'binding:\n  capabilityId: shop.search\n  connector:\n    type: rest\n    rest:\n      method: GET\n      path: /x\n  response:\n    collection: "$.results[*]"\n    resource: Widget\n    map:\n      name: "$.n"\n    onError:\n      errorResource: RowError\n      when:\n        path: "$.errCode"\n        exists: true\n      map:\n        code: "$.errCode"\n        message:\n          path: "$.errMsg"\n          required: false\n',
+    );
+    const ir = compile(load(dir));
+    const tool = ir.tools.find((t) => t.id === "shop.search")!;
+    expect(tool.response?.onError?.map).toEqual([
+      { name: "code", path: "$.errCode" },
+      { name: "message", path: "$.errMsg", requiredOverride: false },
+    ]);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("compile — contract snapshot (ADD-18)", () => {

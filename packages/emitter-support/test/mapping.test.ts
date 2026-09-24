@@ -306,6 +306,40 @@ describe("applyResponseMapping — onError row-level errors (#81, ADD-12 §8.1)"
     expect(r.missing).toEqual(["price"]);
     expect(r.rowViolations).toBeUndefined();
   });
+
+  it("onError.map reads a renamed error field by its own JSONPath, not the same-named-key default", () => {
+    const renamedOnErrorMapping: IRTool["response"] = {
+      ...collectionMapping,
+      onError: {
+        errorResource: "shop.RowError",
+        when: { path: "$.errCode", exists: true },
+        map: [
+          { name: "code", path: "$.errCode" }, // provider calls it `errCode`, not `code`
+          { name: "message", path: "$.errMsg" },
+        ],
+      },
+    };
+    const body = { results: [{ errCode: "out-of-stock", errMsg: "no longer available" }] };
+    const r = applyResponseMapping(tool(renamedOnErrorMapping), body, errorResources);
+    expect(r.status).toBe("ok");
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toEqual([{ $row: "error", code: "out-of-stock", message: "no longer available" }]);
+  });
+
+  it("onError.map omitting a field falls back to the same-named-key default for that field only", () => {
+    const partialMapMapping: IRTool["response"] = {
+      ...collectionMapping,
+      onError: {
+        errorResource: "shop.RowError",
+        when: { path: "$.errCode", exists: true },
+        map: [{ name: "code", path: "$.errCode" }], // `message` has no entry — falls back to $.message
+      },
+    };
+    const body = { results: [{ errCode: "out-of-stock", message: "no longer available" }] };
+    const r = applyResponseMapping(tool(partialMapMapping), body, errorResources);
+    const items = r.data!.items as Record<string, unknown>[];
+    expect(items).toEqual([{ $row: "error", code: "out-of-stock", message: "no longer available" }]);
+  });
 });
 
 // #82 (ADD-12 §8.2) — arrays outside the collection: `extract:` admits an array of one scalar

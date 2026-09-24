@@ -385,7 +385,16 @@ it with a discriminator that classifies each row BEFORE the success mapping runs
       when:
         path: "$.error"                # relative to one collection item, same as `map:`'s paths
         exists: true                   # or: equals: <a literal, e.g. a status discriminator>
+      map:                             # optional — omit entirely if the provider's error row
+        code: "$.error.code"           # already uses the same-named keys as `errorResource`
+        message: "$.error.reason"
 ```
+
+`onError.map` is optional and, when present, the same shape as the top-level `map:` (JSONPath
+or `{path, required: false}`), keyed by `errorResource` field name — a field with no entry
+there falls back to a same-named key on the item (`$.code`, `$.message` above). Declare it
+whenever the provider's error shape doesn't already match `errorResource`'s field names
+verbatim.
 
 A row matching `when` is mapped against `errorResource` and tagged `$row: "error"` in
 `structuredContent`; every other row is mapped against `resource` exactly as without

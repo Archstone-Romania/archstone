@@ -111,6 +111,10 @@ export interface IRDiscriminator {
 export interface IRResponseOnError {
   errorResource: string; // canonical (P-7) resource name
   when: IRDiscriminator;
+  /** errorResource field ← provider path, same shape as the success `map:` (IRFieldMapping[]).
+   *  Optional: a field with no entry here falls back to a same-named key on the item
+   *  (`$.<fieldName>`) — the pre-existing default when the block omits its own `map:`. */
+  map?: IRFieldMapping[];
 }
 
 /**

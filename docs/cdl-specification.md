@@ -129,7 +129,9 @@ Normative:
   binding concern, out of CDL's own grammar, same as `response:`/`extract:` generally
   (§4.3's opening rule) — see [`docs/ONBOARDING.md`](ONBOARDING.md) for the binding-side
   walkthrough, including the row-level error discriminator (`response.onError`, ADD-12
-  §8.1) a `collection:` mapping may declare.
+  §8.1) a `collection:` mapping may declare — `onError` may carry its own optional `map:`
+  (errorResource field → item-relative JSONPath, same shape as the success `map:`); a field
+  with no entry there falls back to a same-named key on the item.
 
 ### 4.4 `failures`
 

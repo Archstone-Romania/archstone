@@ -66,6 +66,31 @@
               "description": "The row is an error row iff the value at `path` does/does not resolve to anything."
             }
           }
+        },
+        "map": {
+          "type": "object",
+          "description": "errorResource field name → JSONPath into a single item (relative to `collection`, else the response root) — same shape as the top-level `map:`. Optional: a field with no entry here falls back to a same-named key on the item (`$.<fieldName>`).",
+          "minProperties": 1,
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "JSONPath; the mapped field keeps the error resource's own required-ness."
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path"],
+                "properties": {
+                  "path": { "type": "string" },
+                  "required": {
+                    "const": false,
+                    "description": "Only `false` is allowed — a mapping may loosen a required field to degrade gracefully, never tighten one."
+                  }
+                }
+              }
+            ]
+          }
         }
       }
     }

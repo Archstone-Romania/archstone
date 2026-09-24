@@ -282,6 +282,23 @@ export function validateSemantics(model: LoadResult): Diagnostic[] {
                 diags.push({ severity: "error", code: "unknown-response-onerror-resource", message: `${at} onError.errorResource '${rawErrorResource}' ${detail}` });
               } else if (resolvedErr.canonical === canonical) {
                 diags.push({ severity: "error", code: "bad-response-onerror", message: `${at} onError.errorResource must differ from resource '${canonical}'` });
+              } else {
+                // onError.map — same shape/validation as the top-level `map:` (a delta ratified
+                // after §8.1's initial shipment): every key must be a field of `errorResource`,
+                // every path must parse. Optional — an entry-less field falls back to a
+                // same-named key on the item (`applyResponseMapping`'s existing default).
+                const errorResourceFields = fieldsByResource.get(resolvedErr.canonical);
+                const onErrorMap = (onError.map ?? {}) as Record<string, unknown>;
+                for (const [key, value] of Object.entries(onErrorMap)) {
+                  if (errorResourceFields && !errorResourceFields.has(key)) {
+                    diags.push({ severity: "error", code: "unknown-response-onerror-field", message: `${at} onError.map maps '${key}', not a field of resource '${resolvedErr.canonical}'` });
+                  }
+                  const path = pathOf(value);
+                  if (typeof path === "string") {
+                    const p = parsePath(path);
+                    if (!p.ok) diags.push({ severity: "error", code: "bad-response-path", message: `${at} onError.map field '${key}' has an invalid JSONPath '${path}': ${p.error}` });
+                  }
+                }
               }
             }
             const when = onError.when as Record<string, unknown> | undefined;

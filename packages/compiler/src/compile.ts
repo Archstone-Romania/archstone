@@ -124,7 +124,13 @@ function lowerOnError(raw: unknown, canon: Canonicalize): IRResponseOnError | un
   const when: IRDiscriminator = { path: whenRaw.path };
   if ("equals" in whenRaw) when.equals = whenRaw.equals;
   if (typeof whenRaw.exists === "boolean") when.exists = whenRaw.exists;
-  return { errorResource: canon(v.errorResource), when };
+  const onError: IRResponseOnError = { errorResource: canon(v.errorResource), when };
+  // errorResource's own `map:` — same field-mapping shape as the success `map:`
+  // (`lowerFieldMappings`), keyed by errorResource field name. Absent/empty ⇒ undefined, so
+  // `applyResponseMapping`'s same-named-key fallback stays the default.
+  const map = lowerFieldMappings(v.map as Record<string, unknown> | undefined);
+  if (map.length > 0) onError.map = map;
+  return onError;
 }
 
 /** Lower a shape-valid binding `response:` to a neutral IRResponseMapping. Canonicalizes the
