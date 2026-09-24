@@ -1,0 +1,247 @@
+# ADR-0012: A `sql` connector — a database as a first-class capability backend
+
+**Status:** 🟡 Proposed (draft — not yet ratified)
+**Date:** 2026-09-23
+**Deciders:** pending (Adrian Bratulescu)
+**Related:** [RFC-0001 CDL](../rfc/0001-capability-definition-language.md) · [ADR-0005](0005-open-core-boundary-artifact-guarantee.md) · [ADR-0008](0008-undeclared-provider-data-never-reaches-a-model.md) · ADD-18 (contract probe/health), ADD-30 (tool-name round-trip / shared-mechanism discipline), ADD-32 (caller credential propagation), ADD-42 (caller principal), ADD-43 (policy evaluation point) — internal architecture documents, referenced here by name only
+**Product source:** internal PM brief, "A database as a first-class backend (the `sql` provider)" — its scope, journeys, success criteria and the constraints in its §9 are treated as binding inputs to this ADR, not re-litigated here.
+
+---
+
+## Context
+
+Archstone compiles CDL capabilities to an IR that today has exactly one invocable connector: `rest`. A large class of read capabilities — "give me a row (or a filtered set of rows) from a table" — is bound to a REST API that exists for no reason other than to be reachable. The product decision (made upstream of this ADR) is that a capability may bind directly to a database, with the same CDL surface, the same declared-shape guarantee (ADR-0008), and the same contract/drift machinery (ADD-18) — and with isolation enforced by the database itself, never by a binding author's WHERE clause.
+
+The following are **product constraints, already decided, and out of scope for this ADR to revisit**:
+
+- No agent-authored SQL, ever; no SQL/table/engine/connection-detail in any `*.capability.yaml` — implementation lives only in the binding, exactly as RFC-0001 already requires for REST.
+- `tenantId`/`userId` are never accepted from model input.
+- Undeclared columns never reach a model (ADR-0008 applies verbatim to a query result).
+- Isolation is enforced by RLS (or RLS-backed views), not by a binding's predicate; a mis-authored binding must not leak.
+- The runtime connects as a non-owner role without `BYPASSRLS`; an over-privileged connection fails closed.
+- Identity arrives as ADD-42's opaque, host-asserted principal, resolved to claims by a deployer-supplied adapter; the core does not parse tokens.
+- v1 is Postgres-only, read-only, enforced by both a declared statement kind and role grants.
+- Free core (ADR-0005): no paywall on `serve` or on running a compiled artifact; no console dependency; no `if (isSaaS)`.
+- Isolation is *proved* by `verify`, never merely asserted in docs.
+
+This ADR answers only what the PM brief left open: the binding grammar, the connector-type/engine shape, the identity-adapter seam, transaction/session mechanics, connection lifecycle across topologies, whether `CallerContext` moves to shared substrate, the contract/fixture shape for a query result, where the negative isolation test is gated, over-privileged-connection detection, and `init`'s inference rules.
+
+---
+
+## Decision
+
+### D-1 — New package, not a mode of `providers/rest`
+
+`@archstone/provider-sql` ships as its **own package**, symmetric with `@archstone/provider-rest`, never merged into it and never eagerly imported by it. This is a hard boundary, not a style preference: the reason is §5 below (stateless/edge exclusion) — a bundler can only tree-shake an *import*, not a runtime branch inside a shared module (the same lesson this codebase already paid for once, wiring `mcpHandler`'s options through unchanged rather than special-casing inside a shared function). If `invokeSql` lived inside `providers/rest`, or if a shared dispatcher statically imported both, any target that must never carry a Postgres driver would carry one anyway.
+
+### D-2 — `CallerContext` and the invoke-context substrate move to `@archstone/emitter-support`, now
+
+ADD-32 R-1 and ADD-42 §2 both named "the first non-REST connector" as the trigger to move `CallerContext` out of `providers/rest` into the shared substrate every consumer already depends on. `sql` is that connector. Decision: move now, not defer again.
+
+- `CallerContext` (with its `accessToken?`, `tenantId?`, `principal?` fields, doc comments and all) moves to `@archstone/emitter-support`. `providers/rest` re-exports it from there — **no import path anyone already depends on breaks**; only the canonical home changes.
+- The placeholder-resolution primitives that are backend-agnostic — the `${VAR}`-against-`env` and `${caller.NAME}`-against-`CallerContext` substitution functions, and the "missing env var(s)"/"missing caller credential(s)" fail-closed convention — move alongside it, as plain exported functions with no HTTP dependency. `providers/rest`'s `resolveEnv`/`resolveCaller` become thin re-exports (or direct calls); `hostMatchesPattern` and the caller-influenced-`baseUrl` allowlist stay in `providers/rest`, because they are meaningless outside "a caller-controlled value can redirect an entire request" — a concept that has no SQL analogue (a DSN is never caller-influenced; see D-4).
+- `@archstone/provider-sql` imports `CallerContext` and the shared placeholder resolver from `@archstone/emitter-support` directly. It has **zero dependency on `providers/rest`.**
+
+This is the direct, no-longer-deferred payment of the debt both ADDs recorded, and it is what lets `sql`'s binding grammar and identity handling reuse `${VAR}`/`${caller.NAME}` with zero new mechanism (mirroring ADD-32 D-10's "arrives for free" pattern) rather than a second, parallel substitution syntax.
+
+### D-3 — `connector.type: "sql"` carries an explicit `engine` discriminator from day one
+
+`connector.schema.json`'s `type` enum already reserves `sql` (alongside the never-implemented `graphql`/`grpc`/`soap`). Today it is unusable — there is no `sql` object and no `if/then` requiring it, so `type: "sql"` currently validates and silently produces an `IRConnector` no provider can invoke.
+
+Decision:
+
+- Add a `sql` object to `connector.schema.json`, required when `type: "sql"` (the same `allOf`/`if`/`then` pattern already used for `rest`).
+- `sql.engine` is **required**, a closed enum with exactly one member in v1: `["postgres"]`. This is deliberately not "Postgres-implied" — Rule #11 makes a shipped primitive permanent, and a *required* field costs nothing to add now (there is no existing `sql` binding to break) while saving a breaking schema change the day a second engine (Snowflake, BigQuery — explicitly out of scope here) is proposed. The engine value is also the honest answer to Challenge 2 in the PM brief: the isolation guarantee this ADR ships is Postgres's mechanism, not a portable property of "SQL," and the schema should say so rather than imply otherwise.
+- `sql.kind` is **required**, `const: "select"` in v1 (shaped as a string so a future `"insert"`/`"update"`/`"call"` is additive, not a rename). This is the *declared*-statement-kind half of the "read-only enforced at more than one level" requirement; §D-9 covers the second (role-grant) half.
+- **`graphql`/`grpc`/`soap` stay reserved, not implemented.** `compiler/src/validate.ts` gains a hard **error** (not the schema's silent pass-through) for any binding declaring one of these three: `"connector-type-not-implemented"`, naming the type and pointing at the roadmap. Today a binding with `type: "graphql"` compiles to an `IRConnector` no emitter can act on and fails, unhelpfully, only at first invocation. That was tolerable when `sql` was equally unimplemented and nobody had written one; it stops being tolerable the moment `sql` ships as a working second connector and `graphql`/`grpc`/`soap` are the only members left with no working sibling to point to as "this shape actually gets used." Fail loud at `apply`/`build` time instead.
+
+### D-4 — Binding grammar: a declared, positionally-parameterized query; a DSN that is always an env placeholder; a session-claims map
+
+The `sql` object on a binding's `connector:` (mirroring `rest`'s `method`/`path`/`headers`/`query`/`body`):
+
+```yaml
+connector:
+  type: sql
+  sql:
+    engine: postgres
+    kind: select
+    dsn: "${SQL_PORTFOLIO_DSN}"
+    query: |
+      SELECT id, name, changed_at, risk_score
+      FROM curated.portfolio_summary
+      WHERE as_of_date = $1
+    params:
+      - asOfDate
+    session:
+      - claim: tenantId
+        setting: app.tenant_id
+```
+
+- **`dsn`** is a string that MUST match the existing `${VAR}` placeholder grammar exactly — never a literal connection string, never a partial template with a literal host/user/password around a `${VAR}`. `compiler/src/validate.ts` gains an error, `"sql-dsn-not-env-placeholder"`, refusing anything else. This is not stricter than REST requires of secrets today; it makes explicit for SQL what was already the convention for `baseUrl`/API keys, because a DSN is the one place a credential and a network target arrive together.
+- **`query`** is the declared, parameterized statement, written exactly as authored — `@archstone/provider-sql` passes it to the driver's parameterized-query call **verbatim**, together with the ordered parameter values. There is no template-string interpolation of any input value into the SQL text, ever; this is the mechanical reason "no agent-authored SQL" holds even for a human-authored binding that made a mistake — a value can only ever arrive as a bound parameter, never as text spliced into the statement.
+- **`params`** is an ordered array of **declared CDL input field names**, positionally bound to `$1`, `$2`, … A name not present among the capability's declared `input` fields is a compile-time error (mirrors `interpolatePath`'s "missing required path parameter(s)" fail-closed convention, but caught earlier, at `apply`, because SQL parameter binding is positional and a mismatch is a shape error, not a runtime-input error).
+- **`session`** is the isolation seam (§D-5/D-6): an ordered list of `{ claim, setting }` pairs. `claim` names a key the identity adapter's resolved claims object is expected to carry (`tenantId` in v1, `userId` later — see §D-6); `setting` is the literal Postgres GUC name the runtime sets via `SET LOCAL` before running `query`. **`session` never appears in `params`, and a claim is never a positional query parameter** — this is deliberate and load-bearing: it is what makes "the manifest author cannot widen the isolation boundary, only narrow it" true. Removing `session:` from a binding does not add a hole the query can fall into, because the query never had a tenant predicate to remove in the first place — the boundary lives in the database's RLS policy, which reads the GUC directly (`current_setting('app.tenant_id', true)`), never in anything this binding's `query` text does or omits.
+- No literal SQL, table, or column name is required to appear in the binding beyond the author's own `query` text — this ADR does not add a second, structured "table/columns" grammar alongside `query`; the parameterized statement *is* the declaration, exactly as `rest.path`/`rest.method` *are* the declaration for HTTP. RFC-0001's existing rule (implementation detail lives in the binding, the capability stays declarative) needs no new mechanism to hold here.
+
+`response:`/`extract:` mapping is **entirely unchanged** — a SQL binding maps its result the same way a REST binding maps a JSON body: `applyResponseMapping` reads declared resource fields by JSONPath against whatever `data` the connector returned (§D-8 defines that shape as a plain JSON array-of-rows, so every existing JSONPath convention — `collection`, per-item `path` — applies without modification).
+
+### D-5 — Transaction and session mechanics: `SET LOCAL` inside an explicit, always-closed transaction is the correctness core
+
+Every invocation of a `sql`-connector tool runs as exactly one transaction, checked out from a pool for its duration and released immediately after:
+
+```
+BEGIN [READ ONLY];
+SET LOCAL <setting_1> = <claim_value_1>;   -- one per `session` entry
+SET LOCAL <setting_2> = <claim_value_2>;
+SELECT ...  -- the declared, parameterized query
+COMMIT;     -- or ROLLBACK on any error, including a claims/session failure
+```
+
+Decisions, in order of how much correctness rides on them:
+
+- **`SET LOCAL`, never `SET`.** `SET LOCAL` scopes a GUC to the current transaction and is unwound automatically at `COMMIT` or `ROLLBACK`, before the connection returns to the pool — this is a Postgres guarantee, not application discipline. A pooled connection **cannot** carry one caller's `app.tenant_id` into the next borrower's transaction, because there is no code path (including an exception) that returns a connection to the pool without a transaction boundary having closed first.
+- **Every code path closes the transaction.** A query error, a driver timeout, a claims-resolution failure (§D-6) — every one of them routes through `ROLLBACK`, never a bare disconnect that leaves the server-side transaction open. `@archstone/provider-sql`'s invoke function is structured so there is exactly one `finally`-equivalent release path, mirroring `invokeRest`'s single `try/catch` shape.
+- **`BEGIN READ ONLY`** is set unconditionally (not merely `kind: select` at the schema level) as a third, free enforcement layer alongside the declared statement kind and the role's own lack of write grants (§D-9). Belt, suspenders, and a third belt: three independent things must all fail before a write escapes v1.
+- **Defense in depth against a stuck transaction.** The pool is configured (deployer-supplied, defaulted conservatively) with `statement_timeout` and `idle_in_transaction_session_timeout`, so a hung query or a client that stalls mid-transaction cannot hold a `SET LOCAL`-scoped identity open indefinitely and cannot exhaust the pool.
+- **Claims are resolved and validated before `BEGIN`.** If the identity adapter (§D-6) cannot supply a claim a binding's `session:` block names, the invocation fails closed with `missing identity claim(s): tenantId` — mirroring `invokeRest`'s `missing caller credential(s)` message byte-for-byte in spirit — and **no connection is checked out at all.** Fail-closed-before-connecting, not fail-closed-after-`BEGIN`-then-`ROLLBACK`, because the latter would make "how do we know nothing leaked" depend on rollback executing correctly rather than on the query never having started.
+
+### D-6 — The identity-adapter seam: a pure, synchronous, deployment-level function — not a per-request hook
+
+The PM brief's "deployer-supplied adapter mapping principal → `{ tenantId }`" is a **new, distinct seam from ADD-32's `resolveCaller`**, and keeping them distinct is deliberate:
+
+```ts
+// @archstone/emitter-support
+export type IdentityAdapter = (principal: string | undefined) => Record<string, string> | undefined;
+```
+
+- **Pure and synchronous**, for the same structural reason ADD-42 D-1 forecloses async token verification in core: it must be safe to call inside a pooled-connection hot path with no cache, no clock, and no network. A deployer whose mapping genuinely needs I/O (a lookup table that changes) resolves it themselves, ahead of time, into whatever static or process-local structure their `IdentityAdapter` closes over — Archstone does not await it.
+- **Deployment-level configuration, not a per-request extraction.** Unlike `resolveCaller` (which must vary per inbound HTTP request because the token is on the request), `IdentityAdapter` is supplied **once**, at the same configuration layer as `bearerToken`/`allowedHosts` — a new field on the shared invoke-context options bag (`InvokeOptions.identityAdapter?: IdentityAdapter` in `@archstone/emitter-support`). It rides through the per-request rebuild on the HTTP path exactly as `allowedHosts` already does (`createHttpHandler`'s `{ ...opts.invoke, caller: resolveCaller?.(request) }` overwrites only `caller` — `identityAdapter` survives the spread, unchanged, for the reasons ADD-42 D-13 already established for that one key).
+- **Why not fold it into `resolveCaller`:** `resolveCaller` already varies per HTTP request and is host-owned, host-implemented, and untyped from Archstone's side beyond its signature. Requiring every deployer who adds a `resolveCaller` to *also* remember to compute and attach identity claims inside it is exactly the two-invocation-entry-points-drift defect class ADD-30 and ADD-42 both paid for — a `serveStdio` deployer supplying a static `invoke.caller` would have no equivalent place to also supply static claims, and a third, hand-rolled convention would appear to plug the gap. One function, called once by `@archstone/provider-sql` itself (`opts.identityAdapter?.(opts.caller?.principal)`), removes the seam entirely: **the deployer writes one function, in one place, and it is used identically whether the invocation arrived over `execute()`, `serveStdio`, `createHttpHandler`, or `mcpHandler`.**
+- **Absence is not silently treated as "no restriction."** If a binding's `session:` block names a claim and the adapter is absent, or present but returns `undefined`, or returns an object missing that key, the invocation fails closed (§D-5's last bullet) rather than running the query with no `SET LOCAL` at all. Running unscoped is not a safe default here the way an absent `caller` is safe for `policies: [authenticated]` (ADD-42 D-4) — RLS's behavior with no GUC set depends entirely on how the policy author wrote the `USING` clause, and Archstone cannot verify that from the binding. Refusing is the only choice that does not require trusting a policy author's null-handling.
+- **v1 shape is `{ tenantId }`; `{ tenantId, userId }` is a pure widening, not a rewrite.** The adapter returns a plain object; `session:` entries name whichever keys they need. Nothing in this design assumes exactly one claim — the day per-end-user isolation ships, the adapter starts returning a second key and a binding's `session:` list grows a second entry. **The core code — `SET LOCAL` per session entry, fail-closed on a missing claim — does not change at all.** This is the phase-coherence property the PM brief asked the architect to preserve, delivered structurally rather than by discipline.
+- **No CDL or IR change.** The adapter is invoke-context, exactly like `caller` itself (ADD-32 D-1's category argument, restated): a fact about the deployment's identity plumbing, not about the compiled artifact. `IRTool`/`IRConnector.sql` carry no adapter reference — only the `session:` claim-name → GUC-name map, which is compile-time-known and target-agnostic.
+
+### D-7 — Connection lifecycle across topologies, and structural exclusion from stateless/edge
+
+- **Embedded (`mcpHandler` in a host's own long-lived process) and stdio (`archstone serve`, one child process per conversation):** a connection pool is constructed once, lazily on first `sql`-connector invocation or eagerly at registry-build time (deployer's choice), and lives for the process's lifetime. This is architecturally the same shape ADD-32 already established for stdio's static per-process `caller` — one process, one pool, no per-request reconstruction.
+- **`serve --http`:** `createHttpHandler` already rebuilds a fresh `createMcpServer` **per request** (stateless by design, ADD-0008). The SQL pool must **not** follow that per-request lifecycle — rebuilding a `pg.Pool` per HTTP request would defeat pooling and could exhaust the database under load. The pool is therefore supplied the same way `allowedHosts`/`identityAdapter` are: constructed once by the deployer, passed into `CreateHttpHandlerOptions`/`invoke`, and left untouched by the per-request `{ ...opts.invoke, caller }` rebuild.
+- **Archstone never constructs or owns the pool.** `InvokeOptions` (the `sql`-specific extension of it, in `@archstone/provider-sql`) gains `sqlPool: SqlPoolLike` — an injected dependency, exactly parallel to REST's `fetchImpl`. A deployer constructs their own `pg.Pool` (sizing, max lifetime, TLS config — all deployer decisions Archstone does not have an opinion on), passes it in once, and closes it on their own process-shutdown hook. This keeps "connection management as a product feature" out of scope, per the PM brief's own explicit exclusion, and it is what makes `@archstone/provider-sql` unit-testable with an injected fake pool exactly the way `invokeRest` is testable with an injected `fetchImpl`.
+- **Stateless/edge builds structurally cannot carry the SQL provider.** A Cloudflare-Workers-class runtime has no raw TCP socket for the Postgres wire protocol without a proxy (Hyperdrive or equivalent) — a decision the PM brief already defers to "if hosted SQL ever becomes a requirement." Because `@archstone/provider-sql` is its own package that nothing edge-facing imports (D-1), this exclusion is enforced by the dependency graph, not by a runtime check: an edge-target build simply never has `pg` in its bundle. **This ADR ships no edge-target code** — there is none in this repository yet (hosted/remote MCP is explicitly Phase 2). The obligation this decision places on that future work: whatever builds the edge target's registry/dispatch must refuse, at *its own* build time, to compile a manifest containing a `sql`-connector tool for that target, with a named error — not let it compile and fail on first invocation. Recorded here so the day that target exists, this is a known, pre-agreed constraint rather than a surprise.
+
+### D-8 — Connector dispatch is per-consumer, not centralized in shared substrate
+
+`@archstone/runtime`'s `callTool`/`verifyTool` and `@archstone/agent`'s `executeCapability` currently call `invokeRest` directly. Adding a second connector needs a dispatch point — `if (tool.connector?.type === "sql") invokeSql(...) else invokeRest(...)` — and the obvious mistake would be to centralize that `if` in `@archstone/emitter-support`, the shared substrate both packages already depend on.
+
+**Decision: do not.** `emitter-support` must stay importable by anything, including a hypothetical stateless/edge consumer, with zero Postgres driver in its dependency graph (D-7's exclusion only holds if nothing edge-facing transitively imports `pg`). The dispatch `if` therefore lives **in each of the three consumers** (`runtime/src/server.ts`, `runtime/src/verify.ts`, `agent/src/execute.ts`), each of which already conditionally imports `@archstone/provider-rest`; each now also imports `@archstone/provider-sql`. This is three copies of a two-line `if`, not three copies of a mechanism — the actual invocation logic, the policy-evaluation call, and the audit-record shape all stay singular, exactly as ADD-30/ADD-43 already established. A future non-Node consumer (were one ever built) imports only the branch it needs.
+
+### D-9 — Read-only enforcement, three independent layers
+
+1. **Declared statement kind**, schema-enforced (`sql.kind: "select"`, D-3) — a binding cannot even *say* it does anything else in v1.
+2. **`BEGIN READ ONLY`**, unconditionally issued by `@archstone/provider-sql` (D-5) — the session itself refuses a write regardless of what the query text says.
+3. **Role grants** — the runtime role holds `SELECT` only, enforced by the customer's own database, not by Archstone. Archstone cannot verify a role's grants beyond the specific superuser/`BYPASSRLS` checks in D-10; this layer is a deployment responsibility, documented, not code-enforced.
+
+### D-10 — Over-privileged-connection detection: mechanical where possible, documented where it cannot be
+
+**What is mechanically detectable, and checked:** immediately after acquiring the pool's first connection, `@archstone/provider-sql` runs `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`. A `true` on either column is a hard refusal — no query is ever attempted, no pool remains open. This directly and completely satisfies "never as superuser, never with `BYPASSRLS`" — both are role-level properties, independent of which tables a query happens to touch.
+
+**What is not mechanically detectable in general, and why:** "not the table owner" (the third named condition) cannot be checked in general, because a binding's `query` text is never parsed and Archstone therefore does not know which relations it touches — parsing SQL to extract table references would itself be exactly the kind of query-text inspection the "no agent-authored SQL" boundary keeps Archstone away from, and would be brittle against views, CTEs, and joins. **Named, best-effort mitigation for the documented default topology:** when a binding's `dsn` resolves to a database `archstone init` (D-11) has already introspected, `init`'s emitted manifest records which schema the curated views live in; `verify` and startup additionally check that `current_user` does not own any relation in that recorded schema (`pg_tables.tableowner`/`pg_views.viewowner`), catching the single most likely misconfiguration for the topology this product actually recommends. A binding hand-authored against a schema `init` never touched gets only the superuser/`BYPASSRLS` check. This gap is real, named in the Risk table (R-6) rather than implied away, and is the honest boundary of what a connection-privilege check can verify without inspecting query text.
+
+**Entry points, and the one deliberate tension with existing practice:** the PM brief requires the check to fail closed "at apply/verify/startup." Today, `compile(): IR` is pure and network-free by design (ADD-24 explicitly refused a network-dependent IR field on exactly this ground), and `archstone apply`/`archstone build` make no live calls to any customer backend for REST bindings — a live DB check at `apply` would be the first time compiling a manifest depends on a live external fact. Resolution: **`compile()`/`validateSemantics()` stay pure — no change.** The privilege check runs in the **CLI orchestration layer**, as an additional step `runApply`/`runBuild` perform *after* a structurally-valid compile and *before* reporting success or writing an artifact — the same "the pure function stays pure, the wrapping command still refuses" pattern `runBuild` already uses for the tool-name-collision check (ADD-30 R-2). Concretely: `archstone apply`/`archstone build` on a manifest containing `sql` bindings open one short-lived connection per distinct DSN, run the privilege check, and refuse (non-zero exit, no artifact written) on failure — reported as a distinct, clearly-labeled preflight step, not folded into semantic-validation diagnostics. `archstone verify` and pool construction at `serve`/`mcpHandler`/`createHttpHandler` startup run the identical check. It is not re-run per invocation — role grants do not change between calls within one process lifetime, and re-checking on every query would add a round trip to the hot path for no correctness gain.
+
+### D-11 — `archstone init`'s SQL adapter stays inside the existing compile-and-probe loop
+
+`@archstone/init` already separates a pure inference core (`adapters/`, implementing `SourceAdapter`) from the filesystem-owning `loop.ts` that materializes candidate output to a temp directory, compiles it with the **real** compiler, and only copies it into the target directory on success (ADD-37). This structure needs no change for SQL — it was built to be adapter-pluggable.
+
+- A new `packages/init/src/adapters/sql/` implements `SourceAdapter` against `information_schema`, queried **as the same non-owner runtime role production will use** — not `pg_catalog` introspection as a superuser. Concretely: candidate relations come from `information_schema.role_table_grants` filtered to the connecting role, or equivalently, each candidate is probed with `SELECT ... LIMIT 0` under that role and a permission-denied result silently excludes it. This is what makes "refuses to propose anything the runtime role cannot select" mechanical rather than a documentation promise, and it is what makes the curated-view topology the path of least resistance by construction: point `init` at a role that can only see the curated schema, and that schema is the only thing it can possibly propose.
+- **v1 infers output shape only, not input parameters.** A relation's columns become candidate resource fields (Postgres type → CDL semantic type, via the same kind of mapping table the OpenAPI adapter already uses for JSON-Schema types); a capability is proposed with **no declared input** by default — it reads whatever the RLS-filtered view returns for the resolved session identity. This matches the PM brief's own journey (§5.1: init proposes capabilities and resource fields; the engineer edits and adds meaning) — `information_schema` has no concept of "the parameter a human would filter this by," so v1 does not guess one. A human adds a `params:`/`WHERE` refinement afterward, same as they add anything else this package already declines to invent (ADD-37's `SILENTLY_WRONG`/coverage-guard discipline: infer only what the source actually declares, name everything else as a note rather than guessing).
+- The **emitted binding** gets a `connector.sql` block with `engine: postgres`, `kind: select`, a proposed `dsn: "${...}"` placeholder (never a literal), and the introspected query. `session:` is emitted **empty** by default unless the adapter can find an unambiguous convention (out of scope to guess in v1) — a compiler warning (`sql-binding-no-session-claims`, new, advisory) flags every SQL binding with no session claims, so an author reviewing `init`'s output is told, not left to notice on their own, that nothing ties this query to caller identity.
+- **The compile-and-probe loop is reused verbatim.** `compileManifest`/`runProbes`/`verifyRecorded` in `loop.ts`/`probe.ts` operate on the emitted manifest and its IR, not on adapter internals — nothing there is REST-specific today, and nothing needs to become SQL-aware. The only new work is the adapter and `emit.ts` gaining a `connector.sql` emission branch alongside its existing `connector.rest` one.
+
+### D-12 — Contract/fixture shape: no IR change; the negative isolation test lives in the fixture, not the schema
+
+ADD-18's `IRContract` (`fingerprint`, optional `shape: ShapeMap`, `probeFixture`) is already connector-agnostic — `fingerprintShape` operates on a JSON value's key-path/type shape, and a SQL binding's mapped result is a plain JSON array-of-rows once `applyResponseMapping` has run over it. **No `IRContract`/`contract.schema.json` change is needed for drift detection itself.** A column added, removed, or retyped is exactly ADD-18's existing shape-diff, over a different source — this was true the moment the fixture format was defined as request-in/mapped-shape-out rather than HTTP-specific.
+
+The negative isolation test is genuinely new, and it is deliberately **fixture content, not IR, and not the binding's `contract:` block:**
+
+```json
+{
+  "capabilityId": "portfolio.summary",
+  "recordedAt": "2026-09-23T00:00:00Z",
+  "request": {},
+  "expects": { "collectionNonEmpty": true },
+  "isolation": {
+    "claims": { "tenantId": "sandbox-tenant-a" },
+    "foreignClaims": { "tenantId": "sandbox-tenant-b" },
+    "expect": "zero-rows"
+  }
+}
+```
+
+- `isolation.claims`/`isolation.foreignClaims` are **raw claim values**, not principals — `verify` injects them directly as the resolved identity for the probe (bypassing `IdentityAdapter` entirely), because `verify` is proving what the **database** does with a given set of session GUCs, not exercising the deployer's own adapter code (which has no fixed, verify-time identity to call it with, and is out of scope for a local, no-deployer-code-required CLI command).
+- This follows ADD-18 D-6's already-established precedent exactly: fixtures are a git-tracked ops artifact, read directly by `runVerify` from disk, never schema-validated by the loader, never lowered into the IR. `isolation` is one more optional key in that same file, at that same layer.
+- **Mechanically, in `runVerify`:** for a `sql`-connector tool whose binding declares `connector.sql.session` (non-empty) — the IR already carries the claim-name → GUC-name map, so no new IR field is needed — `runVerify` runs the probe **twice**: once under `isolation.claims` (the existing `expects` assertions apply as today), once under `isolation.foreignClaims`, this second run asserting **zero rows regardless of what `expects` says**. A binding with `session:` claims declared and **no** `isolation` block in its fixture is reported 🔴, `"isolation not proven — no negative-isolation fixture recorded"` — the direct mechanism for the PM brief's success criterion 4 ("a binding without a recorded negative result is not verified"). A foreign-claims replay that returns any row is reported 🔴, `"ISOLATION BREACH: foreign identity returned N row(s)"`, at the same severity as a contract-mapping VIOLATION.
+- **This needs no new CLI plumbing to gate a build.** `archstone verify` already exits non-zero on any 🔴 (ADD-18 D-5) — an isolation breach is simply one more reason a binding is red, and it already fails CI the moment it is red, with zero new flags.
+
+---
+
+## Consequences
+
+**Accepted:**
+
+- A capability bound to `sql` and one bound to `rest` are indistinguishable to a model — same `IRTool`, same `input`/`output`, same `response:` mapping mechanism, same policy/audit path (§D-8's dispatch is invisible above the connector boundary). Success criterion 1 is met structurally, not by convention.
+- The isolation guarantee is stated as Postgres-specific, not "SQL," everywhere it is documented — `engine` is required precisely so this stays true as new engines are proposed later, each under its own ADR.
+- `CallerContext` finally moves to `@archstone/emitter-support` (D-2), retiring debt ADD-32/ADD-42 both explicitly deferred rather than forgot.
+- The identity-adapter design (D-6) makes per-end-user isolation (§3's option B) a pure widening of the claims object and the `session:` list — no rewrite of the connection layer, the binding grammar, or the core dispatch logic, matching the PM brief's phase-coherence requirement exactly.
+- No CDL grammar change, no IR version bump. `IRConnector.sql` is additive; `IRContract` needs no change at all.
+
+**Costs accepted knowingly:**
+
+- `archstone apply`/`archstone build` gain a live-network preflight step for manifests containing `sql` bindings (D-10) — the first time compiling a manifest depends on reaching a real backend. Contained deliberately to the CLI orchestration layer, never `compile()` itself, so the IR-purity invariant (ADD-24) is not touched.
+- The owner-of-the-queried-relation check is best-effort, not general (D-10) — a determined or careless author can still connect as a non-superuser, non-`BYPASSRLS` role that happens to own the specific tables their query reaches, outside the schema `init` introspected. Named as R-6 below, not hidden.
+- Three near-identical `if (connector.type === "sql")` dispatch sites (D-8) instead of one — accepted in exchange for keeping `@archstone/emitter-support` free of a Postgres dependency, which is the harder constraint to relax later.
+
+**Rejected alternatives:**
+
+| Alternative | Why rejected |
+|---|---|
+| A single, engine-abstracted `sql` connector spanning Postgres/Snowflake/BigQuery in v1 | This is Challenge 2 from the PM brief, already resolved upstream: each engine's isolation mechanism is different and non-portable; abstracting over all three degrades the guarantee to the weakest one. `engine` as a required, currently-single-valued enum is exactly the schema shape that keeps this door open without walking through it now. |
+| Centralizing connector dispatch in `@archstone/emitter-support` | Would make the one package every future target (including a stateless/edge one) depends on carry a transitive Postgres driver dependency, defeating D-7's structural exclusion. Three small, duplicated `if`s cost less than that. |
+| Folding identity-claims resolution into `resolveCaller` | Reintroduces exactly the "two entry points, one hand-wired, one forgotten" defect class ADD-30/ADD-42 already paid to remove — a `serveStdio` deployer would have no natural place to attach static claims the way an HTTP deployer attaches them inside a per-request callback. |
+| Parsing the query text to verify referenced-table ownership | Would require Archstone to understand SQL syntax at a level indistinguishable from the "SQL string from the model" pattern this feature explicitly exists to avoid building. Rejected on both correctness (parsing SQL robustly is its own large project) and posture (the product's entire pitch is that it never inspects or reasons about query text) grounds. |
+| Storing the negative-isolation identity in `contract.schema.json` (loaded, validated) instead of the fixture file | Breaks ADD-18 D-6's "fixtures are an ops artifact, not a manifest input" line for no benefit — the isolation claims are exactly as operational and exactly as safe to keep out of shape-validation as `expects.collectionNonEmpty` already is. |
+| Letting an absent `IdentityAdapter` claim default to "no restriction, run the query anyway" | Silently converts a fail-closed isolation guarantee into a fail-open one the moment a deployer forgets to wire the adapter — the single failure mode this entire feature exists to make structurally impossible. |
+
+**Non-goals of this ADR:** writes of any kind; Snowflake/BigQuery/MySQL/SQL Server/Mongo; per-end-user (option B) isolation itself (only its later-arrival is designed for); a new CDL policy token (`tenant-scoped` keeps its current, unenforced-by-core meaning — see R-7); console changes; hosted/edge execution of SQL bindings; joins or aggregation the binding did not itself declare in `query`; any escape hatch disabling RLS.
+
+---
+
+## Risk Analysis
+
+| ID | Risk | L | I | Mitigation direction |
+|---|---|---|---|---|
+| R-1 | A deployer treats `IdentityAdapter` as optional plumbing and ships a `session:`-bearing binding with no adapter wired, silently relying on fail-closed behavior to "just work" without understanding why | M | M | D-6's fail-closed-on-missing-claim is the safety net, but the ONBOARDING content for this feature must show the correct wiring first, the failure mode second — same discipline ADD-42 R-2 already applies to JWT verification. |
+| R-2 | A binding is authored against a schema `archstone init` never touched, so the owner-check in D-10 cannot run, and the author connects as that schema's owner without tripping superuser/`BYPASSRLS` detection | M | H | Documented as the topology's residual risk; `archstone init`'s output is positioned as the low-risk path specifically because it is the checked one. A future increment could require `verify` to demand an explicit `--acknowledge-unchecked-ownership` style flag for schemas outside init's record, rather than silently passing — not built here, flagged as a follow-up. |
+| R-3 | `pg` (or whichever driver is chosen) has its own CVE surface Archstone did not have before | L | M | Standard dependency-hygiene practice already applied to `@modelcontextprotocol/sdk`; no special mitigation beyond keeping the dependency current and minimal (driver only, no ORM). |
+| R-4 | A future contributor "fixes" the per-request HTTP rebuild to also refresh `identityAdapter`/`sqlPool` per request, "for consistency" with `caller`, silently defeating pooling or breaking the deployment-level configuration model | M | H | D-6/D-7 state explicitly, beside `allowedHosts`'s existing precedent, that these three fields are deployment-level and must survive the per-request spread — the exact trap ADD-42 D-13 already named for `caller` itself, now with two more fields at risk of the same "helpful" regression. |
+| R-5 | The three duplicated `connector.type` dispatch `if`s (D-8) drift — a fourth connector is added to one consumer and not the others | M | H | Same defect class ADD-30 already paid for once; a cross-consumer test (one capability, one input, asserted identical result via `execute()`, `callTool`, and `verifyTool`) should exist for `sql` exactly as ADD-42's cross-path test exists for policy — recommended as part of this increment's DoD, not a separate follow-up. |
+| R-6 | Owner-of-queried-relation is undetectable in general (D-10) — the single largest named gap in the fail-closed story | L | H | Stated plainly in documentation and in the `verify`/startup refusal messages ("checked: not superuser, not BYPASSRLS, not owner of `<schema>` — NOT checked: ownership of any relation outside that schema"), so the guarantee's actual boundary is never oversold. |
+| R-7 | A reviewer conflates this ADR's session-claim mechanism with the CDL `tenant-scoped` policy token and assumes declaring `tenant-scoped` on a capability now does something mechanically | L | M | `tenant-scoped` is untouched by this ADR — it stays exactly what ADD-32 D-4/ADD-42 §3 already made it: an authored, currently-unenforced-by-core label. The isolation mechanism here is binding-level (`session:`), not CDL-level, and the two must not be described as the same thing in docs. |
+| R-8 | `archstone apply`'s new live-connectivity preflight (D-10) is mistaken, in a future refactor, for something `compile()` itself should also do — reintroducing network-dependence into the pure compiler the way ADD-24 explicitly refused | L | H | Stated explicitly in D-10 and worth a code comment at the call site mirroring ADD-24's own header comment about `compile()`'s purity contract. |
+
+---
+
+## Implementation guidance (ordered, directional — not a code spec)
+
+1. **Schema.** Add `sql` to `connector.schema.json` (engine/kind/dsn/query/params/session, D-3/D-4), with its own `if/then` requiring `sql` when `type: "sql"`. Add the `sql-dsn-not-env-placeholder`, `connector-type-not-implemented` (for `graphql`/`grpc`/`soap`), and `sql-binding-no-session-claims` diagnostics to `compiler/src/validate.ts`.
+2. **IR.** Extend `IRConnector` with an `IRSqlConnector` sibling to `IRRestConnector` (engine, kind, dsn template, query, ordered params, session claim/setting pairs). No other `IRTool`/`IRContract` change.
+3. **Shared substrate first.** Move `CallerContext` and the backend-agnostic placeholder resolvers into `@archstone/emitter-support` (D-2), with `providers/rest` re-exporting for compatibility, before writing `@archstone/provider-sql` against it — this is a pure refactor with its own regression suite, landed as its own reviewable step.
+4. **`@archstone/provider-sql`.** New package: `invokeSql(tool, input, opts)` — connect (injected pool, D-7), one-time privilege check on first use per process (D-10), resolve identity claims (D-6, fail-closed), `BEGIN READ ONLY` + `SET LOCAL` per session entry + parameterized query + `COMMIT`/`ROLLBACK` (D-5), map the row array through the existing `applyResponseMapping`.
+5. **Dispatch.** Add the `connector.type` branch to `runtime/src/server.ts`'s `callTool`, `runtime/src/verify.ts`'s `verifyTool`, and `agent/src/execute.ts`'s `executeCapability` (D-8) — plus the cross-consumer regression test named in R-5.
+6. **CLI preflight.** Add the live privilege-check step to `runApply`/`runBuild` (D-10), clearly separated from semantic-validation diagnostics; add it to `serveStdio`/`createHttpHandler`/`mcpHandler` construction.
+7. **`verify` isolation gating.** Extend `runVerify` to read `isolation`/`foreignClaims` from the fixture and run the double-probe for `sql`-connector tools with `session:` claims (D-12).
+8. **`@archstone/init` SQL adapter.** New `adapters/sql/`, querying `information_schema` as the runtime role (D-11); extend `emit.ts` with a `connector.sql` emission branch. The existing `loop.ts`/`probe.ts` need no change.
+9. **Docs.** ONBOARDING gains the SQL topology section (curated-view default, RLS-on-base-tables alternative), the identity-adapter wiring example (all four entry points), and an explicit statement of what the over-privileged-connection check does and does not catch (R-6).
+
+---
+
+*ADR-0012 · SQL Connector · Project Archstone · Draft, pending ratification*
