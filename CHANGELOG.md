@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.24.0]
+
 ### Added
 
 - **Row-level errors in a `response:` collection** (`@archstone/schema`, `@archstone/compiler`,
