@@ -1143,8 +1143,11 @@ That is the point rather than a limitation. What lands in your repository is an 
 you review like any other change.
 
 Some fields it will not adopt, and it says why rather than skipping them silently: a boolean
-(CDL has no boolean type), a nested object or array, or anything outside the collection your
-capability maps.
+(CDL has no boolean type), a nested object, an array of objects (refused with reason
+`array-of-objects-unresolved`; such a shape needs a row-level resource declaration core #49
+has not ratified yet), or anything outside the collection your capability maps. **Scalar
+arrays** — an observed set of strings, numbers or other semantic types — **are now adoptable**
+(ADD-12 §8.2) as `list:` fields, populating them via `extract:` paths.
 
 ---
 
