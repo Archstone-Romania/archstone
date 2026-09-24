@@ -18,7 +18,10 @@ import { createInterface } from "node:readline/promises";
 import { load } from "@archstone/schema";
 import { compile, diffShape, validateSemantics, type IRTool, type ShapeMap } from "@archstone/compiler";
 import { Registry } from "@archstone/emitter-support";
-import { recordContract, adoptable, planAdoption, type GoldenFixture } from "@archstone/runtime";
+import { adoptable, planAdoption } from "@archstone/runtime";
+// ADR-0012 D-5: `recordContract`/`GoldenFixture` now come from the dedicated `/verify` subpath,
+// not the package root — see `packages/runtime/src/index.ts`'s header comment.
+import { recordContract, type GoldenFixture } from "@archstone/runtime/verify";
 import { terminalAsk, type Ask } from "./init";
 import { applyAdoption, applyContractRecording, type AdoptionEdit } from "./adopt-edit";
 

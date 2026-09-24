@@ -13,6 +13,7 @@
       "@archstone/runtime/http": ["packages/runtime/src/http.ts"],
       "@archstone/runtime/verify": ["packages/runtime/src/verify.ts"],
       "@archstone/runtime/connector": ["packages/runtime/src/connector.ts"],
+      "@archstone/runtime/connector-rest": ["packages/runtime/src/connector-rest.ts"],
       "@archstone/provider-rest": ["providers/rest/src/index.ts"],
       "@archstone/provider-sql": ["providers/sql/src/index.ts"]
     }

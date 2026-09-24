@@ -1,12 +1,26 @@
-// @archstone/runtime/connector — centralized connector dispatch (ADR-0012 D-6)
+// @archstone/runtime/connector — the FULL (Node-only) connector dispatch (ADR-0012 D-6)
 //
-// Before this file, four call sites (`executeCapability` in @archstone/agent, `callTool` in
-// runtime/src/server.ts, `verifyTool`/`recordContract` in runtime/src/verify.ts) each imported
-// `invokeRest` directly and called it unconditionally. Adding a second connector type without
-// centralizing dispatch would mean teaching four places, independently, to branch on
-// `tool.connector?.type` — the exact duplicated-mechanism defect class internal ADD-30 already
-// found and fixed once for tool-name resolution. `invokeConnector` is now the ONE place that
-// switches on `tool.connector?.type`; no other call site does.
+// Adds `sql` support on top of `./connector-rest`'s edge-safe dispatch, by importing
+// `@archstone/provider-sql` — which imports `pg`, a Node-only package. THIS FILE MUST NEVER BE
+// IMPORTED BY `runtime/src/server.ts`, `runtime/src/http.ts`, or `agent/src/execute.ts` — those
+// default to `./connector-rest` and accept this dispatcher only as an explicit, Node-only-caller
+// -supplied `connector` override. `packages/runtime/test/boundary.test.ts` and
+// `packages/agent/test/boundary.test.ts` pin exactly this.
+//
+// Reachable only from: `runtime/src/verify.ts` (already fs-based, Node-only, never imported
+// from the edge-safe `/http` subpath), and `@archstone/cli` (a Node binary), which injects this
+// as the `connector` override for `serveStdio` (D-5 explicitly lists stdio — "one child process
+// per conversation" — as a `sql`-supporting surface, unlike the `/http` subpath).
+//
+// Before this file existed, four call sites (`executeCapability` in @archstone/agent, `callTool`
+// in runtime/src/server.ts, `verifyTool`/`recordContract` in runtime/src/verify.ts) each imported
+// `invokeRest` directly and called it unconditionally. Centralizing dispatch here (rather than
+// teaching four places to branch on `tool.connector?.type` independently) is the same
+// duplicated-mechanism defect class internal ADD-30 already found and fixed once for tool-name
+// resolution — `no call site branches on tool.connector?.type itself` is the property this file
+// (layered on `./connector-rest`) preserves; `server.ts`/`execute.ts` still centralize on
+// `./connector-rest`'s single default, they simply default to a NARROWER dispatcher than
+// `verify.ts`/the CLI's stdio path do.
 //
 // Placed under `@archstone/runtime` rather than `@archstone/emitter-support` (the ADR's own
 // sketch): `emitter-support` is a dependency of BOTH `providers/rest` and `providers/sql`
@@ -17,44 +31,36 @@
 // `@archstone/provider-rest` today) and is already a transitive dependency of every consumer
 // that needs this dispatch (`@archstone/agent` depends on `@archstone/runtime`; `@archstone/cli`
 // and `@archstone/init` both depend on `@archstone/runtime`) — so this subpath adds no new
-// package edge anywhere, only a new FILE. Same "a bundler can tree-shake an import, not a
-// method" precedent this repo already used once for `@archstone/runtime/verify` (ADD-37 R-2):
-// `src/index.ts` (the MCP-SDK-bearing root) is untouched, and neither is `src/http.ts`
-// (the edge-safe subpath, D-5) — this file imports `pg`-bearing `providers/sql`, so it must
-// never be reachable from there.
+// package edge anywhere, only a new FILE.
 
 import type { IRTool } from "@archstone/compiler";
-import { invokeRest, type InvokeOptions as RestInvokeOptions, type InvokeResult } from "@archstone/provider-rest";
+import type { InvokeOptions as RestInvokeOptions, InvokeResult } from "@archstone/provider-rest";
 import { invokeSql, type SqlInvokeOptions } from "@archstone/provider-sql";
+import { dispatchRest } from "./connector-rest";
 
 export type { InvokeResult } from "@archstone/provider-rest";
 
-/** The union every one of the four call sites now passes — a superset of both providers' own
- *  options, since a manifest may bind some capabilities to `rest` and others to `sql`. */
+/** The union every Node-only caller of this FULL dispatcher passes — a superset of both
+ *  providers' own options, since a manifest may bind some capabilities to `rest` and others to
+ *  `sql`. Also the type every EDGE-SAFE consumer's options bag widens to (type-only — carrying
+ *  `identityAdapter`/`pgPoolFactory` as a TYPE costs nothing at runtime; erased entirely by
+ *  `import type`), so a deployer keeps ONE options object regardless of which dispatcher a given
+ *  surface ends up using. */
 export type ConnectorInvokeOptions = RestInvokeOptions & SqlInvokeOptions;
 
-/** ADR-0012 D-2/BR-9 — reserved, unimplemented connector types. `apply` already refuses these
- *  (`connector-type-not-implemented`, compiler/src/validate.ts); this is the SAME closed set,
- *  read here so a manifest that somehow reaches `invokeConnector` anyway (a hand-built IR, or a
- *  pre-existing manifest compiled before this check shipped) still gets a clean, consistent
- *  result instead of an opaque failure deep inside a connector that does not exist. */
-const UNIMPLEMENTED_TYPES = new Set(["graphql", "grpc", "soap"]);
-
 /**
- * Dispatch one invocation to the right connector, or return a clean, consistent failure result
- * when there is none to dispatch to. No call site should ever import `invokeRest`/`invokeSql`
- * directly, or branch on `tool.connector?.type` itself — this is the one place that does.
+ * Dispatch one invocation to `rest` OR `sql`. `rest`/unimplemented/absent-connector are
+ * delegated to `./connector-rest`'s PURE `dispatchRest` — a single source of truth for that
+ * half, never duplicated here, and deliberately NOT the override-checking `invokeConnectorRest`:
+ * this function IS itself the override a Node-only caller supplies (e.g. `@archstone/cli`
+ * injects `invokeConnector` as `serveStdio`'s `connector` option), and re-entering the
+ * override-check would recurse forever whenever `opts.connector` points back at this function.
  */
 export async function invokeConnector(
   tool: IRTool,
   input: Record<string, unknown>,
   opts: ConnectorInvokeOptions = {},
 ): Promise<InvokeResult> {
-  const type = tool.connector?.type;
-  if (type === "rest") return invokeRest(tool, input, opts);
-  if (type === "sql") return invokeSql(tool, input, opts);
-  if (type !== undefined && UNIMPLEMENTED_TYPES.has(type)) {
-    return { ok: false, status: 0, error: `capability '${tool.id}': connector type '${type}' is not implemented` };
-  }
-  return { ok: false, status: 0, error: `capability '${tool.id}' has no connector` };
+  if (tool.connector?.type === "sql") return invokeSql(tool, input, opts);
+  return dispatchRest(tool, input, opts);
 }

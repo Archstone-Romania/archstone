@@ -109,6 +109,9 @@ importers:
       '@archstone/init':
         specifier: workspace:*
         version: link:../init
+      '@archstone/provider-sql':
+        specifier: workspace:*
+        version: link:../../providers/sql
       '@archstone/runtime':
         specifier: workspace:*
         version: link:../runtime
