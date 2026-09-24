@@ -1249,8 +1249,9 @@ works but is a **deprecated alias of `"openai-chat"`**: its `tools()` output is 
 the Responses shape it returned before — migrate explicitly rather than relying on the alias.
 
 **No `effect` annotation here, deliberately.** The MCP emitter lowers `effect` into MCP tool
-annotations ([What the client is told about risk](#what-the-client-is-told-about-risk)); none
-of these four formats has a field that means the same thing, so none is invented — a
+annotations ([What the client is told about risk](#what-the-client-is-told-about-risk)); none of
+these formats — `anthropic`, `openai-chat`, `openai-responses`, `gemini`, `json-schema`, or the
+deprecated `openai` alias — has a field that means the same thing, so none is invented — a
 side-effect hint spelled into a field that means something else would be worse than silence.
 You are not missing anything, either: unlike a remote MCP client, you are in-process and hold
 the registry, so the value is one lookup away —
