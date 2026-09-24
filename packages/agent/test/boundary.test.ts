@@ -25,6 +25,13 @@ const FORBIDDEN: RegExp[] = [
   /^node:fs$/,
   /^node:path$/,
   /^@archstone\/runtime$/, // the root, schema/fs-coupled export — "/http" is a different subpath
+  // ADR-0012 D-5: the FULL (Node-only) connector dispatch subpath, and the `pg` driver it pulls
+  // in — `execute.ts` (this graph's actual connector call site) must use the edge-safe
+  // `@archstone/runtime/connector-rest` instead. A bare `/^@archstone\/runtime$/` above does NOT
+  // catch this — it is a DIFFERENT specifier — which is exactly how this regressed once already.
+  /^@archstone\/runtime\/connector$/,
+  /^@archstone\/provider-sql/,
+  /^pg$/,
 ];
 
 const SPEC_RE =

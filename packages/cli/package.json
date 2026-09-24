@@ -44,6 +44,7 @@
     "@archstone/compiler": "workspace:*",
     "@archstone/emitter-support": "workspace:*",
     "@archstone/init": "workspace:*",
+    "@archstone/provider-sql": "workspace:*",
     "@archstone/runtime": "workspace:*",
     "@archstone/schema": "workspace:*"
   },

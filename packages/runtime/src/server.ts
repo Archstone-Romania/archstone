@@ -34,11 +34,17 @@ import {
   type ExecutionStatus,
   type PolicyDecision,
 } from "@archstone/emitter-support";
-import { invokeConnector, type ConnectorInvokeOptions } from "./connector";
+// ADR-0012 D-5/D-6: this file is reachable from THREE surfaces — `serveStdio` (mcp.ts, Node-
+// only), `runtime/src/http.ts` (the edge-safe `/http` subpath), and
+// `examples/demo/remote-mcp-worker` (imports the package ROOT directly, bundled for Cloudflare
+// Workers). It therefore imports the EDGE-SAFE dispatcher (`./connector-rest`), never the full
+// one (`./connector`, which imports `@archstone/provider-sql` -> `pg`) — confirmed by
+// `packages/runtime/test/boundary.test.ts` and a measured `wrangler deploy --dry-run` bundle
+// size. A Node-only caller (the CLI's stdio `serve`) that wants `sql`-bound capabilities to work
+// supplies `opts.connector` (see `./connector-rest`'s `InvokeOptions.connector`); this file
+// itself never branches on that decision — `invokeConnectorRest` does, once.
+import { invokeConnectorRest, type InvokeOptions as ConnectorInvokeOptions } from "./connector-rest";
 
-// ADR-0012 D-6: every invocation call site now takes the UNION options type (`rest` fields +
-// `sql` fields), since one registry/manifest may bind some capabilities to `rest` and others to
-// `sql`. Aliased locally as `InvokeOptions` so this file's own signatures read unchanged.
 type InvokeOptions = ConnectorInvokeOptions;
 
 type JsonSchema = Record<string, unknown>;
@@ -381,7 +387,7 @@ export async function callTool(
     };
   }
 
-  const result = await invokeConnector(tool, args, opts);
+  const result = await invokeConnectorRest(tool, args, opts);
   if (!result.ok) {
     // #44: every attempt that never completed a usable round-trip — unbound capability, missing
     // env var, missing caller credential, no baseUrl, an allowlist rejection, a missing path
