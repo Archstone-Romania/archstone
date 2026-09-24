@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Registry } from "@archstone/emitter-support";
@@ -648,6 +650,137 @@ describe("ADD-32 step 9 — a tool call reaches a real backend with the CALLER t
       await client.close();
       await server.close();
       await mock.close();
+    }
+  });
+});
+
+// #81/#82 (ADD-12 §8.1/§8.2) — the SDK-client regression test the review flagged as missing
+// (290-response-arrays-review.md): `objectJsonSchema`'s oneOf/list shapes proved correct in
+// isolation (emitter-support/test/lowering.test.ts) are exactly the kind of thing a strict
+// client-side JSON Schema validator can reject even when the generator believes it is valid —
+// the ADD-19 precedent above exists for the identical reason. This runs a real Client against
+// a real Server over InMemoryTransport and lets the SDK's OWN validation see it.
+describe("#81/#82 — onError oneOf and extract: text[] survive the real SDK Client (ADD-12 §8)", () => {
+  function shopManifest(): string {
+    const dir = mkdtempSync(join(tmpdir(), "archstone-mcp-onerror-"));
+    writeFileSync(join(dir, "capabilities.yaml"), "company:\n  id: acme\ncapabilities:\n  - shop.search\nproviders:\n  - store\n");
+    writeFileSync(
+      join(dir, "shop.search.capability.yaml"),
+      [
+        "capability:",
+        "  id: shop.search",
+        "  description: find",
+        "  effect: read",
+        "  provider: store",
+        "  output:",
+        "    items:",
+        "      collection: Widget",
+        "    warnings:",
+        "      list: text",
+        "      required: false",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(join(dir, "shop.Widget.resource.yaml"), "resource:\n  name: shop.Widget\n  fields:\n    name:\n      type: text\n");
+    writeFileSync(
+      join(dir, "shop.RowError.resource.yaml"),
+      "resource:\n  name: shop.RowError\n  fields:\n    code:\n      type: identifier\n    message:\n      type: text\n      required: false\n",
+    );
+    mkdirSync(join(dir, "bindings"), { recursive: true });
+    writeFileSync(
+      join(dir, "bindings", "shop.search.binding.yaml"),
+      [
+        "binding:",
+        "  capabilityId: shop.search",
+        "  connector:",
+        "    type: rest",
+        "    rest:",
+        '      baseUrl: "${SHOP_API_URL}"',
+        "      method: GET",
+        "      path: /search",
+        "  response:",
+        '    collection: "$.results[*]"',
+        "    resource: Widget",
+        "    map:",
+        '      name: "$.n"',
+        "    onError:",
+        "      errorResource: RowError",
+        "      when:",
+        '        path: "$.code"',
+        "        exists: true",
+        "  extract:",
+        '    warnings: "$.warnings[*]"',
+        "",
+      ].join("\n"),
+    );
+    return dir;
+  }
+
+  async function connect(server: ReturnType<typeof createMcpServer>) {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0" }, { capabilities: {} });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    return { client, server };
+  }
+
+  it("a mixed collection (valid row + declared error row) validates against the oneOf outputSchema", async () => {
+    const dir = shopManifest();
+    try {
+      const shopRegistry = buildRegistry(dir).registry!;
+      const fetchImpl: FetchLike = async () =>
+        new Response(
+          JSON.stringify({
+            results: [{ n: "Widget A" }, { code: "out-of-stock", message: "no longer available" }],
+            warnings: ["price may be stale"],
+          }),
+          { status: 200 },
+        );
+      const server = createMcpServer(shopRegistry, { env: { SHOP_API_URL: "https://x.test" }, fetchImpl });
+      const { client } = await connect(server);
+      try {
+        const { tools } = await client.listTools();
+        expect(tools.map((t) => t.name)).toContain("shop_search");
+
+        const result = await client.callTool({ name: "shop_search", arguments: {} });
+        // The regression this proves: the SDK client validates structuredContent against the
+        // oneOf outputSchema on every call, unconditionally — if the generated schema were
+        // wrong, THIS throws (or isError flips true), not a hand-rolled assertion.
+        expect(result.isError).toBeFalsy();
+        const structured = result.structuredContent as { items: Record<string, unknown>[]; warnings: string[] };
+        expect(structured.items).toEqual([
+          { $row: "ok", name: "Widget A" },
+          { $row: "error", code: "out-of-stock", message: "no longer available" },
+        ]);
+        expect(structured.warnings).toEqual(["price may be stale"]);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("extract: text[] — an empty array validates as OK, not DEGRADED", async () => {
+    const dir = shopManifest();
+    try {
+      const shopRegistry = buildRegistry(dir).registry!;
+      const fetchImpl: FetchLike = async () =>
+        new Response(JSON.stringify({ results: [{ n: "Widget A" }], warnings: [] }), { status: 200 });
+      const server = createMcpServer(shopRegistry, { env: { SHOP_API_URL: "https://x.test" }, fetchImpl });
+      const { client } = await connect(server);
+      try {
+        await client.listTools();
+        const result = await client.callTool({ name: "shop_search", arguments: {} });
+        expect(result.isError).toBeFalsy();
+        const structured = result.structuredContent as { warnings: string[] };
+        expect(structured.warnings).toEqual([]);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
