@@ -9,12 +9,16 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildRegistry } from "./registry";
 import { toolDefinitions, createMcpServer } from "./server";
-import type { ConnectorInvokeOptions } from "./connector";
+import type { InvokeOptions as EdgeSafeInvokeOptions } from "./connector-rest";
 
-// ADR-0012 D-6/D-3: the union options type — one child process per conversation (stdio), so a
-// static `invoke.identityAdapter` set here is architecturally sound, same reasoning as
-// `invoke.caller` below.
-type InvokeOptions = ConnectorInvokeOptions;
+// ADR-0012 D-5/D-6/D-3: same edge-safe type `server.ts`/`http.ts` use — this file is part of
+// the package ROOT (`export * from "./mcp"`, `index.ts`), which `examples/demo/remote-mcp-worker`
+// imports directly for Cloudflare Workers, so it must never import `./connector` (the
+// `pg`-bearing full dispatcher), even as a type. `archstone serve` (the CLI's stdio path, Node-
+// only) opts into `sql` support explicitly via `invoke.connector` — see `cli/src/index.ts`.
+// One child process per conversation (stdio), so a static `invoke.identityAdapter`/`connector`
+// set here is architecturally sound, same reasoning as `invoke.caller` below.
+type InvokeOptions = EdgeSafeInvokeOptions;
 
 export { toolName, inputJsonSchema, objectJsonSchema } from "@archstone/emitter-support";
 /** #44: the audit sink surface, re-exported so a deployer wiring `serveStdio`/`createMcpServer`

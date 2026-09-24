@@ -41,6 +41,10 @@
     "./connector": {
       "types": "./dist/connector.d.ts",
       "default": "./dist/connector.js"
+    },
+    "./connector-rest": {
+      "types": "./dist/connector-rest.d.ts",
+      "default": "./dist/connector-rest.js"
     }
   },
   "files": [

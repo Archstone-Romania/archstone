@@ -31,9 +31,17 @@ import { createRequire } from "node:module";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { load } from "@archstone/schema";
 import { validateSemantics, compile, type IR } from "@archstone/compiler";
-import { Registry, buildRegistry, serveStdio, runVerify, type HealthStatus } from "@archstone/runtime";
+import { Registry, buildRegistry, serveStdio } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
-import type { ConnectorInvokeOptions } from "@archstone/runtime/connector";
+// ADR-0012 D-5: `runVerify`/`HealthStatus` now come from the dedicated `/verify` subpath, not
+// the package root — see `packages/runtime/src/index.ts`'s header comment.
+import { runVerify, type HealthStatus } from "@archstone/runtime/verify";
+// ADR-0012 D-5: the CLI is a Node-only binary — it is the one place in this codebase allowed
+// to import the FULL (`pg`-bearing) dispatcher as a VALUE, and it injects it ONLY into the
+// stdio `serve` path's `connector` override (never into `serve --http`, which must stay
+// edge-safe per D-5's literal exclusion of `@archstone/runtime`'s `/http` subpath).
+import { invokeConnector, type ConnectorInvokeOptions } from "@archstone/runtime/connector";
+import { checkSqlOverPrivilege } from "./sql-privilege";
 import { INIT_USAGE, runInitCmd } from "./init";
 import { runAuditCmd } from "./audit-cmd";
 import { diagnose, formatReport } from "./doctor";
@@ -209,7 +217,7 @@ function runBuild(dir: string, outPath: string | undefined): void {
   process.exit(0);
 }
 
-function runServeHttp(dir: string, port: number, token: string | undefined, connectorOpts: ConnectorInvokeOptions | undefined): void {
+async function runServeHttp(dir: string, port: number, token: string | undefined, connectorOpts: ConnectorInvokeOptions | undefined): Promise<void> {
   // Rule #7 / ADD-0008 R-5: fail closed before touching the network — a missing token is a
   // startup error, never a silently-open endpoint. `--token` wins over the env var if both
   // are set; createHttpHandler itself would also throw on empty, but checking here first
@@ -226,6 +234,17 @@ function runServeHttp(dir: string, port: number, token: string | undefined, conn
     console.error(`archstone: cannot serve '${dir}' — manifest invalid:`);
     for (const i of built.issues) console.error(`  - ${i.file}: ${i.message}`);
     for (const d of built.diagnostics.filter((x) => x.severity === "error")) console.error(`  - ${d.message}`);
+    process.exit(1);
+  }
+
+  // ADR-0012 D-9: eager, before this process ever accepts a connection — a superuser/
+  // BYPASSRLS/owns-and-granted DSN is refused at startup, not on whichever request happens to
+  // reach it first. (`serve --http` never actually dispatches to `sql` per this PR's edge-safety
+  // fix, but the check costs nothing and stays correct if that changes.)
+  const privilegeErrors = await checkSqlOverPrivilege(built.registry.listCapabilities(), connectorOpts);
+  if (privilegeErrors.length > 0) {
+    console.error("archstone serve --http: refusing to start — over-privileged sql connection(s):");
+    for (const e of privilegeErrors) console.error(`  - ${e}`);
     process.exit(1);
   }
 
@@ -614,6 +633,23 @@ async function runVerifyCmd(dir: string, json: boolean, sandbox: boolean, connec
   }
 
   const registry = new Registry(compile(res));
+
+  // ADR-0012 D-9: eager, and — unlike `runVerify`'s own contract-bearing filter — over EVERY
+  // `sql`-bound tool regardless of whether it has a recorded `contract`. A `sql` binding with no
+  // contract is invisible to `runVerify`'s replay loop (nothing to replay), but an
+  // over-privileged CONNECTION is a fact about the DSN, not about any one binding's fixture, and
+  // must still fail this CI gate rather than silently never being checked at all.
+  const privilegeErrors = await checkSqlOverPrivilege(registry.listCapabilities(), connectorOpts);
+  if (privilegeErrors.length > 0) {
+    if (json) {
+      console.log(JSON.stringify({ error: "sql_over_privileged", errors: privilegeErrors }));
+    } else {
+      console.error(`archstone verify ${dir}: refusing — over-privileged sql connection(s):`);
+      for (const e of privilegeErrors) console.error(`  - ${e}`);
+    }
+    process.exit(1);
+  }
+
   // Two literal call sites rather than one with a computed 5th argument (#124 / ADD-124 D-3).
   // The DEFAULT path — what CI and every non-sandbox operator runs — stays the exact
   // three-argument form the two CLI surface tests pin: no `InvokeOptions` bag at all, so no
@@ -789,15 +825,32 @@ async function main(): Promise<void> {
   if (cmd === "serve" && dir && http) {
     // Bearer token: --token wins over ARCHSTONE_HTTP_TOKEN if both are set (Rule #7 —
     // required, never defaults open).
-    runServeHttp(dir, Number(port.value ?? 8787), token.value ?? process.env.ARCHSTONE_HTTP_TOKEN, connectorOpts);
+    await runServeHttp(dir, Number(port.value ?? 8787), token.value ?? process.env.ARCHSTONE_HTTP_TOKEN, connectorOpts);
     return; // blocks on the HTTP server
   }
   if (cmd === "serve" && dir) {
     // ADR-0012: same byte-for-byte-preservation discipline as `runServeHttp`/`runVerifyCmd`
     // above — `serveStdio(dir)` (no second argument) stays the exact call-site text on the
-    // default, no-`--identity-map` path.
+    // default, no-`--identity-map` path. D-5 lists stdio ("one child process per conversation")
+    // as a `sql`-supporting surface (unlike `serve --http`), so once `--identity-map`/
+    // `--sql-guc-prefix` signals intent to configure `sql` session identity at all, the stdio
+    // path ALSO gets the FULL (Node-only) dispatcher injected as its `connector` override —
+    // `serve --http`, below, deliberately never does.
     if (connectorOpts) {
-      await serveStdio(dir, connectorOpts);
+      // D-9: eager, before the stdio transport ever connects — same discipline as
+      // `runServeHttp`. `serveStdio` rebuilds the registry itself; building it once more here,
+      // ahead of time, is the price of checking BEFORE the transport connects rather than
+      // teaching `serveStdio` a new pre-check parameter.
+      const built = buildRegistry(dir);
+      if (built.ok && built.registry) {
+        const privilegeErrors = await checkSqlOverPrivilege(built.registry.listCapabilities(), connectorOpts);
+        if (privilegeErrors.length > 0) {
+          console.error("archstone serve: refusing to start — over-privileged sql connection(s):");
+          for (const e of privilegeErrors) console.error(`  - ${e}`);
+          process.exit(1);
+        }
+      }
+      await serveStdio(dir, { ...connectorOpts, connector: invokeConnector });
     } else {
       await serveStdio(dir); // blocks on the stdio transport
     }

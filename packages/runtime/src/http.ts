@@ -11,12 +11,15 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Registry } from "@archstone/emitter-support";
 import type { CallerContext } from "@archstone/provider-rest";
 import { createMcpServer } from "./server";
-import type { ConnectorInvokeOptions } from "./connector";
+import type { InvokeOptions as EdgeSafeInvokeOptions } from "./connector-rest";
 
-// ADR-0012 D-6: the union options type, so a deployer configuring `identityAdapter`/
-// `sqlSessionGucPrefix` here (SF-7 — a construction-time, deployer-supplied option, never a
-// CLI flag or CDL field) reaches every `sql`-bound capability this handler serves.
-type InvokeOptions = ConnectorInvokeOptions;
+// ADR-0012 D-5: this is the edge-safe `/http` subpath — it imports ONLY `./connector-rest`
+// (never `./connector`, which pulls in `@archstone/provider-sql` -> `pg`), so a `sql`-bound
+// capability is refused here with a clean, explanatory error rather than gaining a static edge
+// to the Postgres driver. `packages/runtime/test/boundary.test.ts` pins this file's import
+// graph never reaching `pg`/`@archstone/provider-sql`, and a `wrangler deploy --dry-run` against
+// `examples/demo/remote-mcp-worker` confirms zero bundle-size regression.
+type InvokeOptions = EdgeSafeInvokeOptions;
 
 export { createMcpServer } from "./server";
 

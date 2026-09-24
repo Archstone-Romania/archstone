@@ -172,6 +172,29 @@ describe("invokeSql — D-9 over-privileged connection detection", () => {
     expect(result.ok).toBe(true);
   });
 
+  // NF-1 (ADR-0012 Risk R-7, BR-15a) — pins the DOCUMENTED BOUNDARY of the ownership check, not
+  // a desired safety property: it queries only `pg_class`/`information_schema.role_table_grants`
+  // filtered to `current_user`/`PUBLIC`, with NO role-membership traversal (no `pg_auth_members`,
+  // no recursive/`WITH RECURSIVE` membership walk, no `SET ROLE`). A future edit that
+  // accidentally "fixes" R-7 by adding membership traversal must change this test — on purpose,
+  // not silently — the same way a future edit that accidentally NARROWS the check further must
+  // also fail it.
+  it("the ownership check queries only pg_class/role_table_grants filtered to current_user/PUBLIC — no role-membership traversal (R-7's documented boundary)", async () => {
+    const { pool, queries } = fakePool([{ id: "1" }]);
+    await invokeSql(tool, { id: "1" }, baseOpts(pool));
+    const ownershipQuery = queries.find((q) => q.text.includes("role_table_grants"))?.text ?? "";
+    expect(ownershipQuery).toMatch(/FROM pg_class c/);
+    expect(ownershipQuery).toMatch(/JOIN pg_namespace n/);
+    expect(ownershipQuery).toMatch(/FROM information_schema\.role_table_grants g/);
+    expect(ownershipQuery).toMatch(/g\.grantee IN \(current_user, 'PUBLIC'\)/);
+    // The documented gap itself: no visibility into membership NOT already active in this
+    // session (NOINHERIT-mediated or SECURITY DEFINER-mediated grants) — R-7/BR-15a.
+    expect(ownershipQuery).not.toMatch(/pg_auth_members/i);
+    expect(ownershipQuery).not.toMatch(/WITH RECURSIVE/i);
+    expect(ownershipQuery).not.toMatch(/SET ROLE/i);
+    expect(ownershipQuery).not.toMatch(/SECURITY DEFINER/i);
+  });
+
   it("caches the over-privileged check across invocations on the same DSN (checked once, not per-call)", async () => {
     const { pool, client } = fakePool([{ id: "1" }]);
     const opts = baseOpts(pool);

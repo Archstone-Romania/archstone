@@ -8,5 +8,5 @@ export default defineConfig({
   dts: false,
   sourcemap: true,
   clean: true,
-  external: ["@archstone/schema", "@archstone/compiler", "@archstone/runtime"],
+  external: ["@archstone/schema", "@archstone/compiler", "@archstone/runtime", "@archstone/provider-sql"],
 });

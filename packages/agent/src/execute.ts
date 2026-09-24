@@ -25,10 +25,16 @@ import {
   type ExecutionDenialReason,
 } from "@archstone/emitter-support";
 import type { FetchLike, CallerContext } from "@archstone/provider-rest";
-import { invokeConnector, type ConnectorInvokeOptions } from "@archstone/runtime/connector";
+// ADR-0012 D-5: `@archstone/agent`'s root (this file) is RFC-0008's "pure mapper + fetch +
+// injectable env only" edge-deployable surface — it must never gain a static edge to
+// `@archstone/provider-sql`/`pg`. `invokeConnectorRest` is the edge-safe default; a Node-only
+// embedder who wants `sql`-bound capabilities to actually work passes `opts.connector` (see
+// `ExecuteOptions.connector` below), typically `@archstone/runtime/connector`'s `invokeConnector`
+// — imported by THEIR code, never by this file. `packages/agent/test/boundary.test.ts` pins that
+// this file's import graph never reaches `pg`/`@archstone/provider-sql`.
+import { invokeConnectorRest, type InvokeOptions as EdgeSafeInvokeOptions } from "@archstone/runtime/connector-rest";
 
-// ADR-0012 D-6: the union options type (rest fields + sql fields).
-type InvokeOptions = ConnectorInvokeOptions;
+type InvokeOptions = EdgeSafeInvokeOptions;
 
 export interface ExecuteOptions {
   /** Injected, Workers-style — execute() never falls back to `process.env` (ADD-0008
@@ -72,6 +78,13 @@ export interface ExecuteOptions {
   identityAdapter?: InvokeOptions["identityAdapter"];
   /** ADR-0012 D-4 — pure pass-through to `invokeSql`; ignored by `invokeRest`. */
   sqlSessionGucPrefix?: InvokeOptions["sqlSessionGucPrefix"];
+  /** ADR-0012 D-5 — a Node-only embedder's explicit opt-in to `sql`-bound-capability support.
+   *  Absent (the default, and the only option in an edge-deployed embedding): a `sql`-bound
+   *  capability's `execute()` call returns `status: "error"` with a clean, explanatory message —
+   *  this surface never imports `pg`. Present: every invocation routes through the supplied
+   *  function instead (typically `@archstone/runtime/connector`'s `invokeConnector`, imported by
+   *  the EMBEDDER'S own Node-only code, never by this package). */
+  connector?: InvokeOptions["connector"];
 }
 
 /** #43 ADD-43 D-11: the embedded rendering of a policy refusal — the `ExecuteResult` sibling of
@@ -226,7 +239,7 @@ export async function executeCapability(
   }
 
   const env = opts?.env ?? {};
-  const result = await invokeConnector(tool, input, {
+  const result = await invokeConnectorRest(tool, input, {
     env,
     fetchImpl: opts?.fetchImpl,
     caller: opts?.caller,
@@ -234,6 +247,7 @@ export async function executeCapability(
     onResponse: opts?.onResponse,
     identityAdapter: opts?.identityAdapter,
     sqlSessionGucPrefix: opts?.sqlSessionGucPrefix,
+    connector: opts?.connector,
   });
   if (!result.ok) {
     // ADD-44 Amendment 2 (archstone#34): `reachedConnector` mirrors `callTool`'s derivation —
