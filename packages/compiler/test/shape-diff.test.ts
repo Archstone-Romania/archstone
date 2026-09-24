@@ -93,3 +93,55 @@ describe("shapeDriftSummary", () => {
     expect(shapeDriftSummary(diffShape(recorded, { ...recorded }))).toBe("");
   });
 });
+
+// #83 (ADD-12 §8.3): array element shapes are observed-so-far, never an exhaustive replacement
+// of the prior run.
+describe("diffShape — data-dependent array element shapes (#83, ADD-12 §8.3)", () => {
+  it("an empty array does not erase a previously recorded element shape", () => {
+    const live = describeShape({ stays: [] });
+    const diff = diffShape(recorded, live);
+    expect(diff.removed).toEqual([]);
+    expect(hasShapeDrift(diff)).toBe(false);
+  });
+
+  it("going from empty to populated is not drift", () => {
+    const emptyRecorded = describeShape({ stays: [] });
+    const live = describeShape({ stays: [{ name: "X", location: "Y", pricePerNight: 100, rating: 4.2 }] });
+    const diff = diffShape(emptyRecorded, live);
+    expect(diff.added).toEqual([]);
+    expect(hasShapeDrift(diff)).toBe(false);
+  });
+
+  it("a genuinely new element variant is reported as added, not as a retype", () => {
+    // The collection has only ever produced this success-row shape...
+    const successOnly = describeShape({
+      stays: [{ name: "X", location: "Y", pricePerNight: 100, rating: 4.2 }],
+    });
+    // ...and a run now returns a declared error-row element for the first time (a DIFFERENT
+    // path, `$.stays[].code` — not a retype of any success-row field).
+    const live = describeShape({ stays: [{ code: "sold-out", message: "no rooms left" }] });
+    const diff = diffShape(successOnly, live);
+    expect(diff.added).toEqual([
+      { path: "$.stays[].code", type: "string" },
+      { path: "$.stays[].message", type: "string" },
+    ]);
+    expect(diff.retyped).toEqual([]);
+  });
+
+  it("a real shape change is still caught", () => {
+    // `pricePerNight` retyping from number to string on the SAME path is genuine drift,
+    // unaffected by the observed-so-far treatment of array element shapes.
+    const live = describeShape({
+      stays: [{ name: "X", location: "Y", pricePerNight: "100", rating: 4.2 }],
+    });
+    const diff = diffShape(recorded, live);
+    expect(diff.retyped).toEqual([{ path: "$.stays[].pricePerNight", from: "number", to: "string" }]);
+    expect(hasShapeDrift(diff)).toBe(true);
+  });
+
+  it("a field genuinely dropped while the array stays populated is still reported as removed", () => {
+    const live = describeShape({ stays: [{ name: "X", location: "Y", pricePerNight: 100 }] }); // no `rating`
+    const diff = diffShape(recorded, live);
+    expect(diff.removed).toEqual([{ path: "$.stays[].rating", type: "number" }]);
+  });
+});
