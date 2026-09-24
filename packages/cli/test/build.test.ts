@@ -9,6 +9,12 @@ import { tmpdir } from "node:os";
 // `archstone build` end to end: spawn the real CLI (ADD-0008 #27) and assert the written
 // artifact's shape — version:"0", no `contract` key on any tool.
 
+// #91: every `it` here spawns a fresh `tsx` process (transpile + run the whole CLI), which
+// is slow to cold-start under real CPU load — this file timed out twice in a full local
+// `pnpm test` run (parallel across all workspace packages) while passing in isolation
+// (measured ~550-700ms per case) and in CI. Same root cause and same fix as #134
+// (policy.test.ts, verify.test.ts, serve-http.test.ts): an explicit, generous per-test
+// timeout removes the race against vitest's 5000ms default without loosening any assertion.
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -37,7 +43,7 @@ describe("archstone build (ADD-0008 #27)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("defaults to ./archstone.ir.json in the CWD when --out is absent", async () => {
     const dir = mkdtempSync(join(tmpdir(), "archstone-build-cwd-"));
@@ -48,7 +54,7 @@ describe("archstone build (ADD-0008 #27)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   it("exits non-zero with diagnostics for an invalid manifest", async () => {
     const dir = mkdtempSync(join(tmpdir(), "archstone-build-invalid-"));
@@ -59,5 +65,5 @@ describe("archstone build (ADD-0008 #27)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 });
