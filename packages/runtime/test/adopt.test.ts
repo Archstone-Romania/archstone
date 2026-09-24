@@ -198,9 +198,9 @@ describe("planAdoption — scalar arrays outside the collection (#82, ADD-12 §8
     expect((refusal as { detail: string }).detail).not.toContain("structure rather than a value"); // not-a-leaf's wording
   });
 
-  it("refuses an empty (never-populated) array as not-a-leaf — no element type observed yet", () => {
+  it("refuses an empty (never-populated) array with a reason distinct from not-a-leaf, naming the element type as unknown", () => {
     const plan = planAdoption(tool(), drift([{ path: "$.warnings", type: "array" }]), resources);
-    expect(plan.candidates[0]).toMatchObject({ adoptable: false, reason: "not-a-leaf" });
+    expect(plan.candidates[0]).toMatchObject({ adoptable: false, reason: "array-element-type-unknown" });
   });
 
   it("does not re-offer/refuse the array's own element-detail entry as a separate candidate", () => {
@@ -213,5 +213,73 @@ describe("planAdoption — scalar arrays outside the collection (#82, ADD-12 §8
       resources,
     );
     expect(plan.candidates).toHaveLength(1);
+  });
+});
+
+// #290 regression: the motivating case (`response: { resource, map }`, NO `collection:`) fell
+// through to the collection-item path, which has no notion of an array field at all —
+// `$.warnings` refused `not-a-leaf`, `$.warnings[]` refused `nested`. Fixed for all three tool
+// shapes a `response:`-adjacent binding can take: WITH a collection (already covered above),
+// WITHOUT one, and no `response:` at all.
+describe("planAdoption — scalar-array adoption across all three tool shapes (#290)", () => {
+  const bothEntries: ShapeDiff["added"] = [
+    { path: "$.warnings", type: "array" },
+    { path: "$.warnings[]", type: "string" },
+  ];
+
+  it("response: WITHOUT a collection — the $.x + $.x[] pair collapses to one output-array candidate", () => {
+    const plan = planAdoption(tool(null), drift(bothEntries), resources);
+    expect(plan.candidates).toHaveLength(1);
+    expect(adoptable(plan)[0]).toMatchObject({ field: "warnings", itemPath: "$.warnings[*]", semantic: "text", kind: "output-array" });
+  });
+
+  it("response: WITHOUT a collection — $.x[] alone (no base entry) still adopts", () => {
+    const plan = planAdoption(tool(null), drift([{ path: "$.warnings[]", type: "string" }]), resources);
+    expect(plan.candidates).toHaveLength(1);
+    expect(adoptable(plan)[0]).toMatchObject({ field: "warnings", itemPath: "$.warnings[*]", semantic: "text", kind: "output-array" });
+  });
+
+  it("response: WITHOUT a collection — a genuinely empty array is refused with a clear, distinct reason", () => {
+    const plan = planAdoption(tool(null), drift([{ path: "$.warnings", type: "array" }]), resources);
+    expect(plan.candidates[0]).toMatchObject({ adoptable: false, reason: "array-element-type-unknown" });
+  });
+
+  it("response: WITHOUT a collection — a plain scalar root field is still a resource-field candidate, unaffected", () => {
+    const plan = planAdoption(tool(null), drift([{ path: "$.boardType", type: "string" }]), resources);
+    expect(adoptable(plan)[0]).toMatchObject({ field: "boardType", itemPath: "$.boardType", kind: "resource-field" });
+  });
+
+  it("NO response: at all (extract:-only tool) — the $.x + $.x[] pair still collapses to one candidate", () => {
+    const t = tool();
+    delete t.response;
+    const plan = planAdoption(t, drift(bothEntries), resources);
+    expect(plan.candidates).toHaveLength(1);
+    expect(adoptable(plan)[0]).toMatchObject({ field: "warnings", itemPath: "$.warnings[*]", semantic: "text", kind: "output-array" });
+  });
+
+  it("NO response: at all — $.x[] alone (no base entry) still adopts", () => {
+    const t = tool();
+    delete t.response;
+    const plan = planAdoption(t, drift([{ path: "$.warnings[]", type: "string" }]), resources);
+    expect(adoptable(plan)[0]).toMatchObject({ field: "warnings", itemPath: "$.warnings[*]", kind: "output-array" });
+  });
+
+  it("NO response: at all — a genuinely empty array is refused with a clear, distinct reason", () => {
+    const t = tool();
+    delete t.response;
+    const plan = planAdoption(t, drift([{ path: "$.warnings", type: "array" }]), resources);
+    expect(plan.candidates[0]).toMatchObject({ adoptable: false, reason: "array-element-type-unknown" });
+  });
+
+  it("NO response: at all — a plain non-array field is silently skipped (no resource to write it into)", () => {
+    const t = tool();
+    delete t.response;
+    const plan = planAdoption(t, drift([{ path: "$.boardType", type: "string" }]), resources);
+    expect(plan.candidates).toEqual([]);
+  });
+
+  it("response: WITH a collection — an array nested INSIDE a collection item stays out of scope, unaffected", () => {
+    const plan = planAdoption(tool(), drift([{ path: "$.stays[].amenities", type: "array" }]), resources);
+    expect(plan.candidates[0]).toMatchObject({ adoptable: false, reason: "not-a-leaf" });
   });
 });

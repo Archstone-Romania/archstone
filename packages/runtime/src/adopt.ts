@@ -22,7 +22,12 @@ export type AdoptionRefusal =
    *  `not-a-leaf` — an object array needs a declared row/resource shape to adopt into, which
    *  this increment does not ratify (§8.4 founder ruling: "deferred — ADD ulterior"; core #49
    *  is where that reopens). */
-  | "array-of-objects-unresolved";
+  | "array-of-objects-unresolved"
+  /** #82 follow-up (#290): an observed array field whose element type was never recorded — it
+   *  has only ever been seen empty. Distinct from `not-a-leaf`: the field genuinely IS
+   *  adoptable as a scalar array, there is just nothing yet to infer its `list:` semantic type
+   *  from. Re-probing after the backend returns at least one element resolves it. */
+  | "array-element-type-unknown";
 
 export interface AdoptableField {
   adoptable: true;
@@ -96,6 +101,8 @@ function refusalDetail(reason: AdoptionRefusal, observed: JsonType): string {
       return "already declared by this capability";
     case "array-of-objects-unresolved":
       return "an array of objects needs a declared row/resource shape to adopt into, which core #49 (lifting the one-output-field cap) has not ratified yet — declare it by hand once that lands";
+    case "array-element-type-unknown":
+      return "observed only as an empty array so far — no element has ever been recorded, so there is nothing to infer a list: semantic type from yet";
   }
 }
 
@@ -119,16 +126,24 @@ function itemPrefix(collection: string | undefined): string {
  * needs a judgment no shape comparison can make — is `price_per_night` the old `pricePerNight`,
  * or a new field that happens to look like it? ADR-0008 puts both out of scope, and the diff
  * still names them so a human can act.
+ *
+ * #290 follow-up: a scalar-array field is adoptable (`kind: "output-array"`, #82) under all
+ * three tool shapes — `response:` WITH a `collection:`, `response:` WITHOUT one (a single-object
+ * mapping, where the response root IS the mapped item), and no `response:` at all (an
+ * `extract:`-only tool). Only fields genuinely INSIDE a real per-item `collection:` still go
+ * through the resource-field path below unchanged; nothing else assumes a `collection:` exists,
+ * and nothing assumes `tool.response` exists at all. A field with no response-mapping mechanism
+ * to write a plain scalar into (no `mapping`) is simply not offered as a resource-field
+ * candidate — `extract:` remains the only mechanism such a tool has, and that mechanism only
+ * reaches arrays (#82) and (unchanged, pre-#290) whatever `extract:` already declares.
  */
 export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResourceRegistry): AdoptionPlan {
   const mapping = tool.response;
-  if (!mapping) return { capabilityId: tool.id, candidates: [] };
-
-  const prefix = itemPrefix(mapping.collection);
-  const declared = new Set<string>([
-    ...mapping.fields.map((f) => f.name),
-    ...(resources[mapping.resource] ?? []).map((f) => f.name),
-  ]);
+  const hasCollection = Boolean(mapping?.collection);
+  const prefix = itemPrefix(mapping?.collection);
+  const declared = mapping
+    ? new Set<string>([...mapping.fields.map((f) => f.name), ...(resources[mapping.resource] ?? []).map((f) => f.name)])
+    : new Set<string>();
   const declaredOutput = new Set<string>(tool.output.map((f) => f.name));
 
   const refuse = (path: string, observed: JsonType, reason: AdoptionRefusal): UnadoptableField => ({
@@ -139,53 +154,78 @@ export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResour
     detail: refusalDetail(reason, observed),
   });
 
-  // #82 (ADD-12 §8.2): `path[]` element-detail entries (the SAME flattening `describeShape`
-  // records for any array) tell us what an outside-collection array's items look like, without
-  // a second traversal. Consumed below, keyed by the array's own path — never offered as a
-  // candidate in their own right when they explain one.
+  /** Is `path` under the mapping's own root — the collection item's prefix when a real
+   *  `collection:` exists, or the response root itself (`prefix === "$"`) when `response:` maps
+   *  a single object? Both are "the field this mapping's `map:` could plausibly reach" — the
+   *  pre-#290 meaning of `outsideCollection`, unchanged. */
+  const withinMappingRoot = (path: string): boolean => path.startsWith(`${prefix}.`);
+
+  /** Is `path` a field INSIDE a real per-item `collection:` specifically (never true when
+   *  `response:` has no `collection:`, or there is no `response:` at all)? Used ONLY to decide
+   *  whether an array stays out of scope for #82's output-array handling (nested per-item
+   *  arrays are unsupported, unchanged from before #290) — every top-level array otherwise
+   *  hangs directly off the response root and is always eligible. */
+  const insideRealCollectionItem = (path: string): boolean => hasCollection && withinMappingRoot(path);
+
+  // `path[]` element-detail entries (the SAME flattening `describeShape` records for any array)
+  // tell us what an array's items look like, without a second traversal. Keyed by the array's
+  // own base path.
   const elementTypeOf = new Map<string, JsonType>();
   for (const { path, type } of drift.added) {
     if (path.endsWith("[]")) elementTypeOf.set(path.slice(0, -2), type);
   }
 
-  const candidates: AdoptionCandidate[] = [];
-  for (const { path, type: observed } of drift.added) {
-    const outsideCollection = !path.startsWith(`${prefix}.`);
+  // Every array base path this run has anything to say about — from a literal `{type:"array"}`
+  // entry, OR (#290: "$.x[] alone with a scalar type") from an element-detail entry alone, when
+  // the base array path itself is unchanged (already declared, or simply not part of this diff).
+  const arrayBases = new Set<string>();
+  for (const { path, type } of drift.added) if (type === "array") arrayBases.add(path);
+  for (const base of elementTypeOf.keys()) arrayBases.add(base);
 
-    if (outsideCollection && observed === "array") {
-      // A field at (or reachable from) the response root, not the mapped collection — #82:
-      // an array of ONE scalar semantic type is adoptable via `extract:`; an array of objects
-      // is refused, distinct from `not-a-leaf`, naming that it needs a declared row shape.
-      const field = path.replace(/^\$\.?/, "").split(".").pop() ?? path;
-      if (declaredOutput.has(field)) {
-        candidates.push(refuse(path, observed, "already-declared"));
-        continue;
-      }
-      const elementType = elementTypeOf.get(path);
-      if (elementType === "object") {
-        candidates.push(refuse(path, observed, "array-of-objects-unresolved"));
-        continue;
-      }
-      const semantic = elementType ? semanticFor(elementType) : undefined;
-      if (!semantic) {
-        // No element observed yet (empty array) or an element type CDL has no semantic for
-        // (e.g. boolean) — not enough to confidently declare an element type.
-        candidates.push(refuse(path, observed, "not-a-leaf"));
-        continue;
-      }
-      candidates.push({ adoptable: true, path, field, itemPath: `${path}[*]`, observed, semantic, kind: "output-array" });
+  // Only the bases OUTSIDE a real collection item are handled as #82 output-array candidates
+  // here — one candidate per base, collapsing its own `{type:"array"}` entry and its `[]`
+  // element-detail entry into one verdict. A base found literally inside a collection item
+  // (e.g. `$.stays[].amenities`) is left untouched here and falls through to the per-item loop
+  // below, unchanged from before #290 (arrays there stay unsupported, refused the same way any
+  // other structured per-item field is).
+  const outsideArrayBases = new Set<string>();
+  for (const base of arrayBases) if (!insideRealCollectionItem(base)) outsideArrayBases.add(base);
+
+  const candidates: AdoptionCandidate[] = [];
+
+  for (const base of outsideArrayBases) {
+    const field = base.replace(/^\$\.?/, "").split(".").pop() ?? base;
+    if (declaredOutput.has(field)) {
+      candidates.push(refuse(base, "array", "already-declared"));
       continue;
     }
-
-    // The element-detail entry for an outside-collection array (`path[]`) is consumed above,
-    // keyed by the array's own path — it explains that verdict and is never offered/refused a
-    // second time as its own, duplicate candidate.
-    if (outsideCollection && path.endsWith("[]") && elementTypeOf.get(path.slice(0, -2)) === observed) {
-      const arrayPath = path.slice(0, -2);
-      if (!arrayPath.startsWith(`${prefix}.`)) continue;
+    const elementType = elementTypeOf.get(base);
+    if (elementType === "object") {
+      candidates.push(refuse(base, "array", "array-of-objects-unresolved"));
+      continue;
     }
+    if (elementType === undefined) {
+      // Seen only as an empty array so far (no `[]` element-detail entry at all) — genuinely
+      // adoptable once an element is observed, just not yet (#290: distinct from `not-a-leaf`).
+      candidates.push(refuse(base, "array", "array-element-type-unknown"));
+      continue;
+    }
+    const semantic = semanticFor(elementType);
+    if (!semantic) {
+      // An element type CDL has no semantic for (e.g. boolean) — genuinely not adoptable.
+      candidates.push(refuse(base, "array", "not-a-leaf"));
+      continue;
+    }
+    candidates.push({ adoptable: true, path: base, field, itemPath: `${base}[*]`, observed: "array", semantic, kind: "output-array" });
+  }
 
-    if (outsideCollection) {
+  for (const { path, type: observed } of drift.added) {
+    if (outsideArrayBases.has(path)) continue; // its base's verdict, above, already speaks for it
+    if (path.endsWith("[]") && outsideArrayBases.has(path.slice(0, -2))) continue; // ditto, its element-detail half
+
+    if (!mapping) continue; // no response: mapping at all — no resource-field mechanism (#290)
+
+    if (!withinMappingRoot(path)) {
       candidates.push(refuse(path, observed, "outside-collection"));
       continue;
     }
@@ -218,7 +258,7 @@ export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResour
     candidates.push({ adoptable: true, path, field: rest, itemPath: `$.${rest}`, observed, semantic, kind: "resource-field" });
   }
 
-  return { capabilityId: tool.id, resource: mapping.resource, candidates };
+  return { capabilityId: tool.id, resource: mapping?.resource, candidates };
 }
 
 /** The adoptable candidates, in the order they would be offered. */
