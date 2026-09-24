@@ -229,7 +229,9 @@ import { fromIR, tools, execute } from "@archstone/agent";
 const archstone = fromIR(compiledIR);
 
 // Get typed tool definitions in your preferred format
-const myTools = archstone.tools("anthropic"); // or "openai" / "gemini" / "json-schema"
+const myTools = archstone.tools("anthropic");
+// or "openai-chat" (Chat Completions) / "openai-responses" (Responses API) / "gemini" /
+// "json-schema" — "openai" also works but is a deprecated alias of "openai-chat"
 
 // Invoke capabilities directly — no MCP server process needed
 // Accepts both raw dotted id and sanitized tool name (as returned by tools())

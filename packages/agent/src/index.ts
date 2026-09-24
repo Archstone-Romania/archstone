@@ -17,6 +17,9 @@ export type {
   ToolFormat,
   ToolDef,
   AnthropicToolDef,
+  OpenAIChatToolDef,
+  OpenAIResponsesToolDef,
+  /** @deprecated Renamed to `OpenAIChatToolDef` by #89. */
   OpenAIToolDef,
   GeminiToolDef,
   JsonSchemaToolDef,
@@ -29,6 +32,9 @@ export type {
   Extractor,
   StructuredOutputDef,
   AnthropicStructuredOutput,
+  OpenAIChatStructuredOutput,
+  OpenAIResponsesStructuredOutput,
+  /** @deprecated Renamed to `OpenAIResponsesStructuredOutput` by #89. */
   OpenAIStructuredOutput,
   GeminiStructuredOutput,
   JsonSchemaStructuredOutput,

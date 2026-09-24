@@ -5,7 +5,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { buildRegistry } from "@archstone/runtime";
 import { fromIR, sanitizeGeminiSchema } from "../src/index";
-import type { AnthropicToolDef, OpenAIToolDef, GeminiToolDef, JsonSchemaToolDef } from "../src/index";
+import type {
+  AnthropicToolDef,
+  OpenAIChatToolDef,
+  OpenAIResponsesToolDef,
+  GeminiToolDef,
+  JsonSchemaToolDef,
+} from "../src/index";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tourism = resolve(here, "../../../examples/manifests/tourism");
@@ -85,8 +91,8 @@ describe("tools(format) — envelope shape per target (tourism.search)", () => {
     expect(schema.required).toContain("destination");
   });
 
-  it("openai: {type:'function', function:{name, description, parameters}}", () => {
-    const defs = archstone.tools("openai") as OpenAIToolDef[];
+  it("openai-chat: {type:'function', function:{name, description, parameters}}", () => {
+    const defs = archstone.tools("openai-chat") as OpenAIChatToolDef[];
     const search = defs.find((d) => d.function.name === "tourism_search");
     expect(search).toBeDefined();
     expect(search!.type).toBe("function");
@@ -94,6 +100,24 @@ describe("tools(format) — envelope shape per target (tourism.search)", () => {
     const schema = search!.function.parameters as JsonSchema;
     expect(schema.type).toBe("object");
     expect(schema.properties).toHaveProperty("destination");
+  });
+
+  it("openai-responses: flat {type, name, description, parameters, strict:false}", () => {
+    const defs = archstone.tools("openai-responses") as OpenAIResponsesToolDef[];
+    const search = defs.find((d) => d.name === "tourism_search");
+    expect(search).toBeDefined();
+    expect(search!.type).toBe("function");
+    expect(search!.strict).toBe(false);
+    expect((search as unknown as { function?: unknown }).function).toBeUndefined();
+    const schema = search!.parameters as JsonSchema;
+    expect(schema.type).toBe("object");
+    expect(schema.properties).toHaveProperty("destination");
+  });
+
+  it('openai (deprecated alias): tools() output is byte-identical to "openai-chat"', () => {
+    const alias = archstone.tools("openai");
+    const chat = archstone.tools("openai-chat");
+    expect(alias).toEqual(chat);
   });
 
   it("gemini: {name, description, parameters} — flat, no OpenAI-style envelope", () => {
@@ -116,7 +140,7 @@ describe("tools(format) — envelope shape per target (tourism.search)", () => {
   });
 
   it("only invocable (bound) capabilities are listed as tools, across every format", () => {
-    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+    for (const format of ["anthropic", "openai", "openai-chat", "openai-responses", "gemini", "json-schema"] as const) {
       const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
       const names = defs.map((d) => d.name ?? d.function?.name);
       expect(names).toContain("tourism_search");
@@ -173,7 +197,7 @@ describe("#55: tools()/buildToolDefs honour capability exposure/lifecycle (ADD-2
   });
 
   it("lists exactly stable, beta, deprecated — retired and experimental are unlisted (D-10), across every format", () => {
-    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+    for (const format of ["anthropic", "openai", "openai-chat", "openai-responses", "gemini", "json-schema"] as const) {
       const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
       const names = defs.map((d) => d.name ?? d.function?.name).sort();
       expect(names).toEqual(["demo_beta", "demo_deprecated", "demo_stable"]);
@@ -189,7 +213,7 @@ describe("#55: tools()/buildToolDefs honour capability exposure/lifecycle (ADD-2
   });
 
   it("a retired capability never reaches any format's tool list", () => {
-    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+    for (const format of ["anthropic", "openai", "openai-chat", "openai-responses", "gemini", "json-schema"] as const) {
       const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
       const names = defs.map((d) => d.name ?? d.function?.name);
       expect(names).not.toContain("demo_retired");
@@ -199,17 +223,20 @@ describe("#55: tools()/buildToolDefs honour capability exposure/lifecycle (ADD-2
 
 // #126 — the effect SURFACE test. The MCP emitter now lowers `effect` into MCP tool
 // annotations (runtime/src/server.ts `effectAnnotations`); #126 asks for "the equivalent where
-// the target format has one", and none of these four has one. Each was checked at source
+// the target format has one", and none of these formats has one. Each was checked at source
 // before concluding — see the header comment in `packages/agent/src/tools.ts` for the exact
 // field lists, the references and the dates:
 //
-//   anthropic   six optional properties, none about side effects
-//   openai      {type, name, description, parameters, strict}; readOnly/destructive hints
-//               appear in OpenAI's docs only when describing MCP servers, not this envelope
-//   gemini      has `behavior`, but it is BLOCKING/NON_BLOCKING — async execution in the Live
-//               API, not a side-effect annotation
-//   json-schema our own neutral envelope; this consumer is in-process and already holds
-//               `archstone.registry`, so `effect` was never withheld from it
+//   anthropic         six optional properties, none about side effects
+//   openai-chat       {type, function:{name, description, parameters}}; no side-effect field
+//   openai-responses  {type, name, description, parameters, strict}; readOnly/destructive
+//                     hints appear in OpenAI's docs only when describing MCP servers, not this
+//                     envelope
+//   openai            deprecated alias of openai-chat — same key set, same absence
+//   gemini            has `behavior`, but it is BLOCKING/NON_BLOCKING — async execution in the
+//                     Live API, not a side-effect annotation
+//   json-schema       our own neutral envelope; this consumer is in-process and already holds
+//                     `archstone.registry`, so `effect` was never withheld from it
 //
 // These assertions exist so "we emit nothing" is a recorded decision rather than an omission a
 // later reader mistakes for an oversight: adding a field means changing a test that says why it
@@ -273,25 +300,28 @@ describe("#126 — no agent target format has an effect equivalent, so none is i
   const EXPECTED_KEYS: Record<string, string[]> = {
     anthropic: ["description", "input_schema", "name"],
     openai: ["function", "type"],
+    "openai-chat": ["function", "type"],
+    "openai-responses": ["description", "name", "parameters", "strict", "type"],
     gemini: ["description", "name", "parameters"],
     "json-schema": ["description", "name", "schema"],
   };
 
   it.each(EFFECTS)("effect: %s changes no envelope's key set in any format", (effect) => {
-    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+    for (const format of ["anthropic", "openai", "openai-chat", "openai-responses", "gemini", "json-schema"] as const) {
       const defs = archstone.tools(format) as { name?: string; function?: { name: string } }[];
       const def = defs.find((d) => (d.name ?? d.function?.name) === `demo_${effect}`)!;
       expect(def, `demo_${effect} must be listed in ${format}`).toBeDefined();
       expect(Object.keys(def).sort(), `${format} envelope for effect: ${effect}`).toEqual(EXPECTED_KEYS[format]);
     }
-    // OpenAI's inner function object, the one place a native field could plausibly have gone.
-    const openai = archstone.tools("openai") as OpenAIToolDef[];
-    const fn = openai.find((d) => d.function.name === `demo_${effect}`)!.function;
+    // OpenAI-chat's inner function object, the one place a native field could plausibly have
+    // gone.
+    const openaiChat = archstone.tools("openai-chat") as OpenAIChatToolDef[];
+    const fn = openaiChat.find((d) => d.function.name === `demo_${effect}`)!.function;
     expect(Object.keys(fn).sort()).toEqual(["description", "name", "parameters"]);
   });
 
   it("no format leaks an MCP annotation key or a raw `effect` field onto a tool definition", () => {
-    for (const format of ["anthropic", "openai", "gemini", "json-schema"] as const) {
+    for (const format of ["anthropic", "openai", "openai-chat", "openai-responses", "gemini", "json-schema"] as const) {
       const serialized = JSON.stringify(archstone.tools(format));
       // "effect" is safe to grep for here: this fixture's descriptions are "A <effect>
       // capability." and never contain the word itself.

@@ -5,11 +5,13 @@ import { buildRegistry } from "@archstone/runtime";
 import { fromIR, UnknownResourceError } from "../src/index";
 import type {
   AnthropicToolDef,
-  OpenAIToolDef,
+  OpenAIChatToolDef,
+  OpenAIResponsesToolDef,
   GeminiToolDef,
   JsonSchemaToolDef,
   AnthropicStructuredOutput,
-  OpenAIStructuredOutput,
+  OpenAIChatStructuredOutput,
+  OpenAIResponsesStructuredOutput,
   GeminiStructuredOutput,
   JsonSchemaStructuredOutput,
 } from "../src/index";
@@ -58,13 +60,28 @@ describe("#11: the structured-output envelope, per provider", () => {
     expect(so.schema.additionalProperties).toBe(false);
   });
 
-  it("openai — { type, name, schema, strict:false } (text.format on the Responses API)", () => {
-    const so = archstone.extractor("tourism.Stay", "openai").structuredOutput as OpenAIStructuredOutput;
+  it("openai-responses — { type, name, schema, strict:false } (text.format on the Responses API)", () => {
+    const so = archstone.extractor("tourism.Stay", "openai-responses").structuredOutput as OpenAIResponsesStructuredOutput;
     expect(Object.keys(so).sort()).toEqual(["name", "schema", "strict", "type"]);
     expect(so.name).toBe("tourism_Stay");
     // `strict: false` is a decision, not an omission: strict mode would require every property
     // in `required`, deleting the `degraded` outcome on this target alone.
     expect(so.strict).toBe(false);
+  });
+
+  it("openai-chat — { type, json_schema:{name, schema, strict:false} } (response_format on Chat Completions)", () => {
+    const so = archstone.extractor("tourism.Stay", "openai-chat").structuredOutput as OpenAIChatStructuredOutput;
+    expect(Object.keys(so).sort()).toEqual(["json_schema", "type"]);
+    expect(so.type).toBe("json_schema");
+    expect(Object.keys(so.json_schema).sort()).toEqual(["name", "schema", "strict"]);
+    expect(so.json_schema.name).toBe("tourism_Stay");
+    expect(so.json_schema.strict).toBe(false);
+  });
+
+  it('openai (deprecated alias) — structuredOutput now equals "openai-chat"\'s shape (#89 BR-6)', () => {
+    const alias = archstone.extractor("tourism.Stay", "openai").structuredOutput;
+    const chat = archstone.extractor("tourism.Stay", "openai-chat").structuredOutput;
+    expect(alias).toEqual(chat);
   });
 
   it("gemini — { type:'text', mime_type, schema } (response_format on the Interactions API)", () => {
@@ -88,10 +105,22 @@ describe("#11: the tool envelope reuses the shipped four, and requires an instru
     expect(def.input_schema.additionalProperties).toBe(false);
   });
 
-  it("openai", () => {
-    const def = archstone.extractor("tourism.Stay", "openai").tool(INSTRUCTION) as OpenAIToolDef;
+  it("openai-chat", () => {
+    const def = archstone.extractor("tourism.Stay", "openai-chat").tool(INSTRUCTION) as OpenAIChatToolDef;
     expect(def.type).toBe("function");
     expect(def.function).toMatchObject({ name: "tourism_Stay", description: INSTRUCTION });
+  });
+
+  it("openai-responses", () => {
+    const def = archstone.extractor("tourism.Stay", "openai-responses").tool(INSTRUCTION) as OpenAIResponsesToolDef;
+    expect(def.type).toBe("function");
+    expect(def).toMatchObject({ name: "tourism_Stay", description: INSTRUCTION, strict: false });
+  });
+
+  it('openai (deprecated alias): tool() is byte-identical to "openai-chat" (tools axis unchanged)', () => {
+    const alias = archstone.extractor("tourism.Stay", "openai").tool(INSTRUCTION);
+    const chat = archstone.extractor("tourism.Stay", "openai-chat").tool(INSTRUCTION);
+    expect(alias).toEqual(chat);
   });
 
   it("json-schema", () => {
