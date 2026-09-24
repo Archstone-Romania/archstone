@@ -17,18 +17,27 @@ export type AdoptionRefusal =
   | "nested"
   | "no-boolean-type"
   | "not-a-leaf"
-  | "already-declared";
+  | "already-declared"
+  /** #82 (ADD-12 §8.2): an observed array field whose elements are objects. Distinct from
+   *  `not-a-leaf` — an object array needs a declared row/resource shape to adopt into, which
+   *  this increment does not ratify (§8.4 founder ruling: "deferred — ADD ulterior"; core #49
+   *  is where that reopens). */
+  | "array-of-objects-unresolved";
 
 export interface AdoptableField {
   adoptable: true;
   /** The JSONPath the drift reported, e.g. `$.stays[].boardType`. */
   path: string;
-  /** The resource field name it would become, e.g. `boardType`. */
+  /** The resource field name (inside the collection) or output field name (outside it, #82)
+   *  it would become, e.g. `boardType` or `warnings`. */
   field: string;
-  /** The path written into the binding's `response.map`, relative to the collection item. */
+  /** The path written into the binding's `response.map` (relative to the collection item) or,
+   *  for a #82 scalar-array candidate, into `extract:` (body-root, all-matches — `$.foo[*]`). */
   itemPath: string;
   observed: JsonType;
-  /** What it is declared as. See ADD-117 §3 — the table is deliberately dull. */
+  /** What it is declared as. See ADD-117 §3 — the table is deliberately dull. For a #82
+   *  scalar-array candidate, this is the ELEMENT's semantic type (`list: <semantic>`, not
+   *  `type: <semantic>` — the field itself is an array). */
   semantic: SemanticType;
 }
 
@@ -78,6 +87,8 @@ function refusalDetail(reason: AdoptionRefusal, observed: JsonType): string {
       return `observed as ${observed}, which is a structure rather than a value`;
     case "already-declared":
       return "already declared by this capability";
+    case "array-of-objects-unresolved":
+      return "an array of objects needs a declared row/resource shape to adopt into, which core #49 (lifting the one-output-field cap) has not ratified yet — declare it by hand once that lands";
   }
 }
 
@@ -111,6 +122,7 @@ export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResour
     ...mapping.fields.map((f) => f.name),
     ...(resources[mapping.resource] ?? []).map((f) => f.name),
   ]);
+  const declaredOutput = new Set<string>(tool.output.map((f) => f.name));
 
   const refuse = (path: string, observed: JsonType, reason: AdoptionRefusal): UnadoptableField => ({
     adoptable: false,
@@ -120,21 +132,84 @@ export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResour
     detail: refusalDetail(reason, observed),
   });
 
-  const candidates = drift.added.map<AdoptionCandidate>(({ path, type: observed }) => {
-    if (!path.startsWith(`${prefix}.`)) return refuse(path, observed, "outside-collection");
+  // #82 (ADD-12 §8.2): `path[]` element-detail entries (the SAME flattening `describeShape`
+  // records for any array) tell us what an outside-collection array's items look like, without
+  // a second traversal. Consumed below, keyed by the array's own path — never offered as a
+  // candidate in their own right when they explain one.
+  const elementTypeOf = new Map<string, JsonType>();
+  for (const { path, type } of drift.added) {
+    if (path.endsWith("[]")) elementTypeOf.set(path.slice(0, -2), type);
+  }
+
+  const candidates: AdoptionCandidate[] = [];
+  for (const { path, type: observed } of drift.added) {
+    const outsideCollection = !path.startsWith(`${prefix}.`);
+
+    if (outsideCollection && observed === "array") {
+      // A field at (or reachable from) the response root, not the mapped collection — #82:
+      // an array of ONE scalar semantic type is adoptable via `extract:`; an array of objects
+      // is refused, distinct from `not-a-leaf`, naming that it needs a declared row shape.
+      const field = path.replace(/^\$\.?/, "").split(".").pop() ?? path;
+      if (declaredOutput.has(field)) {
+        candidates.push(refuse(path, observed, "already-declared"));
+        continue;
+      }
+      const elementType = elementTypeOf.get(path);
+      if (elementType === "object") {
+        candidates.push(refuse(path, observed, "array-of-objects-unresolved"));
+        continue;
+      }
+      const semantic = elementType ? semanticFor(elementType) : undefined;
+      if (!semantic) {
+        // No element observed yet (empty array) or an element type CDL has no semantic for
+        // (e.g. boolean) — not enough to confidently declare an element type.
+        candidates.push(refuse(path, observed, "not-a-leaf"));
+        continue;
+      }
+      candidates.push({ adoptable: true, path, field, itemPath: `${path}[*]`, observed, semantic });
+      continue;
+    }
+
+    // The element-detail entry for an outside-collection array (`path[]`) is consumed above,
+    // keyed by the array's own path — it explains that verdict and is never offered/refused a
+    // second time as its own, duplicate candidate.
+    if (outsideCollection && path.endsWith("[]") && elementTypeOf.get(path.slice(0, -2)) === observed) {
+      const arrayPath = path.slice(0, -2);
+      if (!arrayPath.startsWith(`${prefix}.`)) continue;
+    }
+
+    if (outsideCollection) {
+      candidates.push(refuse(path, observed, "outside-collection"));
+      continue;
+    }
     const rest = path.slice(prefix.length + 1);
-    if (rest.includes("[")) return refuse(path, observed, "nested");
+    if (rest.includes("[")) {
+      candidates.push(refuse(path, observed, "nested"));
+      continue;
+    }
     // A dot here is either a nested object (`address.city`) or a single provider key that
     // contains a dot. Those two are INDISTINGUISHABLE in this flattened space — the same
     // collision `describeShape` documents — so there is one refusal, not a coin flip between
     // two, and its detail says so. Either way the answer is the same: not adopted.
-    if (rest.includes(".")) return refuse(path, observed, "nested");
-    if (observed === "boolean") return refuse(path, observed, "no-boolean-type");
+    if (rest.includes(".")) {
+      candidates.push(refuse(path, observed, "nested"));
+      continue;
+    }
+    if (observed === "boolean") {
+      candidates.push(refuse(path, observed, "no-boolean-type"));
+      continue;
+    }
     const semantic = semanticFor(observed);
-    if (!semantic) return refuse(path, observed, "not-a-leaf");
-    if (declared.has(rest)) return refuse(path, observed, "already-declared");
-    return { adoptable: true, path, field: rest, itemPath: `$.${rest}`, observed, semantic };
-  });
+    if (!semantic) {
+      candidates.push(refuse(path, observed, "not-a-leaf"));
+      continue;
+    }
+    if (declared.has(rest)) {
+      candidates.push(refuse(path, observed, "already-declared"));
+      continue;
+    }
+    candidates.push({ adoptable: true, path, field: rest, itemPath: `$.${rest}`, observed, semantic });
+  }
 
   return { capabilityId: tool.id, resource: mapping.resource, candidates };
 }

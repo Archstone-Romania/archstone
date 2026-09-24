@@ -154,3 +154,64 @@ describe("planAdoption — what can be declared (ADD-117 D-5, §3)", () => {
     });
   });
 });
+
+// #82 (ADD-12 §8.2): an observed field outside the collection whose value is consistently an
+// array of one scalar type is adoptable via `extract:`; an array of objects is refused, with a
+// reason distinct from `not-a-leaf`.
+describe("planAdoption — scalar arrays outside the collection (#82, ADD-12 §8.2)", () => {
+  it("offers a scalar array field as adoptable, not refused as not-a-leaf", () => {
+    const plan = planAdoption(
+      tool(),
+      drift([
+        { path: "$.warnings", type: "array" },
+        { path: "$.warnings[]", type: "string" },
+      ]),
+      resources,
+    );
+    const offer = adoptable(plan).find((c) => c.field === "warnings");
+    expect(offer).toMatchObject({ field: "warnings", itemPath: "$.warnings[*]", observed: "array", semantic: "text" });
+  });
+
+  it("a numeric scalar array field adopts as `quantity`", () => {
+    const plan = planAdoption(
+      tool(),
+      drift([
+        { path: "$.scores", type: "array" },
+        { path: "$.scores[]", type: "number" },
+      ]),
+      resources,
+    );
+    expect(adoptable(plan).find((c) => c.field === "scores")).toMatchObject({ semantic: "quantity" });
+  });
+
+  it("refuses an array of objects with a reason distinct from not-a-leaf, naming the row-shape gap", () => {
+    const plan = planAdoption(
+      tool(),
+      drift([
+        { path: "$.nearby", type: "array" },
+        { path: "$.nearby[]", type: "object" },
+      ]),
+      resources,
+    );
+    const refusal = plan.candidates.find((c) => !c.adoptable && c.path === "$.nearby");
+    expect(refusal).toMatchObject({ adoptable: false, reason: "array-of-objects-unresolved" });
+    expect((refusal as { detail: string }).detail).not.toContain("structure rather than a value"); // not-a-leaf's wording
+  });
+
+  it("refuses an empty (never-populated) array as not-a-leaf — no element type observed yet", () => {
+    const plan = planAdoption(tool(), drift([{ path: "$.warnings", type: "array" }]), resources);
+    expect(plan.candidates[0]).toMatchObject({ adoptable: false, reason: "not-a-leaf" });
+  });
+
+  it("does not re-offer/refuse the array's own element-detail entry as a separate candidate", () => {
+    const plan = planAdoption(
+      tool(),
+      drift([
+        { path: "$.warnings", type: "array" },
+        { path: "$.warnings[]", type: "string" },
+      ]),
+      resources,
+    );
+    expect(plan.candidates).toHaveLength(1);
+  });
+});
