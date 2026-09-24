@@ -39,6 +39,13 @@ export interface AdoptableField {
    *  scalar-array candidate, this is the ELEMENT's semantic type (`list: <semantic>`, not
    *  `type: <semantic>` — the field itself is an array). */
   semantic: SemanticType;
+  /** Which file(s) this candidate is written into, and how (#82). `"resource-field"` (the
+   *  original shape): the mapped RESOURCE gains a `type:` field, the binding's `response.map`
+   *  gains an entry. `"output-array"`: the CAPABILITY's own `output:` gains a `list:` field,
+   *  the binding's `extract:` (created if absent) gains an entry — there is no resource
+   *  involved. The CLI's write path branches on this; `planAdoption` never writes anything
+   *  itself (D-6). */
+  kind: "resource-field" | "output-array";
 }
 
 export interface UnadoptableField {
@@ -166,7 +173,7 @@ export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResour
         candidates.push(refuse(path, observed, "not-a-leaf"));
         continue;
       }
-      candidates.push({ adoptable: true, path, field, itemPath: `${path}[*]`, observed, semantic });
+      candidates.push({ adoptable: true, path, field, itemPath: `${path}[*]`, observed, semantic, kind: "output-array" });
       continue;
     }
 
@@ -208,7 +215,7 @@ export function planAdoption(tool: IRTool, drift: ShapeDiff, resources: IRResour
       candidates.push(refuse(path, observed, "already-declared"));
       continue;
     }
-    candidates.push({ adoptable: true, path, field: rest, itemPath: `$.${rest}`, observed, semantic });
+    candidates.push({ adoptable: true, path, field: rest, itemPath: `$.${rest}`, observed, semantic, kind: "resource-field" });
   }
 
   return { capabilityId: tool.id, resource: mapping.resource, candidates };

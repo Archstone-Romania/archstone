@@ -26,10 +26,13 @@ interface Target {
   tool: IRTool;
   resourceFile: string;
   bindingFile: string;
+  /** #82: an `"output-array"` edit is written into the CAPABILITY document's `output:`, not
+   *  the resource file — located alongside the other two so `adoptOne` never has to guess it. */
+  capabilityFile: string;
 }
 
-/** Which files hold this capability's resource and binding. Both come from the loader, never
- *  from guessing a filename off a resource name. */
+/** Which files hold this capability's resource, its binding, and its own capability document.
+ *  All three come from the loader, never from guessing a filename off a resource name. */
 function locateFiles(dir: string, tool: IRTool): Target | { problem: string } {
   const res = load(dir);
   const wanted = tool.response?.resource;
@@ -42,7 +45,10 @@ function locateFiles(dir: string, tool: IRTool): Target | { problem: string } {
   const binding = res.bindings.find((b) => b.binding.capabilityId === tool.id);
   if (!binding) return { problem: `${tool.id}: could not find its binding file` };
 
-  return { tool, resourceFile: join(dir, doc.file), bindingFile: join(dir, binding.file) };
+  const capabilityDoc = res.capabilityDocs.find((d) => d.capability.id === tool.id);
+  if (!capabilityDoc) return { problem: `${tool.id}: could not find its capability file` };
+
+  return { tool, resourceFile: join(dir, doc.file), bindingFile: join(dir, binding.file), capabilityFile: join(dir, capabilityDoc.file) };
 }
 
 function readFixture(dir: string, path: string): GoldenFixture | undefined {
@@ -67,12 +73,21 @@ async function confirm(ask: Ask, question: string): Promise<boolean> {
  * that passes, so a bug in the surgical append is a refused run rather than a corrupted
  * manifest (ADD-117 Challenge).
  */
-function compilesClean(dir: string, resourceFile: string, resourceYaml: string, bindingFile: string, bindingYaml: string): string | undefined {
+function compilesClean(
+  dir: string,
+  resourceFile: string,
+  resourceYaml: string,
+  bindingFile: string,
+  bindingYaml: string,
+  capabilityFile: string,
+  capabilityYaml: string,
+): string | undefined {
   const scratch = mkdtempSync(join(tmpdir(), "archstone-adopt-"));
   try {
     cpSync(dir, scratch, { recursive: true });
     writeFileSync(join(scratch, resourceFile.slice(dir.length + 1)), resourceYaml);
     writeFileSync(join(scratch, bindingFile.slice(dir.length + 1)), bindingYaml);
+    writeFileSync(join(scratch, capabilityFile.slice(dir.length + 1)), capabilityYaml);
     const res = load(scratch);
     if (!res.ok) return res.issues.map((i) => `${i.file}: ${i.message}`).join("; ");
     const errors = validateSemantics(res).filter((d) => d.severity === "error");
@@ -134,7 +149,7 @@ async function adoptOne(dir: string, target: Target, contractShape: ShapeMap | u
       console.log(`  ${o.field}: no description given — not adopted.`);
       continue;
     }
-    edits.push({ field: o.field, itemPath: o.itemPath, semantic: o.semantic, description });
+    edits.push({ field: o.field, itemPath: o.itemPath, semantic: o.semantic, description, kind: o.kind });
   }
   if (edits.length === 0) {
     console.log(`\n  ${tool.id} — nothing adopted.`);
@@ -143,7 +158,8 @@ async function adoptOne(dir: string, target: Target, contractShape: ShapeMap | u
 
   const resourceYaml = readFileSync(target.resourceFile, "utf8");
   const bindingYaml = readFileSync(target.bindingFile, "utf8");
-  const applied = applyAdoption(resourceYaml, bindingYaml, edits);
+  const capabilityYaml = readFileSync(target.capabilityFile, "utf8");
+  const applied = applyAdoption(resourceYaml, bindingYaml, capabilityYaml, edits);
   if (!applied.ok) {
     console.error(`  ${tool.id}: ${applied.problem}`);
     return 1;
@@ -154,7 +170,15 @@ async function adoptOne(dir: string, target: Target, contractShape: ShapeMap | u
     return 1;
   }
 
-  const problem = compilesClean(dir, target.resourceFile, applied.resource, target.bindingFile, rewritten.binding);
+  const problem = compilesClean(
+    dir,
+    target.resourceFile,
+    applied.resource,
+    target.bindingFile,
+    rewritten.binding,
+    target.capabilityFile,
+    applied.capability,
+  );
   if (problem) {
     console.error(`\n  ${tool.id}: the edit does not compile — nothing written.\n    ${problem}`);
     return 1;
@@ -162,6 +186,7 @@ async function adoptOne(dir: string, target: Target, contractShape: ShapeMap | u
 
   writeFileSync(target.resourceFile, applied.resource);
   writeFileSync(target.bindingFile, rewritten.binding);
+  if (applied.capability !== capabilityYaml) writeFileSync(target.capabilityFile, applied.capability);
   console.log(`\n  ${tool.id} — declared ${edits.map((e) => e.field).join(", ")}; contract re-recorded.`);
   return 0;
 }

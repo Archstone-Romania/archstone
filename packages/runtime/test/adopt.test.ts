@@ -49,8 +49,8 @@ describe("planAdoption — what can be declared (ADD-117 D-5, §3)", () => {
       resources,
     );
     expect(adoptable(plan)).toEqual([
-      { adoptable: true, path: "$.stays[].boardType", field: "boardType", itemPath: "$.boardType", observed: "string", semantic: "text" },
-      { adoptable: true, path: "$.stays[].distanceToBeachM", field: "distanceToBeachM", itemPath: "$.distanceToBeachM", observed: "number", semantic: "quantity" },
+      { adoptable: true, path: "$.stays[].boardType", field: "boardType", itemPath: "$.boardType", observed: "string", semantic: "text", kind: "resource-field" },
+      { adoptable: true, path: "$.stays[].distanceToBeachM", field: "distanceToBeachM", itemPath: "$.distanceToBeachM", observed: "number", semantic: "quantity", kind: "resource-field" },
     ]);
     expect(plan.resource).toBe("Stay");
   });
