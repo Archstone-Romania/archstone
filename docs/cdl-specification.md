@@ -123,6 +123,13 @@ Normative:
   `required: true` List field unless a future primitive adds a minimum-length
   constraint.
 - A field **MAY** declare `required: false`; absent, it defaults to `required: true`.
+- A **List** `output` field **MAY** be populated from a provider response by a binding's
+  `extract:` block (ADD-12 §8.2) — every JSONPath match becomes an array item, not just the
+  first, and an empty match set is a valid value (OK, not DEGRADED). That mapping is a
+  binding concern, out of CDL's own grammar, same as `response:`/`extract:` generally
+  (§4.3's opening rule) — see [`docs/ONBOARDING.md`](ONBOARDING.md) for the binding-side
+  walkthrough, including the row-level error discriminator (`response.onError`, ADD-12
+  §8.1) a `collection:` mapping may declare.
 
 ### 4.4 `failures`
 

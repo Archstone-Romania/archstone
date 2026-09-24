@@ -15,6 +15,35 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Row-level errors in a `response:` collection** (`@archstone/schema`, `@archstone/compiler`,
+  `@archstone/emitter-support`, ADD-12 §8.1, #81) — a `response.onError` block names a second,
+  error-shaped resource and a `when` discriminator (`path` + `equals`/`exists`) that classifies
+  each collection item before the success mapping runs. A matching row is mapped against
+  `errorResource` and tagged `$row: "error"`; every other row is mapped against `resource`
+  exactly as before, tagged `$row: "ok"`, required fields enforced in full — a successful row is
+  never loosened because another row in the same call failed. A row matching neither shape and
+  missing a required field is a per-row violation, named and dropped from the returned array
+  without implicating any other row. The whole-response `contract_violation` now fires only when
+  a non-empty collection has zero usable rows. `outputSchema` for the mapped field advertises
+  `items: { oneOf: [<success, tagged>, <error, tagged>] }` when `onError` is declared.
+- **Scalar array fields outside the collection, via `extract:`** (`@archstone/emitter-support`,
+  ADD-12 §8.2, #82) — an output field declared as a **List** (`list: <semantic type>`) may now be
+  populated by `extract:`: every JSONPath match becomes an array item instead of only the first,
+  and an empty match set is OK, not DEGRADED. `archstone adopt`'s `planAdoption` now offers an
+  observed root-level (or otherwise outside-collection) array of one scalar type as adoptable;
+  an observed array of objects is refused with a new, distinct reason
+  (`array-of-objects-unresolved`), naming that it needs a declared row/resource shape core #49
+  has not ratified yet.
+- **Data-dependent array shapes no longer flap in `archstone verify`'s drift report**
+  (`@archstone/compiler`, ADD-12 §8.3, #83) — `diffShape` now treats an array's element-level
+  shape as observed-so-far: an array that goes from populated to empty no longer reports its
+  element fields as `removed`, and one that goes from empty to populated no longer reports them
+  as `added`. A genuinely new element variant (e.g. a declared `onError` error-row shape
+  appearing for the first time) still reports as `added`, never folded into `retyped`; a field
+  genuinely dropped while the array stays populated is still reported as `removed`.
+
 ## [0.23.0]
 
 ### Added
