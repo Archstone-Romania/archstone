@@ -15,6 +15,34 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`@archstone/agent`'s `"openai"` format mixed two different OpenAI APIs' shapes**
+  ([archstone#89](https://github.com/Archstone-Romania/archstone/issues/89)). `tools("openai")`
+  emitted the Chat Completions tool shape (`{type, function:{name, description, parameters}}`),
+  while `extractor(...,"openai").structuredOutput` emitted the Responses API's `text.format`
+  shape (`{type, name, schema, strict}`) — one `Extractor` handed a caller halves from two
+  APIs that do not accept each other's shapes. `ToolFormat` now has two explicit values:
+  `"openai-chat"` (Chat Completions: nested tool shape, `response_format.json_schema` for
+  structured output) and `"openai-responses"` (Responses API: flat tool shape with
+  `strict: false`, `text.format` for structured output). `strict: false` is unchanged on both
+  — see `extract.ts`'s header for why. `"openai"` remains a legal, `@deprecated` `ToolFormat`
+  value and forwards to `"openai-chat"` on both axes.
+
+### Changed
+
+- **Breaking, on the deprecated `"openai"` alias's structured-output axis only**
+  ([archstone#89](https://github.com/Archstone-Romania/archstone/issues/89)):
+  `extractor(resource, "openai").structuredOutput` now returns the Chat Completions
+  `response_format.json_schema` shape (`{type, json_schema:{name, schema, strict}}`) instead of
+  the Responses API's flat `text.format` shape it returned before. `tools("openai")` is
+  unchanged — byte-identical to `tools("openai-chat")`, as it was to pre-#89 `tools("openai")`.
+  A caller relying on `extractor(..., "openai").structuredOutput`'s previous (Responses) shape
+  must switch to `"openai-responses"` explicitly; a caller who only used `tools("openai")` is
+  unaffected. `OpenAIToolDef` and `OpenAIStructuredOutput` are kept as `@deprecated` type
+  aliases of the renamed `OpenAIChatToolDef` and `OpenAIResponsesStructuredOutput` so existing
+  type-level imports do not break.
+
 ## [0.24.0]
 
 ### Added

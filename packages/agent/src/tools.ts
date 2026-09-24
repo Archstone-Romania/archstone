@@ -14,31 +14,38 @@
 // `@archstone/runtime`'s MCP emitter now lowers a capability's `effect` into MCP tool
 // annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`, server.ts's
 // `effectAnnotations`), because an MCP client is REMOTE and can act only on what crosses the
-// wire. #126 asks for "the equivalent where the target format has one". Each of the four
-// formats below was checked against its live reference before concluding, and none has one:
+// wire. #126 asks for "the equivalent where the target format has one". Each format below was
+// checked against its live reference before concluding, and none has one:
 //
-//   anthropic    The Messages API tool definition takes `name`/`description`/`input_schema`
-//                plus exactly six optional properties — `cache_control`, `strict`,
-//                `defer_loading`, `allowed_callers`, `input_examples`,
-//                `eager_input_streaming` (platform.claude.com "Tool reference" §Tool
-//                definition properties, checked 2026-08-25). None annotates side effects.
-//   openai       A function tool is `{type, name, description, parameters, strict}`
-//                (developers.openai.com function-calling guide, checked 2026-08-25). Read-only
-//                and destructive hints appear in OpenAI's docs ONLY when describing MCP
-//                servers/connectors — i.e. they are MCP's annotations, reached through MCP,
-//                not a native field of this envelope. Do not be misled by a search result
-//                that says otherwise; that conflation is exactly why this was read at source.
-//   gemini       `FunctionDeclaration` does carry a `behavior` field, and it is NOT an
-//                equivalent: its values are BLOCKING/NON_BLOCKING and they control whether the
-//                model waits for the tool response in the Live API — an async-execution
-//                concern, not a side-effect annotation (checked 2026-08-25). Mapping
-//                `irreversible` onto it would be a category error dressed as a feature.
-//   json-schema  Archstone's own neutral envelope, so nothing stops us adding a field — which
-//                is precisely why we don't. This consumer is IN-PROCESS and already holds
-//                `archstone.registry`; `effect` is one property lookup away on the IR and was
-//                never withheld from them. The asymmetry that makes #126 a bug for MCP simply
-//                does not exist here, and widening a published type to restate a fact the
-//                caller can already read would be an unratified API change, not a fix.
+//   anthropic         The Messages API tool definition takes `name`/`description`/
+//                     `input_schema` plus exactly six optional properties — `cache_control`,
+//                     `strict`, `defer_loading`, `allowed_callers`, `input_examples`,
+//                     `eager_input_streaming` (platform.claude.com "Tool reference" §Tool
+//                     definition properties, checked 2026-08-25). None annotates side effects.
+//   openai-chat       A Chat Completions tool is `{type, function: {name, description,
+//                     parameters}}` — no `strict` and no side-effect field at this level
+//                     (developers.openai.com/api/docs/guides/function-calling, checked
+//                     2026-09-24). This is `"openai"`'s pre-existing, unchanged shape.
+//   openai-responses  A Responses API tool is flat: `{type, name, description, parameters,
+//                     strict}` (developers.openai.com/api/docs/guides/function-calling,
+//                     checked 2026-09-24). Read-only and destructive hints appear in OpenAI's
+//                     docs ONLY when describing MCP servers/connectors — i.e. they are MCP's
+//                     annotations, reached through MCP, not a native field of this envelope.
+//                     Do not be misled by a search result that says otherwise; that conflation
+//                     is exactly why this was read at source.
+//   gemini            `FunctionDeclaration` does carry a `behavior` field, and it is NOT an
+//                     equivalent: its values are BLOCKING/NON_BLOCKING and they control whether
+//                     the model waits for the tool response in the Live API — an
+//                     async-execution concern, not a side-effect annotation (checked
+//                     2026-08-25). Mapping `irreversible` onto it would be a category error
+//                     dressed as a feature.
+//   json-schema       Archstone's own neutral envelope, so nothing stops us adding a field —
+//                     which is precisely why we don't. This consumer is IN-PROCESS and already
+//                     holds `archstone.registry`; `effect` is one property lookup away on the
+//                     IR and was never withheld from them. The asymmetry that makes #126 a bug
+//                     for MCP simply does not exist here, and widening a published type to
+//                     restate a fact the caller can already read would be an unratified API
+//                     change, not a fix.
 //
 // So: no invention, in either direction — `tools()` gains no field, and no format gets a
 // hand-rolled stand-in. `test/tools.test.ts` pins each envelope's exact key set so that a
@@ -49,7 +56,17 @@ import { Registry, inputJsonSchema } from "@archstone/emitter-support";
 
 type JsonSchema = Record<string, unknown>;
 
-export type ToolFormat = "anthropic" | "openai" | "gemini" | "json-schema";
+export type ToolFormat =
+  | "anthropic"
+  /** @deprecated Ambiguous across OpenAI's two APIs — use `"openai-chat"` (Chat Completions)
+   *  or `"openai-responses"` (Responses API) instead. Kept as an alias of `"openai-chat"` on
+   *  both the tools axis (unchanged) and the structured-output axis (changed by #89 — see
+   *  CHANGELOG). */
+  | "openai"
+  | "openai-chat"
+  | "openai-responses"
+  | "gemini"
+  | "json-schema";
 
 export interface AnthropicToolDef {
   name: string;
@@ -57,9 +74,24 @@ export interface AnthropicToolDef {
   input_schema: JsonSchema;
 }
 
-export interface OpenAIToolDef {
+/** Chat Completions' nested tool shape — `"openai"` (deprecated alias) emits this unchanged. */
+export interface OpenAIChatToolDef {
   type: "function";
   function: { name: string; description: string; parameters: JsonSchema };
+}
+
+/** @deprecated Renamed to `OpenAIChatToolDef` by #89 — this alias exists so existing type-level
+ *  consumers do not break. */
+export type OpenAIToolDef = OpenAIChatToolDef;
+
+/** The Responses API's flat tool shape (developers.openai.com/api/docs/guides/function-calling,
+ *  checked 2026-09-24). `strict` is always `false` — see extract.ts's header for why. */
+export interface OpenAIResponsesToolDef {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: JsonSchema;
+  strict: false;
 }
 
 /** Gemini's native `FunctionDeclaration` shape is flat — {name, description, parameters} —
@@ -78,7 +110,7 @@ export interface JsonSchemaToolDef {
   schema: JsonSchema;
 }
 
-export type ToolDef = AnthropicToolDef | OpenAIToolDef | GeminiToolDef | JsonSchemaToolDef;
+export type ToolDef = AnthropicToolDef | OpenAIChatToolDef | OpenAIResponsesToolDef | GeminiToolDef | JsonSchemaToolDef;
 
 /**
  * Gemini's function-calling Schema object is a documented SUBSET of OpenAPI 3.0 schema —
@@ -157,8 +189,11 @@ export function toolEnvelope(format: ToolFormat, name: string, description: stri
   switch (format) {
     case "anthropic":
       return { name, description, input_schema: schema };
-    case "openai":
+    case "openai": // deprecated alias of "openai-chat" (#89) — tools axis unchanged
+    case "openai-chat":
       return { type: "function", function: { name, description, parameters: schema } };
+    case "openai-responses":
+      return { type: "function", name, description, parameters: schema, strict: false };
     case "gemini":
       return { name, description, parameters: sanitizeGeminiSchema(schema) };
     case "json-schema":
@@ -171,7 +206,10 @@ export function toolEnvelope(format: ToolFormat, name: string, description: stri
       // type checking (an `as`/`any` cast on a value it constructs itself). Before this branch,
       // that case silently returned `undefined` where `ToolDef[]` is declared, crashing the
       // caller downstream on `.map`/spread instead of here, with a clear cause.
-      throw new Error(`toolEnvelope: unrecognized tool format: ${String(format)}`);
+      throw new Error(
+        `toolEnvelope: unrecognized tool format: ${String(format)} (expected one of "anthropic", ` +
+          `"openai", "openai-chat", "openai-responses", "gemini", "json-schema")`,
+      );
   }
 }
 

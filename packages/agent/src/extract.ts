@@ -8,29 +8,37 @@
 // R-1 — the schema and the judge disagreeing — and an `Extractor` makes it unrepresentable:
 // `.schema`, `.tool()`, `.structuredOutput` and `.validate()` all close over the same resource.
 //
-// PROVIDER ENVELOPES — read at source on 2026-08-30, per this package's standing rule not to
-// write a provider's request shape from memory (see tools.ts's own note):
+// PROVIDER ENVELOPES — read at source on 2026-08-30 (anthropic/gemini) and re-verified/added on
+// 2026-09-24 (openai-chat/openai-responses, #89), per this package's standing rule not to write
+// a provider's request shape from memory (see tools.ts's own note):
 //
-//   anthropic   `output_config: { format: { type: "json_schema", schema } }`. The `format`
-//               object takes NO name and NO description. Supported schema keywords include
-//               `required` and `additionalProperties` — the latter "must be set to false for
-//               objects", and anything other than `false` is REJECTED. `date`/`date-time`
-//               string formats are supported. **Recursive schemas are not supported**, which
-//               is independently the same refusal `extractionJsonSchema` already makes.
-//               (platform.claude.com "Structured outputs")
-//   openai      `text: { format: { type: "json_schema", name, schema, strict } }` on the
-//               Responses API — NOT the older `response_format: { type: "json_schema",
-//               json_schema: {...} }` of Chat Completions. `strict` is emitted as **false**
-//               by decision: under `strict: true` OpenAI requires every property to appear in
-//               `required`, which would delete the `degraded` outcome on this target alone and
-//               make the contract stricter on one provider than the manifest says it is. The
-//               guarantee here was never that the provider validates — it is that we refuse.
-//               (developers.openai.com "Structured model outputs")
-//   gemini      `response_format: { type: "text", mime_type: "application/json", schema }` on
-//               the Interactions API, not the legacy `generationConfig.responseSchema`. That
-//               page lists `additionalProperties` among supported object keywords.
-//               (ai.google.dev "Structured output")
-//   json-schema Archstone's own neutral shape — `{ schema }`, no provider envelope.
+//   anthropic         `output_config: { format: { type: "json_schema", schema } }`. The
+//                     `format` object takes NO name and NO description. Supported schema
+//                     keywords include `required` and `additionalProperties` — the latter
+//                     "must be set to false for objects", and anything other than `false` is
+//                     REJECTED. `date`/`date-time` string formats are supported. **Recursive
+//                     schemas are not supported**, which is independently the same refusal
+//                     `extractionJsonSchema` already makes. (platform.claude.com "Structured
+//                     outputs")
+//   openai-chat       `response_format: { type: "json_schema", json_schema: { name, schema,
+//                     strict } }` on the Chat Completions API (developers.openai.com/api/docs/
+//                     guides/structured-outputs, checked 2026-09-24). This is the shape #89
+//                     adds; `"openai"` (deprecated) now forwards here.
+//   openai-responses  `text: { format: { type: "json_schema", name, schema, strict } }` on the
+//                     Responses API (developers.openai.com/api/docs/guides/structured-outputs,
+//                     checked 2026-09-24) — NOT the `response_format`/`json_schema` nesting of
+//                     Chat Completions. This is `"openai"`'s pre-#89 shape, kept unchanged under
+//                     its own name. `strict` is emitted as **false** on both OpenAI variants by
+//                     decision: under `strict: true` OpenAI requires every property to appear in
+//                     `required`, which would delete the `degraded` outcome on this target alone
+//                     and make the contract stricter on one provider than the manifest says it
+//                     is. The guarantee here was never that the provider validates — it is that
+//                     we refuse.
+//   gemini            `response_format: { type: "text", mime_type: "application/json", schema }`
+//                     on the Interactions API, not the legacy `generationConfig.responseSchema`.
+//                     That page lists `additionalProperties` among supported object keywords.
+//                     (ai.google.dev "Structured output")
+//   json-schema       Archstone's own neutral shape — `{ schema }`, no provider envelope.
 //
 // A NOTE ON GEMINI AND ADR-0011 R-2. R-2 says a stripped `additionalProperties` leaves the model
 // untold that the object is closed. That applies to the TOOL axis, where `sanitizeGeminiSchema`
@@ -50,12 +58,30 @@ export interface AnthropicStructuredOutput {
   schema: JsonSchema;
 }
 
-export interface OpenAIStructuredOutput {
+/** The Responses API's flat `text.format` shape — `"openai-responses"`, and `"openai"`'s
+ *  pre-#89 shape, kept unchanged under its own name. */
+export interface OpenAIResponsesStructuredOutput {
   type: "json_schema";
   name: string;
   schema: JsonSchema;
   /** Always `false` — see this file's header. */
   strict: false;
+}
+
+/** @deprecated Renamed to `OpenAIResponsesStructuredOutput` by #89 — this alias exists so
+ *  existing type-level consumers do not break. */
+export type OpenAIStructuredOutput = OpenAIResponsesStructuredOutput;
+
+/** The Chat Completions API's nested `response_format.json_schema` shape — `"openai-chat"`,
+ *  and (as of #89) what the deprecated `"openai"` alias now produces. */
+export interface OpenAIChatStructuredOutput {
+  type: "json_schema";
+  json_schema: {
+    name: string;
+    schema: JsonSchema;
+    /** Always `false` — see this file's header. */
+    strict: false;
+  };
 }
 
 export interface GeminiStructuredOutput {
@@ -72,7 +98,8 @@ export interface JsonSchemaStructuredOutput {
 
 export type StructuredOutputDef =
   | AnthropicStructuredOutput
-  | OpenAIStructuredOutput
+  | OpenAIChatStructuredOutput
+  | OpenAIResponsesStructuredOutput
   | GeminiStructuredOutput
   | JsonSchemaStructuredOutput;
 
@@ -119,7 +146,10 @@ function structuredOutputEnvelope(format: ToolFormat, name: string, schema: Json
   switch (format) {
     case "anthropic":
       return { type: "json_schema", schema };
-    case "openai":
+    case "openai": // deprecated alias of "openai-chat" (#89) — this is the breaking change:
+    case "openai-chat": // pre-#89, "openai" produced the "openai-responses" shape below.
+      return { type: "json_schema", json_schema: { name, schema, strict: false } };
+    case "openai-responses":
       return { type: "json_schema", name, schema, strict: false };
     case "gemini":
       return { type: "text", mime_type: "application/json", schema };
@@ -128,7 +158,10 @@ function structuredOutputEnvelope(format: ToolFormat, name: string, schema: Json
     default:
       // Same discipline as `toolEnvelope`'s floor: reachable only by a caller casting past
       // `ToolFormat`, and it throws here rather than returning undefined into a declared type.
-      throw new Error(`structuredOutputEnvelope: unrecognized format: ${String(format)}`);
+      throw new Error(
+        `structuredOutputEnvelope: unrecognized format: ${String(format)} (expected one of ` +
+          `"anthropic", "openai", "openai-chat", "openai-responses", "gemini", "json-schema")`,
+      );
   }
 }
 

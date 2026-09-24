@@ -1,7 +1,8 @@
 # @archstone/agent
 
 Embedded agent SDK (RFC-0008 / ADD-0008): load a compiled Archstone IR artifact, generate typed
-tool definitions (Anthropic · OpenAI · Gemini · JSON-Schema), invoke capabilities with
+tool definitions (Anthropic · OpenAI Chat Completions · OpenAI Responses · Gemini · JSON-Schema),
+invoke capabilities with
 fail-closed response mapping, and judge model-produced documents at the extraction boundary —
 all without running a separate MCP server process.
 
@@ -28,8 +29,10 @@ const archstone = fromIR(ir);
 
 // Get tool definitions in your preferred format
 const anthropicTools = archstone.tools("anthropic");
-const openaiTools = archstone.tools("openai");
+const openaiChatTools = archstone.tools("openai-chat");        // Chat Completions
+const openaiResponsesTools = archstone.tools("openai-responses"); // Responses API
 const geminiTools = archstone.tools("gemini");
+// "openai" still works but is a deprecated alias of "openai-chat" — migrate explicitly.
 
 // Invoke a capability — accepts both raw dotted id or sanitized tool name
 const result = await archstone.execute("tourism.search", {
@@ -62,9 +65,10 @@ const stay = archstone.extractor("tourism.Stay", "anthropic");
 
 // Give the model the schema — either axis, same schema underneath.
 stay.structuredOutput;   // native structured output, in the envelope your provider expects:
-                         //   Anthropic: output_config.format
-                         //   OpenAI:    text.format
-                         //   Gemini:    response_format
+                         //   Anthropic:        output_config.format
+                         //   OpenAI-chat:      response_format.json_schema (Chat Completions)
+                         //   OpenAI-responses: text.format (Responses API)
+                         //   Gemini:           response_format
 
 // ...or extraction as a forced tool call, in the same envelopes tools() emits. The
 // instruction is required and never defaulted: it says what to DO on this occasion, which

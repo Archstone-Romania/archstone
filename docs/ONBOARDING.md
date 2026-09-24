@@ -1229,19 +1229,29 @@ Once you have an Archstone instance, generate tool definitions in your preferred
 
 ```typescript
 // Get tools in your target format (zero MCP SDK loaded here)
-const anthropicTools = archstone.tools("anthropic");  // Anthropic SDK format
-const openaiTools = archstone.tools("openai");        // OpenAI SDK format
-const geminiTools = archstone.tools("gemini");        // Google Gemini format
-const jsonSchemaTools = archstone.tools("json-schema"); // Plain JSON Schema
+const anthropicTools = archstone.tools("anthropic");        // Anthropic SDK format
+const openaiChatTools = archstone.tools("openai-chat");     // OpenAI Chat Completions API
+const openaiResponsesTools = archstone.tools("openai-responses"); // OpenAI Responses API
+const geminiTools = archstone.tools("gemini");              // Google Gemini format
+const jsonSchemaTools = archstone.tools("json-schema");     // Plain JSON Schema
 ```
 
 Each tool includes a `name`, a `description` (as the AI agent sees it), and an `inputSchema`
 (from the semantic types defined in your CDL). The agent can discover and reason about them —
 no hand-written tool definitions.
 
+**Pick the OpenAI format that matches the API you call.** `"openai-chat"` and
+`"openai-responses"` are two different request shapes — Chat Completions nests each tool under
+a `function` key and reads structured output back from `response_format`; the Responses API
+keeps each tool flat and reads structured output back from `text.format`. `"openai"` still
+works but is a **deprecated alias of `"openai-chat"`**: its `tools()` output is unchanged, but
+`extractor(..., "openai").structuredOutput` now returns the Chat Completions shape rather than
+the Responses shape it returned before — migrate explicitly rather than relying on the alias.
+
 **No `effect` annotation here, deliberately.** The MCP emitter lowers `effect` into MCP tool
-annotations ([What the client is told about risk](#what-the-client-is-told-about-risk)); none
-of these four formats has a field that means the same thing, so none is invented — a
+annotations ([What the client is told about risk](#what-the-client-is-told-about-risk)); none of
+these formats — `anthropic`, `openai-chat`, `openai-responses`, `gemini`, `json-schema`, or the
+deprecated `openai` alias — has a field that means the same thing, so none is invented — a
 side-effect hint spelled into a field that means something else would be worse than silence.
 You are not missing anything, either: unlike a remote MCP client, you are in-process and hold
 the registry, so the value is one lookup away —
@@ -1331,9 +1341,10 @@ the contract you judge it by cannot drift apart.
 
 ```typescript
 // Native structured output — goes where your provider expects it
-stay.structuredOutput;   // Anthropic: output_config.format
-                         // OpenAI:    text.format
-                         // Gemini:    response_format
+stay.structuredOutput;   // Anthropic:        output_config.format
+                         // OpenAI-chat:      response_format.json_schema (Chat Completions)
+                         // OpenAI-responses: text.format (Responses API)
+                         // Gemini:           response_format
 
 // …or extraction as a forced tool call, in the same envelopes tools() emits
 stay.tool("Record the stay described in this booking email.");
