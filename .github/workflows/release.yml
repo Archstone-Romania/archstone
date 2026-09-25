@@ -1,6 +1,6 @@
 # Release pipeline for Archstone (the public repository — ADR-0010).
 #
-# Tagging THIS repo with vX.Y.Z publishes the 8 @archstone/* packages to npm, publishes
+# Tagging THIS repo with vX.Y.Z publishes the 9 @archstone/* packages to npm, publishes
 # server.json to the official MCP Registry, and creates the GitHub Release. The tag is the
 # single source of what ships: versions are stamped by the release-prepare PR before tagging,
 # and this workflow verifies that instead of pushing a bump commit (main is protected).
