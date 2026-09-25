@@ -21,13 +21,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Test the changelog gates
+      - name: Test the changelog gates and the bump classifier
         # Repo-root tooling lives outside the Vitest workspace (see release-prepare.test.mjs), so
         # `pnpm test` never runs these. They run here, on every PR, because the two changelog
         # jobs below judge every PR with these scripts — a bug in one would pass or block PRs
-        # wrongly, and this job is the required check that would notice.
+        # wrongly, and this job is the required check that would notice — and because
+        # release-prepare.yml's `bump: auto` computes the next version with classify-bump.mjs,
+        # where a bug would otherwise surface only on the day of a release.
         # No install needed: node:test and git are all they use.
-        run: node --test scripts/check-changelog-entry.test.mjs scripts/check-changelog-history.test.mjs
+        run: node --test scripts/check-changelog-entry.test.mjs scripts/check-changelog-history.test.mjs scripts/classify-bump.test.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

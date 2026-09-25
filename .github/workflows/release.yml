@@ -154,9 +154,10 @@ jobs:
           # below, not of a copy of it. `mcp-registry-readback` and `mcp-registry-publish` (#69)
           # are the same pair for the MCP Registry step, for the same reasons. The two
           # `check-changelog-*` suites guard the gates that decided what this CHANGELOG section
-          # says; ci.yml runs them on every PR, and they are listed here so a release never
-          # rests on a copy of them that stopped passing.
-          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs scripts/release-prepare.test.mjs scripts/mcp-registry-readback.test.mjs scripts/mcp-registry-publish.test.mjs scripts/check-changelog-entry.test.mjs scripts/check-changelog-history.test.mjs
+          # says, and `classify-bump` computed (by default) the version being released; ci.yml
+          # runs them on every PR, and they are listed here so a release never rests on a copy
+          # of them that stopped passing.
+          node --test scripts/release-gate.test.mjs scripts/npm-readback.test.mjs scripts/publish-loop.test.mjs scripts/release-prepare.test.mjs scripts/mcp-registry-readback.test.mjs scripts/mcp-registry-publish.test.mjs scripts/check-changelog-entry.test.mjs scripts/check-changelog-history.test.mjs scripts/classify-bump.test.mjs
           pnpm install --frozen-lockfile
           pnpm lint
           pnpm typecheck

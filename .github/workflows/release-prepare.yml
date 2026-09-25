@@ -23,6 +23,16 @@
 # to docs this stamping script never touches, so it never runs on a prepare PR regardless of
 # who opens it.
 #
+# The VERSION NUMBER is computed by default (`bump: auto`) and chosen by a person only when
+# they want to. scripts/classify-bump.mjs reads every commit since the last `v*` tag with the
+# Conventional Commits rules — breaking beats feat beats everything else — and, while the
+# major is 0, holds a breaking change at a minor bump, so a computed default can never produce
+# 1.0.0. The run summary lists every commit and names the ones that decided the bump; the
+# stamped number is then read again by whoever reviews the prepare PR. What stays human is
+# WHEN: nothing dispatches this workflow but a person, and nothing merges its PR but a person.
+# `patch` / `minor` / `major` and an exact `version` remain as overrides — `major` or
+# `version: 1.0.0` is the only road to 1.0.0.
+#
 # So the full release is three acts, two of them human:
 #
 #   1. dispatch this workflow      -> branch release/prepare-X.Y.Z, stamped
@@ -35,11 +45,14 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Which level to bump from the current root version."
+        description: >
+          `auto` computes the level from the commits since the last v* tag (see
+          scripts/classify-bump.mjs; pre-1.0, breaking stays a minor). `patch` / `minor` /
+          `major` bump the current root version by hand.
         required: true
-        default: minor
+        default: auto
         type: choice
-        options: [patch, minor, major]
+        options: [auto, patch, minor, major]
       version:
         description: >
           Optional exact version (no leading "v", e.g. 0.19.0). Overrides `bump` when set.
@@ -88,8 +101,9 @@ jobs:
 
       - name: Test the stamping script before letting it write anything
         # Its output is judged by release.yml's stamp assertion and by release-gate.mjs, both
-        # of which run after a tag exists. A bug found here costs a re-dispatch.
-        run: node --test scripts/release-prepare.test.mjs
+        # of which run after a tag exists. A bug found here costs a re-dispatch. The classifier
+        # is tested here too: in `auto` mode it picks the number the stamper writes.
+        run: node --test scripts/release-prepare.test.mjs scripts/classify-bump.test.mjs
 
       - name: Resolve the version
         id: v
@@ -99,7 +113,34 @@ jobs:
         run: |
           if [ -n "$EXPLICIT" ]; then
             V="${EXPLICIT#v}"
+            HOW="explicit \`version\` input"
+          elif [ "$BUMP" = auto ]; then
+            # Outputs go to RUNNER_TEMP, not the working tree: "Push the prepare branch" below
+            # commits with `git add -A`, and a stray file here would ship in the release PR.
+            OUT="$RUNNER_TEMP/classify-bump.out"
+            LOG="$RUNNER_TEMP/classify-bump.log"
+            if ! node scripts/classify-bump.mjs > "$OUT" 2> "$LOG"; then
+              cat "$LOG"
+              echo "::error::bump: auto could not compute a version — $(tail -n 1 "$LOG")"
+              exit 1
+            fi
+            cat "$LOG"
+            V=$(sed -n 's/^next_version=//p' "$OUT")
+            HOW="\`bump: auto\` — $(sed -n 's/^bump=//p' "$OUT") since $(sed -n 's/^last_tag=//p' "$OUT")"
+            {
+              echo "## Version computed by \`bump: auto\`"
+              echo
+              echo "**$(sed -n 's/^current_version=//p' "$OUT") → $V** ($(sed -n 's/^bump=//p' "$OUT")), from the commits since \`$(sed -n 's/^last_tag=//p' "$OUT")\`. The \`decided by\` lines name the commit(s) that set the level."
+              echo
+              echo '```'
+              cat "$LOG"
+              echo '```'
+              echo
+              echo "Wrong? Delete \`release/prepare-$V\` if this run pushed it, and re-dispatch with \`bump\` or \`version\` set explicitly — nothing has been tagged."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
           else
+            HOW="\`bump: $BUMP\`"
             V=$(node -e '
               import("./scripts/release-prepare.mjs").then(async (m) => {
                 const { readFileSync } = await import("node:fs");
@@ -118,7 +159,8 @@ jobs:
           echo "current=$CUR" >> "$GITHUB_OUTPUT"
           echo "version=$V"   >> "$GITHUB_OUTPUT"
           echo "branch=release/prepare-$V" >> "$GITHUB_OUTPUT"
-          echo "Preparing $CUR -> $V"
+          echo "how=$HOW"     >> "$GITHUB_OUTPUT"
+          echo "Preparing $CUR -> $V ($HOW)"
 
       - name: Refuse if the version is already tagged or already being prepared
         env:
@@ -170,10 +212,13 @@ jobs:
           V: ${{ steps.v.outputs.version }}
           CUR: ${{ steps.v.outputs.current }}
           BRANCH: ${{ steps.v.outputs.branch }}
+          HOW: ${{ steps.v.outputs.how }}
           REPO: ${{ github.repository }}
         run: |
           {
             echo "## Release prepare — \`$CUR\` → \`$V\`"
+            echo
+            echo "Version from $HOW."
             echo
             echo "Branch \`$BRANCH\` is pushed and stamped. Two human steps remain."
             echo

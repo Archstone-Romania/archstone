@@ -84,7 +84,14 @@ Cutting a release is a maintainer action, not a contributor one — it's covered
 whole flow lives in three workflows and nowhere else. It's three acts, two of them human:
 
 1. **Dispatch `Release prepare`** (`workflow_dispatch` on `.github/workflows/release-prepare.yml`,
-   run against `main`) with a `bump` (`patch`/`minor`/`major`) or an explicit `version`. It stamps
+   run against `main`). Dispatching it is the decision to release — nothing does that on a
+   schedule or on merge. The *number* is computed by default: with `bump: auto`,
+   `scripts/classify-bump.mjs` reads the commits since the last `v*` tag by Conventional Commits
+   (a `type!:` header or `BREAKING CHANGE:` footer beats `feat:`, which beats everything else;
+   inside a squash body every listed commit counts) and the run summary lists each commit and
+   names the ones that decided it. While the major is 0 a breaking change bumps the **minor**, so
+   the default never produces 1.0.0; that takes `bump: major` or an explicit `version`, which —
+   like `patch`/`minor` — override the computed number whenever you want to. It stamps
    the root `package.json`, every publishable package under `packages/` and `providers/`
    (discovered by `private: false`, not hardcoded), and `server.json`; turns the CHANGELOG's
    `## [Unreleased]` heading into `## [X.Y.Z]` and opens a fresh, empty `Unreleased` above it; then
