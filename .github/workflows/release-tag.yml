@@ -168,7 +168,7 @@ jobs:
             echo "\`## [$V]\` CHANGELOG section before the tag was pushed."
             echo
             echo "\`release.yml\` has been dispatched for \`$V\` and is now running. It publishes"
-            echo "the 8 \`@archstone/*\` packages to npm via OIDC and creates the GitHub Release"
+            echo "the 9 \`@archstone/*\` packages to npm via OIDC and creates the GitHub Release"
             echo "from that CHANGELOG section:"
             echo
             echo "  <https://github.com/$REPO/actions/workflows/release.yml>"
