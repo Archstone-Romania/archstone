@@ -219,11 +219,14 @@ jobs:
         # everyone. The release gate cannot catch this: it publishes to an ephemeral local
         # registry that does not check OIDC at all.
         #
-        # The same applies to `@archstone/provider-sql`, added to both lists after it had
-        # already shipped unstamped and unpublished in 0.24.0. It needs its Trusted Publisher
-        # on npmjs.com before the next release. It sits after `providers/rest` and before
-        # `packages/runtime`, but nothing later in the loop depends on it, so a failure there
-        # blocks the rest of the loop without breaking an already-published package.
+        # The same applies to `@archstone/provider-sql`, which the 0.24.0 release did not stamp
+        # or publish. Its 0.23.0 and 0.24.0 were published by hand, without OIDC or
+        # provenance, so the package exists on npm but has no Trusted Publisher until one is
+        # configured for this repo + workflow. It sits after `providers/rest` and before
+        # `packages/runtime`: `@archstone/runtime` and `@archstone/cli` both depend on it, so
+        # it must be on the registry first. A failure on it stops the loop before either
+        # dependent is published, so the CLI of that version is missing rather than broken,
+        # but the release cannot complete until the Trusted Publisher exists.
         #
         # Published per-package (not `pnpm -r publish`) and version-checked first, so a
         # resumed run that lands here after a prior run already published some subset of

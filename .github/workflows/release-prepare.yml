@@ -189,7 +189,7 @@ jobs:
             echo "git fetch origin main && git tag -a v$V -m v$V origin/main && git push origin v$V"
             echo '```'
             echo
-            echo "The tag starts \`release.yml\`, which publishes the 8 \`@archstone/*\` packages"
+            echo "The tag starts \`release.yml\`, which publishes the 9 \`@archstone/*\` packages"
             echo "to npm via OIDC and creates the GitHub Release from the \`## [$V]\` section of"
             echo "the CHANGELOG."
           } >> "$GITHUB_STEP_SUMMARY"

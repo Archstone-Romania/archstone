@@ -5,7 +5,7 @@
 # GITHUB_TOKEN starts no workflow, so the release is dispatched explicitly — see "Start the
 # release" for the rule and its documented exception.
 #
-# What follows is irreversible in the way that matters: release.yml publishes eight packages
+# What follows is irreversible in the way that matters: release.yml publishes nine packages
 # to npm, and `npm unpublish` is allowed for 72 hours and even then does not free the version
 # number for reuse. So the decision to release stays human, and this workflow does not change
 # that: dispatching it IS the decision. What it removes is the part a human is bad at —
@@ -18,7 +18,7 @@
 #
 # The check that earns this workflow its keep is the CHANGELOG one. release.yml asks the same
 # question, but from the "Create the GitHub Release" step — which runs AFTER "Publish packages
-# to npm". A missing or empty `## [X.Y.Z]` section there means eight packages are already on
+# to npm". A missing or empty `## [X.Y.Z]` section there means nine packages are already on
 # the registry, that version number is burned forever, and there is no clean re-run: you fix
 # the CHANGELOG, and the only version you can ship it under is the next one. Asked here, one
 # minute before the tag, it costs a re-dispatch.

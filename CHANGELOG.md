@@ -17,6 +17,15 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ### Fixed
 
+- **`@archstone/provider-sql` was left out of the release pipeline.** `providers/sql` is
+  `private: false`, but `release.yml`'s hardcoded stamp-assert and publish loops did not list
+  it. So the 0.24.0 stamp left it at 0.23.0, and CI never published it (its 0.23.0 and 0.24.0
+  on npm were published by hand). It is now stamped in lockstep with the other packages.
+  `release.yml` publishes it after the packages it depends on (`@archstone/compiler`,
+  `@archstone/emitter-support`) and before its dependents (`@archstone/runtime`,
+  `@archstone/cli`). The package counts in `release.yml`, `release-prepare.yml`,
+  `release-tag.yml` and `CONTRIBUTING.md` now read nine.
+
 - **`@archstone/agent`'s `"openai"` format mixed two different OpenAI APIs' shapes**
   ([archstone#89](https://github.com/Archstone-Romania/archstone/issues/89)). `tools("openai")`
   emitted the Chat Completions tool shape (`{type, function:{name, description, parameters}}`),
