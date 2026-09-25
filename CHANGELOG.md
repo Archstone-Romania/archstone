@@ -13,6 +13,9 @@ All notable changes to Archstone are documented here. Format loosely follows
 > issue 124 *of this repository*, which is a different thing entirely and would silently become a
 > link to the wrong issue as this repository's own numbering grows.
 
+> **Unreleased changes live in [`changelog.d/`](changelog.d/README.md)**, one file per change,
+> until a release folds them in below. See that directory for what is coming in the next release.
+
 ## [Unreleased]
 
 ## [0.25.0]
