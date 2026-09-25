@@ -15,6 +15,20 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **Two CI checks on `CHANGELOG.md`, for contributors** (`.github/workflows/ci.yml`). Every pull
+  request now either adds an entry under `## [Unreleased]` or carries a
+  `Changelog: none — <reason>` line in a commit message or its description
+  (`changelog entry or waiver`, `scripts/check-changelog-entry.mjs`); and no pull request may
+  change a released `## [x.y.z]` section unless it declares
+  `Changelog-correction: <x.y.z> — <reason>` (`released changelog sections are unchanged`,
+  `scripts/check-changelog-history.mjs`). The second catches a silent failure: a branch that wrote
+  under `[Unreleased]` before a release, rebased after it, has its entries reattached under the
+  released heading by git with no conflict, so a shipped version appears to contain later work
+  and the next release's notes lack it. See `CONTRIBUTING.md` → "The changelog". No change to
+  any published package.
+
 ### Fixed
 
 - **`@archstone/agent`'s `"openai"` format mixed two different OpenAI APIs' shapes**

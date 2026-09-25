@@ -24,10 +24,46 @@ Node 22+ · pnpm 11+. When running a single test file directly with `pnpm exec v
 
 1. Fork and create a branch.
 2. Keep `pnpm typecheck` and `pnpm test` green.
-3. Open a PR against `main` — CI runs typecheck + test on every PR.
+3. Record the change in [`CHANGELOG.md`](CHANGELOG.md) — see [The changelog](#the-changelog).
+4. Open a PR against `main` — CI runs typecheck + test on every PR, plus the two changelog checks.
 
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
 IR or CDL), open an issue first so the design can be discussed.
+
+## The changelog
+
+`CHANGELOG.md` is the release notes. When a release is cut, its `## [Unreleased]` heading is
+renamed to the version number and published as-is as the GitHub Release — nobody rewrites it
+afterwards from commit subjects. So the entry is written by the PR that makes the change, and
+two CI checks hold every PR to that:
+
+- **`changelog entry or waiver`** — the PR adds at least one line to `CHANGELOG.md`, under
+  `## [Unreleased]`, in the style of the entries already there (what changed for someone using
+  the published packages, and the package it is in). If nothing in the PR is visible to them —
+  CI, tests, internal docs — say so instead, on a line of its own in a commit message **or** the
+  PR description:
+
+  ```
+  Changelog: none — <why a user would not notice>
+  ```
+
+  A bare `Changelog: none` is refused; the reason is what the reviewer reads. The check re-reads
+  the PR description when it runs, so after editing the description, re-run the check.
+
+- **`released changelog sections are unchanged`** — never edit a `## [x.y.z]` section. It
+  describes a version people may already be running. This usually fails *by accident*: you wrote
+  entries under `## [Unreleased]`, a release renamed that heading on `main`, and when you rebased,
+  git reattached your lines under the released heading — no conflict, nothing odd in the diff.
+  After any rebase across a release, open `CHANGELOG.md` and look at where your entries actually
+  are; move them back under `## [Unreleased]`. If you really are correcting a released section,
+  declare it (once per version touched, in a commit message or the PR description):
+
+  ```
+  Changelog-correction: <x.y.z> — <what was wrong>
+  ```
+
+Commits whose subject starts with `chore(release):` — the release-prepare stamp — are exempt from
+the first check.
 
 ## Adding a dependency
 
