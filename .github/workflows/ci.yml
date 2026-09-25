@@ -35,3 +35,92 @@ jobs:
       # misnamed changelog.d fragment was first caught by release.yml, after the tag existed.
       - name: Release script tests
         run: node --test scripts/*.test.mjs
+
+  # The two jobs below judge the release notes: release-prepare.mjs folds the changelog.d/
+  # fragments into CHANGELOG.md's "## [Unreleased]", renames that heading to "## [X.Y.Z]", and
+  # release.yml publishes that section verbatim as the GitHub Release body. So what a PR writes
+  # there — or fails to — is what the next release announces.
+  #
+  # Pull requests only. Everything reaches main as a squash-merged PR, and branch protection
+  # judges the PR, so that is where a missing entry has to be caught; a check on the push to
+  # main would report after the fact, on a commit nobody can amend. Base and head are the PR's
+  # own SHAs, not `github.sha` — on `pull_request` that is a synthetic merge commit whose
+  # first-parent range would include whatever else landed on main meanwhile.
+
+  changelog-entry:
+    name: changelog entry or waiver
+    # Every PR either adds a changelog.d/ fragment (or a CHANGELOG.md line) or says, in a `Changelog: none — <reason>` trailer
+    # (on a commit or in the PR description), why a user of the published packages would not
+    # notice. See scripts/check-changelog-entry.mjs.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read     # to re-read the PR description; see the step below
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: check the pull request's range
+        # The PR description reaches the script through the environment and nothing else. It is
+        # text anyone opening a PR controls; `${{ }}`-interpolating it into `run:` would make it
+        # shell source.
+        #
+        # It is re-read from the API rather than taken only from the event payload, because
+        # "Re-run job" replays the ORIGINAL payload: a contributor who adds the waiver to the
+        # description after the check failed would otherwise re-run it against the old text
+        # forever. The payload's copy is the fallback if the API call fails.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if LIVE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null); then
+            export PR_BODY="$LIVE"
+          else
+            echo "::warning::could not re-read the PR description; using the copy from the event payload."
+            export PR_BODY="$EVENT_BODY"
+          fi
+          node scripts/check-changelog-entry.mjs "$BASE" "$HEAD"
+
+  changelog-history:
+    name: released changelog sections are unchanged
+    # A "## [x.y.z]" section that already existed at the merge base must still say exactly what it
+    # said. The failure it catches is silent: a branch writes under "## [Unreleased]", a release
+    # renames that heading on main, and the rebase reattaches the branch's lines under the
+    # released heading with no conflict and nothing visible in the diff — so a shipped version
+    # appears to contain work that landed after it. See scripts/check-changelog-history.mjs; a
+    # deliberate correction is declared with a `Changelog-correction: <x.y.z> — <why>` trailer.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: check the pull request's range
+        # PR description handling as in `changelog-entry` above, for the same two reasons.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if LIVE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null); then
+            export PR_BODY="$LIVE"
+          else
+            echo "::warning::could not re-read the PR description; using the copy from the event payload."
+            export PR_BODY="$EVENT_BODY"
+          fi
+          node scripts/check-changelog-history.mjs "$BASE" "$HEAD"

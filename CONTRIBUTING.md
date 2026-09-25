@@ -24,14 +24,52 @@ Node 22+ · pnpm 11+. When running a single test file directly with `pnpm exec v
 
 1. Fork and create a branch.
 2. Keep `pnpm typecheck` and `pnpm test` green.
-3. If the change is user-visible, add a changelog entry as a new file in
-   [`changelog.d/`](changelog.d/README.md), named `<slug>.<category>.md`. Don't edit
-   `CHANGELOG.md` directly: every PR editing its `[Unreleased]` section conflicts with every
-   other one, and the release folds the files in for you.
-4. Open a PR against `main`. CI runs typecheck, test and the release-script tests on every PR.
+3. Record the change as a new file in [`changelog.d/`](changelog.d/README.md), named
+   `<slug>.<category>.md`, or say why there is nothing to record — see
+   [The changelog](#the-changelog). Don't edit `CHANGELOG.md`'s `[Unreleased]` section directly:
+   every PR editing it conflicts with every other one, and the release folds the files in for you.
+4. Open a PR against `main`. CI runs typecheck, test and the release-script tests on every PR,
+   plus the two changelog checks.
 
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
 IR or CDL), open an issue first so the design can be discussed.
+
+## The changelog
+
+`CHANGELOG.md` is the release notes. When a release is cut, every `changelog.d/` fragment is
+folded into its `## [Unreleased]` section, that heading is renamed to the version number, and the
+section is published as-is as the GitHub Release — nobody rewrites it afterwards from commit
+subjects. So the entry is written by the PR that makes the change, and two CI checks hold every PR
+to that:
+
+- **`changelog entry or waiver`** — the PR adds a fragment under `changelog.d/` (see its
+  [README](changelog.d/README.md) for the name and the style: what changed for someone using the
+  published packages, and the package it is in). A line added under `## [Unreleased]` in
+  `CHANGELOG.md` also counts, but conflicts with every other open PR. If nothing in the PR is
+  visible to users — CI, tests, internal docs — say so instead, on a line of its own in a commit
+  message **or** the PR description:
+
+  ```
+  Changelog: none — <why a user would not notice>
+  ```
+
+  A bare `Changelog: none` is refused; the reason is what the reviewer reads. The check re-reads
+  the PR description when it runs, so after editing the description, re-run the check.
+
+- **`released changelog sections are unchanged`** — never edit a `## [x.y.z]` section. It
+  describes a version people may already be running. This usually fails *by accident*: you wrote
+  entries under `## [Unreleased]`, a release renamed that heading on `main`, and when you rebased,
+  git reattached your lines under the released heading — no conflict, nothing odd in the diff.
+  Fragments in `changelog.d/` avoid this; if you did write in `CHANGELOG.md`, after any rebase
+  across a release look at where your entries actually are, and move them into a fragment. If you really are correcting a released section,
+  declare it (once per version touched, in a commit message or the PR description):
+
+  ```
+  Changelog-correction: <x.y.z> — <what was wrong>
+  ```
+
+Commits whose subject starts with `chore(release):` — the release-prepare stamp — are exempt from
+the first check.
 
 ## Adding a dependency
 
@@ -52,7 +90,14 @@ Cutting a release is a maintainer action, not a contributor one — it's covered
 whole flow lives in three workflows and nowhere else. It's three acts, two of them human:
 
 1. **Dispatch `Release prepare`** (`workflow_dispatch` on `.github/workflows/release-prepare.yml`,
-   run against `main`) with a `bump` (`patch`/`minor`/`major`) or an explicit `version`. It stamps
+   run against `main`). Dispatching it is the decision to release — nothing does that on a
+   schedule or on merge. The *number* is computed by default: with `bump: auto`,
+   `scripts/classify-bump.mjs` reads the commits since the last `v*` tag by Conventional Commits
+   (a `type!:` header or `BREAKING CHANGE:` footer beats `feat:`, which beats everything else;
+   inside a squash body every listed commit counts) and the run summary lists each commit and
+   names the ones that decided it. While the major is 0 a breaking change bumps the **minor**, so
+   the default never produces 1.0.0; that takes `bump: major` or an explicit `version`, which —
+   like `patch`/`minor` — override the computed number whenever you want to. It stamps
    the root `package.json`, every publishable package under `packages/` and `providers/`
    (discovered by `private: false`, not hardcoded), and `server.json`; folds every
    `changelog.d/` fragment into the CHANGELOG's `## [Unreleased]` section and deletes it; turns

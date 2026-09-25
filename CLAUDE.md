@@ -52,6 +52,14 @@ already in the commit trailer and the PR author. A branch name exists so a reade
 whether the change is on their path, and a prefix that sorts every agent's work into one bucket
 regardless of what it does tells them nothing.
 
+## The changelog
+
+- Every PR adds a fragment, `changelog.d/<slug>.<category>.md` (not a line in `CHANGELOG.md`,
+  which conflicts with every other open PR), or carries a `Changelog: none — <reason>` trailer
+  (commit or PR description). Never edit a released `## [x.y.z]` section; a genuine correction
+  takes `Changelog-correction: <x.y.z> — <reason>`. Both are CI
+  checks; see [`CONTRIBUTING.md`](CONTRIBUTING.md#the-changelog).
+
 ## Commands
 
 ```bash
