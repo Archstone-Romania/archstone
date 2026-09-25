@@ -110,7 +110,7 @@ exit 0
 test("publish loop: a healthy release publishes every package, in dependency order, and exits 0", () => {
   const r = runPublishStep({ scenario: "all-new" });
   assert.equal(r.code, 0, `expected success, got ${r.code}\n${r.stdout}\n${r.stderr}`);
-  assert.deepEqual(r.published, ["schema", "compiler", "emitter-support", "rest", "runtime", "agent", "init", "cli"]);
+  assert.deepEqual(r.published, ["schema", "compiler", "emitter-support", "rest", "sql", "runtime", "agent", "init", "cli"]);
 });
 
 test("publish loop (#123): an unconfirmed package stops the release BEFORE its dependents publish", () => {
@@ -120,7 +120,7 @@ test("publish loop (#123): an unconfirmed package stops the release BEFORE its d
   const r = runPublishStep({ scenario: "fail-at-init" });
   assert.equal(r.code, 1, "an unconfirmed publish must fail the step");
   assert.ok(!r.published.includes("cli"), "@archstone/cli must NOT be published after init failed to confirm");
-  assert.deepEqual(r.published, ["schema", "compiler", "emitter-support", "rest", "runtime", "agent", "init"]);
+  assert.deepEqual(r.published, ["schema", "compiler", "emitter-support", "rest", "sql", "runtime", "agent", "init"]);
   assert.match(r.stdout, /::error::/, "must emit a GitHub error annotation, not just a non-zero exit");
   assert.match(r.stdout, /workflow_dispatch with version=0\.15\.0/, "must tell the operator how to resume");
 });
@@ -133,7 +133,7 @@ test("publish loop: a backport publishes under its lts dist-tag and the readback
   // the level where the dist-tag is actually threaded through.
   const r = runPublishStep({ scenario: "all-new", env: { V: "0.11.7", DIST_TAG: "lts-0.11" } });
   assert.equal(r.code, 0, `a backport must publish cleanly, got ${r.code}\n${r.stdout}\n${r.stderr}`);
-  assert.equal(r.published.length, 8);
+  assert.equal(r.published.length, 9);
   for (const args of r.publishArgs) {
     assert.match(args, /--tag lts-0\.11/, "every backport publish must carry its lts dist-tag");
     assert.ok(!/--tag latest/.test(args), "a backport must never publish to latest");
@@ -150,7 +150,7 @@ test("publish loop: a resumed run over an already-published version publishes no
 
 test("publish loop: a missing readback script fails BEFORE anything is published", () => {
   // Not a hypothetical worth skipping: the readback is invoked by path, and the failure mode of
-  // discovering a rename after package 1 of 8 has shipped is the expensive one.
+  // discovering a rename after package 1 of 9 has shipped is the expensive one.
   const empty = join(tmpdir(), `archstone-no-readback-${process.pid}`);
   mkdirSync(empty, { recursive: true });
   const r = runPublishStep({ scenario: "all-new", workspace: empty });

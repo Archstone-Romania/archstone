@@ -107,7 +107,7 @@ whole flow lives in three workflows and nowhere else. It's three acts, two of th
    CHANGELOG has a non-empty `## [X.Y.Z]` section, pushes the `vX.Y.Z` tag, and explicitly
    dispatches `release.yml` — a tag pushed by `GITHUB_TOKEN` does not start a workflow on its own.
 4. **`release.yml`** runs from the tag: lint, typecheck, the full test suite, and a release-only
-   gate that packs and installs every package end to end — then publishes the 8 `@archstone/*`
+   gate that packs and installs every package end to end — then publishes the 9 `@archstone/*`
    packages to npm via OIDC and creates the GitHub Release from that CHANGELOG section.
 
 If a run stops partway, resume it via that same workflow's own `workflow_dispatch` with the same
