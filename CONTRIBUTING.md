@@ -24,7 +24,11 @@ Node 22+ · pnpm 11+. When running a single test file directly with `pnpm exec v
 
 1. Fork and create a branch.
 2. Keep `pnpm typecheck` and `pnpm test` green.
-3. Open a PR against `main` — CI runs typecheck + test on every PR.
+3. If the change is user-visible, add a changelog entry as a new file in
+   [`changelog.d/`](changelog.d/README.md), named `<slug>.<category>.md`. Don't edit
+   `CHANGELOG.md` directly: every PR editing its `[Unreleased]` section conflicts with every
+   other one, and the release folds the files in for you.
+4. Open a PR against `main`. CI runs typecheck, test and the release-script tests on every PR.
 
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
 IR or CDL), open an issue first so the design can be discussed.
@@ -50,10 +54,12 @@ whole flow lives in three workflows and nowhere else. It's three acts, two of th
 1. **Dispatch `Release prepare`** (`workflow_dispatch` on `.github/workflows/release-prepare.yml`,
    run against `main`) with a `bump` (`patch`/`minor`/`major`) or an explicit `version`. It stamps
    the root `package.json`, every publishable package under `packages/` and `providers/`
-   (discovered by `private: false`, not hardcoded), and `server.json`; turns the CHANGELOG's
-   `## [Unreleased]` heading into `## [X.Y.Z]` and opens a fresh, empty `Unreleased` above it; then
-   pushes `release/prepare-X.Y.Z` and stops. It refuses to run if `[Unreleased]` has no entries —
-   there would be nothing to announce.
+   (discovered by `private: false`, not hardcoded), and `server.json`; folds every
+   `changelog.d/` fragment into the CHANGELOG's `## [Unreleased]` section and deletes it; turns
+   that heading into `## [X.Y.Z]` and opens a fresh, empty `Unreleased` above it; then pushes
+   `release/prepare-X.Y.Z` and stops. It refuses to run if there is nothing to announce: no
+   fragments and no entries under `[Unreleased]`. `Release tag` refuses a fragment merged after
+   this step, because its change would ship without a release note.
 2. **Open and merge that PR yourself.** The workflow deliberately doesn't open it: a PR raised
    with the default `GITHUB_TOKEN` still needs a manual "approve workflow run" click before CI
    runs on it, which is exactly as much human effort as opening the PR directly, without adding a

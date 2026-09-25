@@ -29,3 +29,9 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      # The repo-root release tooling uses Node's built-in runner, outside the Vitest workspace,
+      # so `pnpm test` does not reach it. Before this ran on PRs, a broken release list or a
+      # misnamed changelog.d fragment was first caught by release.yml, after the tag existed.
+      - name: Release script tests
+        run: node --test scripts/*.test.mjs
