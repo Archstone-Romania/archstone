@@ -15,6 +15,8 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.25.0]
+
 ### Fixed
 
 - **`@archstone/provider-sql` was left out of the release pipeline.** `providers/sql` is
