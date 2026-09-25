@@ -21,16 +21,6 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Test the changelog gates and the bump classifier
-        # Repo-root tooling lives outside the Vitest workspace (see release-prepare.test.mjs), so
-        # `pnpm test` never runs these. They run here, on every PR, because the two changelog
-        # jobs below judge every PR with these scripts — a bug in one would pass or block PRs
-        # wrongly, and this job is the required check that would notice — and because
-        # release-prepare.yml's `bump: auto` computes the next version with classify-bump.mjs,
-        # where a bug would otherwise surface only on the day of a release.
-        # No install needed: node:test and git are all they use.
-        run: node --test scripts/check-changelog-entry.test.mjs scripts/check-changelog-history.test.mjs scripts/classify-bump.test.mjs
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -40,10 +30,16 @@ jobs:
       - name: Test
         run: pnpm test
 
-  # The two jobs below judge CHANGELOG.md, which is the release notes: release-prepare.mjs
-  # renames its "## [Unreleased]" heading to "## [X.Y.Z]", and release.yml publishes that
-  # section verbatim as the GitHub Release body. So what a PR writes there — or fails to — is
-  # what the next release announces.
+      # The repo-root release tooling uses Node's built-in runner, outside the Vitest workspace,
+      # so `pnpm test` does not reach it. Before this ran on PRs, a broken release list or a
+      # misnamed changelog.d fragment was first caught by release.yml, after the tag existed.
+      - name: Release script tests
+        run: node --test scripts/*.test.mjs
+
+  # The two jobs below judge the release notes: release-prepare.mjs folds the changelog.d/
+  # fragments into CHANGELOG.md's "## [Unreleased]", renames that heading to "## [X.Y.Z]", and
+  # release.yml publishes that section verbatim as the GitHub Release body. So what a PR writes
+  # there — or fails to — is what the next release announces.
   #
   # Pull requests only. Everything reaches main as a squash-merged PR, and branch protection
   # judges the PR, so that is where a missing entry has to be caught; a check on the push to
@@ -53,7 +49,7 @@ jobs:
 
   changelog-entry:
     name: changelog entry or waiver
-    # Every PR either adds to CHANGELOG.md or says, in a `Changelog: none — <reason>` trailer
+    # Every PR either adds a changelog.d/ fragment (or a CHANGELOG.md line) or says, in a `Changelog: none — <reason>` trailer
     # (on a commit or in the PR description), why a user of the published packages would not
     # notice. See scripts/check-changelog-entry.mjs.
     if: github.event_name == 'pull_request'

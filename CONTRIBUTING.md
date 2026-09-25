@@ -24,24 +24,30 @@ Node 22+ · pnpm 11+. When running a single test file directly with `pnpm exec v
 
 1. Fork and create a branch.
 2. Keep `pnpm typecheck` and `pnpm test` green.
-3. Record the change in [`CHANGELOG.md`](CHANGELOG.md) — see [The changelog](#the-changelog).
-4. Open a PR against `main` — CI runs typecheck + test on every PR, plus the two changelog checks.
+3. Record the change as a new file in [`changelog.d/`](changelog.d/README.md), named
+   `<slug>.<category>.md`, or say why there is nothing to record — see
+   [The changelog](#the-changelog). Don't edit `CHANGELOG.md`'s `[Unreleased]` section directly:
+   every PR editing it conflicts with every other one, and the release folds the files in for you.
+4. Open a PR against `main`. CI runs typecheck, test and the release-script tests on every PR,
+   plus the two changelog checks.
 
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
 IR or CDL), open an issue first so the design can be discussed.
 
 ## The changelog
 
-`CHANGELOG.md` is the release notes. When a release is cut, its `## [Unreleased]` heading is
-renamed to the version number and published as-is as the GitHub Release — nobody rewrites it
-afterwards from commit subjects. So the entry is written by the PR that makes the change, and
-two CI checks hold every PR to that:
+`CHANGELOG.md` is the release notes. When a release is cut, every `changelog.d/` fragment is
+folded into its `## [Unreleased]` section, that heading is renamed to the version number, and the
+section is published as-is as the GitHub Release — nobody rewrites it afterwards from commit
+subjects. So the entry is written by the PR that makes the change, and two CI checks hold every PR
+to that:
 
-- **`changelog entry or waiver`** — the PR adds at least one line to `CHANGELOG.md`, under
-  `## [Unreleased]`, in the style of the entries already there (what changed for someone using
-  the published packages, and the package it is in). If nothing in the PR is visible to them —
-  CI, tests, internal docs — say so instead, on a line of its own in a commit message **or** the
-  PR description:
+- **`changelog entry or waiver`** — the PR adds a fragment under `changelog.d/` (see its
+  [README](changelog.d/README.md) for the name and the style: what changed for someone using the
+  published packages, and the package it is in). A line added under `## [Unreleased]` in
+  `CHANGELOG.md` also counts, but conflicts with every other open PR. If nothing in the PR is
+  visible to users — CI, tests, internal docs — say so instead, on a line of its own in a commit
+  message **or** the PR description:
 
   ```
   Changelog: none — <why a user would not notice>
@@ -54,8 +60,8 @@ two CI checks hold every PR to that:
   describes a version people may already be running. This usually fails *by accident*: you wrote
   entries under `## [Unreleased]`, a release renamed that heading on `main`, and when you rebased,
   git reattached your lines under the released heading — no conflict, nothing odd in the diff.
-  After any rebase across a release, open `CHANGELOG.md` and look at where your entries actually
-  are; move them back under `## [Unreleased]`. If you really are correcting a released section,
+  Fragments in `changelog.d/` avoid this; if you did write in `CHANGELOG.md`, after any rebase
+  across a release look at where your entries actually are, and move them into a fragment. If you really are correcting a released section,
   declare it (once per version touched, in a commit message or the PR description):
 
   ```
@@ -93,10 +99,12 @@ whole flow lives in three workflows and nowhere else. It's three acts, two of th
    the default never produces 1.0.0; that takes `bump: major` or an explicit `version`, which —
    like `patch`/`minor` — override the computed number whenever you want to. It stamps
    the root `package.json`, every publishable package under `packages/` and `providers/`
-   (discovered by `private: false`, not hardcoded), and `server.json`; turns the CHANGELOG's
-   `## [Unreleased]` heading into `## [X.Y.Z]` and opens a fresh, empty `Unreleased` above it; then
-   pushes `release/prepare-X.Y.Z` and stops. It refuses to run if `[Unreleased]` has no entries —
-   there would be nothing to announce.
+   (discovered by `private: false`, not hardcoded), and `server.json`; folds every
+   `changelog.d/` fragment into the CHANGELOG's `## [Unreleased]` section and deletes it; turns
+   that heading into `## [X.Y.Z]` and opens a fresh, empty `Unreleased` above it; then pushes
+   `release/prepare-X.Y.Z` and stops. It refuses to run if there is nothing to announce: no
+   fragments and no entries under `[Unreleased]`. `Release tag` refuses a fragment merged after
+   this step, because its change would ship without a release note.
 2. **Open and merge that PR yourself.** The workflow deliberately doesn't open it: a PR raised
    with the default `GITHUB_TOKEN` still needs a manual "approve workflow run" click before CI
    runs on it, which is exactly as much human effort as opening the PR directly, without adding a
@@ -107,7 +115,7 @@ whole flow lives in three workflows and nowhere else. It's three acts, two of th
    CHANGELOG has a non-empty `## [X.Y.Z]` section, pushes the `vX.Y.Z` tag, and explicitly
    dispatches `release.yml` — a tag pushed by `GITHUB_TOKEN` does not start a workflow on its own.
 4. **`release.yml`** runs from the tag: lint, typecheck, the full test suite, and a release-only
-   gate that packs and installs every package end to end — then publishes the 8 `@archstone/*`
+   gate that packs and installs every package end to end — then publishes the 9 `@archstone/*`
    packages to npm via OIDC and creates the GitHub Release from that CHANGELOG section.
 
 If a run stops partway, resume it via that same workflow's own `workflow_dispatch` with the same

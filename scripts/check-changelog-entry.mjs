@@ -7,9 +7,15 @@
 // not written when the change lands has to be reconstructed at release time from commit subjects,
 // by whoever cuts the release, which is the worst person and the worst moment to do it.
 //
+// Entries are written as fragments, one file per change under `changelog.d/` (see its README):
+// release-prepare.mjs folds them into `## [Unreleased]` before stamping, so PRs stop colliding on
+// the same lines of CHANGELOG.md. A hand-written line under Unreleased is still folded in and
+// still counts here; it is just the path that conflicts.
+//
 // This check makes the decision explicit for the range under review, in one of two ways:
 //
-//   1. the range adds at least one line to CHANGELOG.md, or
+//   1. the range adds a fragment under changelog.d/ (any file but its README), or adds at least
+//      one line to CHANGELOG.md, or
 //   2. a commit in the range — or the pull request's description — carries a trailer saying why
 //      a user of the published packages would not notice the change:
 //
@@ -38,6 +44,7 @@
 import { execFileSync } from "node:child_process";
 
 const FILE = "CHANGELOG.md";
+const FRAGMENT_DIR = "changelog.d";
 const RELEASE_COMMIT = /^chore\(release\):/;
 
 /** The waiver. Shared with the tests so they check the same pattern CI does. */
@@ -83,6 +90,20 @@ export function checkChangelogEntry({ cwd = process.cwd(), base, head = "HEAD", 
   // Three dots: from the merge base, not from `base` itself. A pull request's base SHA is main's
   // tip when the event fired, and main may have moved past the point this branch left it — a
   // two-dot diff would then count main's own CHANGELOG edits, reversed, as this branch's.
+  // Whether a fragment's name is one release-prepare can place is not asked here: that is
+  // readFragments()'s job, and release-prepare.test.mjs runs it against the real directory on
+  // every PR. This only asks whether the PR wrote one.
+  const fragments = g("diff", "--numstat", `${base}...${head}`, "--", FRAGMENT_DIR)
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split("\t"))
+    .filter(([added, , path]) => Number(added) > 0 && path !== `${FRAGMENT_DIR}/README.md`)
+    .map(([, , path]) => path);
+  if (fragments.length > 0) {
+    return { ok: true, message: `changelog entry: ${fragments.join(", ")} — ok` };
+  }
+
   const numstat = g("diff", "--numstat", `${base}...${head}`, "--", FILE).trim();
   const added = numstat ? Number(numstat.split(/\s+/)[0]) : 0;
   if (added > 0) {
@@ -108,10 +129,11 @@ export function checkChangelogEntry({ cwd = process.cwd(), base, head = "HEAD", 
     ok: false,
     code: 1,
     message:
-      `changelog entry: ${commits.length} commit(s) in ${base.slice(0, 7)}..${head.slice(0, 7)} and no ${FILE} decision.\n\n` +
-      `Either add an entry under "## [Unreleased]" in ${FILE} describing what changed for someone\n` +
-      "using the published packages (match the style of the entries already there), or, if nothing\n" +
-      "here is visible to them, add this line to a commit message or to the pull request description:\n\n" +
+      `changelog entry: ${commits.length} commit(s) in ${base.slice(0, 7)}..${head.slice(0, 7)} and no changelog decision.\n\n` +
+      `Either add a fragment, ${FRAGMENT_DIR}/<slug>.<category>.md, describing what changed for someone\n` +
+      `using the published packages (see ${FRAGMENT_DIR}/README.md for the categories and the style), or,\n` +
+      "if nothing here is visible to them, add this line to a commit message or to the pull request\n" +
+      "description:\n\n" +
       "    Changelog: none — <why a user would not notice>\n\n" +
       'A bare "Changelog: none" is not accepted; the reason is what a reviewer reads. If you edit\n' +
       "only the PR description, re-run this check afterwards — it reads the description when it runs.\n",

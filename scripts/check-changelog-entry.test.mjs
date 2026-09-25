@@ -47,8 +47,30 @@ test("fails, and says what to do, when nothing touches the CHANGELOG and nothing
   const r = check(s, base);
   assert.equal(r.ok, false);
   assert.equal(r.code, 1);
-  assert.match(r.message, /## \[Unreleased\]/);
+  assert.match(r.message, /changelog\.d\/<slug>\.<category>\.md/);
   assert.match(r.message, /Changelog: none — <why a user would not notice>/);
+});
+
+test("passes when the range adds a changelog.d/ fragment, without touching CHANGELOG.md", (t) => {
+  const { s, base } = withBase(t);
+  s.commit("fix: thing", { "changelog.d/thing.fixed.md": "- **A thing.** Fixed.\n", "src.txt": "b\n" });
+  const r = check(s, base);
+  assert.equal(r.ok, true, r.message);
+  assert.match(r.message, /changelog\.d\/thing\.fixed\.md/);
+});
+
+test("editing only changelog.d/README.md is not an entry", (t) => {
+  const { s, base } = withBase(t);
+  s.commit("fix: thing", { "changelog.d/README.md": "# changelog.d\n\nreworded\n", "src.txt": "b\n" });
+  assert.equal(check(s, base).ok, false);
+});
+
+test("deleting fragments is not an entry", (t) => {
+  const { s } = withBase(t);
+  const base = s.commit("fix: earlier", { "changelog.d/earlier.fixed.md": "- earlier\n" });
+  s.git("rm", "-q", "changelog.d/earlier.fixed.md");
+  s.commit("docs: drop a fragment", { "src.txt": "b\n" });
+  assert.equal(check(s, base).ok, false);
 });
 
 test("a deletion-only CHANGELOG change is not an entry", (t) => {

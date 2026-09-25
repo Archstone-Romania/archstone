@@ -186,7 +186,7 @@ jobs:
           FAIL=0
           ROOT_V=$(node -p "require('./package.json').version")
           [ "$ROOT_V" = "$V" ] || { echo "::error::root package.json is $ROOT_V but the tag says $V"; FAIL=1; }
-          for p in packages/schema packages/compiler packages/emitter-support providers/rest packages/runtime packages/agent packages/init packages/cli; do
+          for p in packages/schema packages/compiler packages/emitter-support providers/rest providers/sql packages/runtime packages/agent packages/init packages/cli; do
             PV=$(node -p "require('./$p/package.json').version")
             [ "$PV" = "$V" ] || { echo "::error::$p is at $PV but the tag says $V"; FAIL=1; }
           done
@@ -194,7 +194,7 @@ jobs:
             echo "::error::the tagged commit is not stamped to $V. Merge the release-prepare PR that stamps every package (and server.json), re-tag, and run again. Nothing was published."
             exit 1
           fi
-          echo "✓ root and all 8 packages are stamped to $V"
+          echo "✓ root and all 9 packages are stamped to $V"
       - name: "Release gate: build+verify examples against packed artifacts"
         # #33/ADD-33 — packs every private:false @archstone/* package (now stamped to this
         # tag's real version), publishes to an ephemeral local registry, does a real
@@ -211,7 +211,7 @@ jobs:
         run: node scripts/release-gate.mjs
 
       - name: Publish packages to npm
-        # Authenticates via npm Trusted Publishing (OIDC) — each of the 8 packages has a
+        # Authenticates via npm Trusted Publishing (OIDC) — each of the 9 packages has a
         # Trusted Publisher configured for this repo/workflow on npmjs.com, so no NPM_TOKEN
         # secret exists or is needed. Requires a recent npm CLI (OIDC support).
         #
@@ -223,9 +223,18 @@ jobs:
         # everyone. The release gate cannot catch this: it publishes to an ephemeral local
         # registry that does not check OIDC at all.
         #
+        # The same applies to `@archstone/provider-sql`, which the 0.24.0 release did not stamp
+        # or publish. Its 0.23.0 and 0.24.0 were published by hand, without OIDC or
+        # provenance, so the package exists on npm but has no Trusted Publisher until one is
+        # configured for this repo + workflow. It sits after `providers/rest` and before
+        # `packages/runtime`: `@archstone/runtime` and `@archstone/cli` both depend on it, so
+        # it must be on the registry first. A failure on it stops the loop before either
+        # dependent is published, so the CLI of that version is missing rather than broken,
+        # but the release cannot complete until the Trusted Publisher exists.
+        #
         # Published per-package (not `pnpm -r publish`) and version-checked first, so a
         # resumed run that lands here after a prior run already published some subset of
-        # the 8 packages does not fail on "cannot publish over previously published
+        # the 9 packages does not fail on "cannot publish over previously published
         # version" — it skips exactly the packages already on the registry and publishes
         # the rest.
         #
@@ -323,10 +332,10 @@ jobs:
           # `scripts/release-gate.mjs` against the discovered `private: false` packages —
           # BOTH loops, since omitting a package from either one breaks a release in its own
           # way (unstamped/stale version vs. never published at all).
-          for p in packages/schema packages/compiler packages/emitter-support providers/rest packages/runtime packages/agent packages/init packages/cli; do
+          for p in packages/schema packages/compiler packages/emitter-support providers/rest providers/sql packages/runtime packages/agent packages/init packages/cli; do
             NAME=$(node -p "require('./$p/package.json').name")
             # Idempotence, asked with a 0s budget: absence is answered on the first probe, so a
-            # normal release does not stall on 8 packages that are legitimately not there yet.
+            # normal release does not stall on 9 packages that are legitimately not there yet.
             # An UNANSWERED probe is retried for READBACK_GRACE_S and, if still unanswered,
             # falls through to publish — never to skip. The two mistakes are not symmetric:
             # publishing something already published fails loudly and harmlessly ("cannot

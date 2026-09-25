@@ -16,8 +16,10 @@
 //   - It does not decide the version. `--bump` computes a candidate from the root
 //     package.json, but the caller passes the final string, so the version that reaches the
 //     files is always one someone typed or read.
-//   - It does not write release notes. The `[Unreleased]` section is authored as the work
-//     lands; this only renames the heading and opens a fresh empty section above it.
+//   - It does not write release notes. They are authored as the work lands, one file per
+//     change under `changelog.d/` (see foldFragments), so that two PRs never edit the same
+//     lines of CHANGELOG.md. This folds those files into `[Unreleased]`, renames the heading
+//     and opens a fresh empty section above it.
 //
 // The package set is DISCOVERED (`private: false` under packages/ and providers/), never
 // listed here. release-gate.mjs already asserts that discovered set is exactly what
@@ -25,7 +27,7 @@
 // away from the gate that will judge its output. A hardcoded list here would be a fourth
 // place to forget a new package.
 
-import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -121,6 +123,105 @@ export function stampServerJson(text, version) {
   return out;
 }
 
+// ---------------------------------------------------------------------------------------
+// changelog.d — one file per change, folded in at release time.
+//
+// Every PR used to add its entry under `## [Unreleased]`, at the top of the same `### Fixed`
+// list, so almost every merge left every other open PR in conflict on CHANGELOG.md. A file
+// per change cannot conflict: two PRs add two different files. The cost is moved to one
+// place, the release-prepare PR, where the files are folded into the CHANGELOG and deleted.
+//
+// A fragment is `changelog.d/<anything>.<category>.md`. The category is in the name rather
+// than in a heading inside the file so a misfiled entry is visible in the PR's file list,
+// and so a file cannot open a section the CHANGELOG does not use. The body is the entry
+// exactly as it should read under that `### Category` heading, usually one `- **…**` bullet.
+// ---------------------------------------------------------------------------------------
+
+/** Keep a Changelog's categories, in the order a section lists them. */
+export const FRAGMENT_CATEGORIES = ["added", "changed", "deprecated", "removed", "fixed", "security"];
+
+const FRAGMENT_DIR = "changelog.d";
+const FRAGMENT_NAME = /^[a-z0-9][a-z0-9._-]*\.([a-z]+)\.md$/;
+
+/**
+ * Read every fragment under `changelog.d/`, sorted by file name so the folded order is the
+ * same on every machine. Throws on a file it cannot place, naming it: a fragment that is
+ * silently skipped is a change that ships with no release note. `README.md` is the
+ * directory's own documentation, not a fragment.
+ */
+export function readFragments(root = ROOT) {
+  const dir = join(root, FRAGMENT_DIR);
+  if (!existsSync(dir)) return [];
+  const fragments = [];
+  for (const name of readdirSync(dir).sort()) {
+    if (name === "README.md") continue;
+    const rel = `${FRAGMENT_DIR}/${name}`;
+    const m = FRAGMENT_NAME.exec(name);
+    if (!m || !FRAGMENT_CATEGORIES.includes(m[1])) {
+      throw new Error(
+        `${rel}: a fragment is named <slug>.<category>.md, with category one of ` +
+          `${FRAGMENT_CATEGORIES.join(", ")}`,
+      );
+    }
+    const body = readFileSync(join(dir, name), "utf8").trim();
+    if (body === "") throw new Error(`${rel} is empty — it would fold in as a blank entry`);
+    if (/^#{1,3} /m.test(body)) {
+      throw new Error(
+        `${rel} contains a #, ## or ### heading — the category comes from the file name, and ` +
+          `a heading inside the entry would break the CHANGELOG's section structure`,
+      );
+    }
+    fragments.push({ rel, category: m[1], body });
+  }
+  return fragments;
+}
+
+const titleOf = (category) => category[0].toUpperCase() + category.slice(1);
+
+/**
+ * Fold fragments into the `## [Unreleased]` section, under the matching `### Category`
+ * heading, after whatever entries that heading already has. A category the section does not
+ * have yet is opened after the existing ones, in Keep a Changelog order. Entries already
+ * under `[Unreleased]` are kept exactly as they are, so a hand-written entry and a fragment
+ * can coexist.
+ */
+export function foldFragments(text, fragments) {
+  if (fragments.length === 0) return text;
+  const idx = text.indexOf("## [Unreleased]");
+  if (idx === -1) throw new Error("CHANGELOG.md has no ## [Unreleased] section");
+
+  const start = idx + "## [Unreleased]".length;
+  const rest = text.slice(start);
+  const next = rest.search(/^## \[/m);
+  const body = next === -1 ? rest : rest.slice(0, next);
+  const tail = next === -1 ? "" : rest.slice(next);
+
+  // Split the section into its text before the first ### heading and its ### subsections.
+  const parts = body.split(/^(?=### )/m);
+  const preamble = parts[0].startsWith("### ") ? "" : parts.shift();
+  const sections = parts.map((p) => {
+    const nl = p.indexOf("\n");
+    const heading = nl === -1 ? p : p.slice(0, nl);
+    return { title: heading.slice(4).trim(), content: nl === -1 ? "" : p.slice(nl + 1) };
+  });
+
+  for (const category of FRAGMENT_CATEGORIES) {
+    const entries = fragments.filter((f) => f.category === category).map((f) => f.body);
+    if (entries.length === 0) continue;
+    let section = sections.find((s) => s.title.toLowerCase() === category);
+    if (!section) {
+      section = { title: titleOf(category), content: "" };
+      sections.push(section);
+    }
+    const existing = section.content.trim();
+    section.content = [existing, ...entries].filter(Boolean).join("\n\n");
+  }
+
+  const rendered = sections.map((s) => `### ${s.title}\n\n${s.content.trim()}\n`).join("\n");
+  const lead = preamble.trim() === "" ? "\n\n" : `${preamble.trimEnd()}\n\n`;
+  return `${text.slice(0, start)}${lead}${rendered}${tail === "" ? "" : `\n${tail}`}`;
+}
+
 /**
  * Turn `## [Unreleased]` into `## [X.Y.Z]` and open a fresh, empty `## [Unreleased]` above
  * it. release.yml reads the `## [X.Y.Z]` section verbatim as the GitHub Release body and
@@ -179,10 +280,11 @@ export function stampTree(version, root = ROOT) {
   pending.push([serverAbs, "server.json", stampServerJson(readFileSync(serverAbs, "utf8"), version)]);
 
   const changelogAbs = join(root, "CHANGELOG.md");
+  const fragments = readFragments(root);
   pending.push([
     changelogAbs,
     "CHANGELOG.md",
-    stampChangelog(readFileSync(changelogAbs, "utf8"), version),
+    stampChangelog(foldFragments(readFileSync(changelogAbs, "utf8"), fragments), version),
   ]);
 
   const changed = [];
@@ -191,6 +293,11 @@ export function stampTree(version, root = ROOT) {
       writeFileSync(abs, text);
       changed.push(rel);
     }
+  }
+  // Only once the CHANGELOG that now carries their text has been written.
+  for (const f of fragments) {
+    rmSync(join(root, f.rel));
+    changed.push(`${f.rel} (folded into CHANGELOG.md)`);
   }
   return changed;
 }
@@ -207,7 +314,7 @@ export function stampTree(version, root = ROOT) {
  * release.yml asks a version of this question too, after the tag exists. The extra thing
  * asked here is the CHANGELOG, and that is not redundant: release.yml's own CHANGELOG check
  * lives in "Create the GitHub Release", which runs AFTER "Publish packages to npm". Failing
- * it there means eight packages are already on the registry, that version number is burned,
+ * it there means nine packages are already on the registry, that version number is burned,
  * and there is no clean re-run. Asked before the tag, it costs nothing.
  */
 export function verifyStamp(version, root = ROOT) {
@@ -229,6 +336,22 @@ export function verifyStamp(version, root = ROOT) {
         `server.json .packages[${i}] (${p.identifier ?? "?"}) is ${p.version}, expected ${version}`,
       );
     }
+  }
+
+  // A fragment still here at tag time was merged after the release was prepared: its change
+  // is in the tagged commit, but its note is not in this version's section, so the release
+  // would ship it unannounced and announce it later under a version it was not in.
+  let leftover = [];
+  try {
+    leftover = readFragments(root);
+  } catch (e) {
+    problems.push(e.message);
+  }
+  for (const f of leftover) {
+    problems.push(
+      `${f.rel} was not folded into the CHANGELOG — it was merged after the release was ` +
+        `prepared; fold it into the ${version} section by hand or prepare the release again`,
+    );
   }
 
   const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");

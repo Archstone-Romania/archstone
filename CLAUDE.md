@@ -54,10 +54,10 @@ regardless of what it does tells them nothing.
 
 ## The changelog
 
-- Every PR adds an entry under `## [Unreleased]` in `CHANGELOG.md`, or carries a
-  `Changelog: none — <reason>` trailer (commit or PR description). Never edit a released
-  `## [x.y.z]` section — after a rebase across a release, check your entries did not reattach
-  under it; a genuine correction takes `Changelog-correction: <x.y.z> — <reason>`. Both are CI
+- Every PR adds a fragment, `changelog.d/<slug>.<category>.md` (not a line in `CHANGELOG.md`,
+  which conflicts with every other open PR), or carries a `Changelog: none — <reason>` trailer
+  (commit or PR description). Never edit a released `## [x.y.z]` section; a genuine correction
+  takes `Changelog-correction: <x.y.z> — <reason>`. Both are CI
   checks; see [`CONTRIBUTING.md`](CONTRIBUTING.md#the-changelog).
 
 ## Commands

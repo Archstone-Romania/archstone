@@ -13,29 +13,23 @@ All notable changes to Archstone are documented here. Format loosely follows
 > issue 124 *of this repository*, which is a different thing entirely and would silently become a
 > link to the wrong issue as this repository's own numbering grows.
 
+> **Unreleased changes live in [`changelog.d/`](changelog.d/README.md)**, one file per change,
+> until a release folds them in below. See that directory for what is coming in the next release.
+
 ## [Unreleased]
 
-### Added
-
-- **Two CI checks on `CHANGELOG.md`, for contributors** (`.github/workflows/ci.yml`). Every pull
-  request now either adds an entry under `## [Unreleased]` or carries a
-  `Changelog: none — <reason>` line in a commit message or its description
-  (`changelog entry or waiver`, `scripts/check-changelog-entry.mjs`); and no pull request may
-  change a released `## [x.y.z]` section unless it declares
-  `Changelog-correction: <x.y.z> — <reason>` (`released changelog sections are unchanged`,
-  `scripts/check-changelog-history.mjs`). The second catches a silent failure: a branch that wrote
-  under `[Unreleased]` before a release, rebased after it, has its entries reattached under the
-  released heading by git with no conflict, so a shipped version appears to contain later work
-  and the next release's notes lack it. See `CONTRIBUTING.md` → "The changelog". No change to
-  any published package.
-- **`Release prepare` computes the version by default** (`bump: auto`,
-  `scripts/classify-bump.mjs`). It classifies the commits since the last `v*` tag by Conventional
-  Commits — breaking, then `feat`, then everything else, counting every commit listed in a
-  squash body — and names the commits that decided the bump in the run summary. Before 1.0 a
-  breaking change bumps the minor, so a computed default never produces 1.0.0; `patch` / `minor` /
-  `major` and an explicit `version` still override it. Maintainer tooling only.
+## [0.25.0]
 
 ### Fixed
+
+- **`@archstone/provider-sql` was left out of the release pipeline.** `providers/sql` is
+  `private: false`, but `release.yml`'s hardcoded stamp-assert and publish loops did not list
+  it. So the 0.24.0 stamp left it at 0.23.0, and CI never published it (its 0.23.0 and 0.24.0
+  on npm were published by hand). It is now stamped in lockstep with the other packages.
+  `release.yml` publishes it after the packages it depends on (`@archstone/compiler`,
+  `@archstone/emitter-support`) and before its dependents (`@archstone/runtime`,
+  `@archstone/cli`). The package counts in `release.yml`, `release-prepare.yml`,
+  `release-tag.yml` and `CONTRIBUTING.md` now read nine.
 
 - **`@archstone/agent`'s `"openai"` format mixed two different OpenAI APIs' shapes**
   ([archstone#89](https://github.com/Archstone-Romania/archstone/issues/89)). `tools("openai")`

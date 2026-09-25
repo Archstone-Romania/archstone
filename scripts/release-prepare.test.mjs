@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,8 @@ import {
   stampChangelog,
   stampTree,
   verifyStamp,
+  readFragments,
+  foldFragments,
 } from "./release-prepare.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -174,7 +176,7 @@ test("the real tree is in lockstep: root, every package and server.json agree", 
 
 // ---------------------------------------------------------------------------------------
 // verifyStamp — the pre-tag gate. Each case below is a way to reach a tag that publishes
-// eight packages and then fails, or publishes them under an empty release.
+// nine packages and then fails, or publishes them under an empty release.
 // ---------------------------------------------------------------------------------------
 
 /** A minimal but structurally real tree: root, two publishable packages, one private one,
@@ -308,4 +310,132 @@ test("stampTree then verifyStamp: the stamper's output satisfies the verifier", 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------------------
+// changelog.d fragments. A fragment that is skipped or folded under the wrong heading is a
+// change that ships with no release note, or with the wrong one.
+// ---------------------------------------------------------------------------------------
+
+function fragmentDir(files) {
+  const dir = mkdtempSync(join(tmpdir(), "release-fragments-"));
+  mkdirSync(join(dir, "changelog.d"));
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, "changelog.d", name), body);
+  return dir;
+}
+
+test("readFragments: reads category from the name, sorts by name, skips README.md", () => {
+  const dir = fragmentDir({
+    "b-thing.fixed.md": "- **b**\n",
+    "a-thing.added.md": "\n- **a**\n\n",
+    "README.md": "# how to\n",
+  });
+  try {
+    assert.deepEqual(readFragments(dir), [
+      { rel: "changelog.d/a-thing.added.md", category: "added", body: "- **a**" },
+      { rel: "changelog.d/b-thing.fixed.md", category: "fixed", body: "- **b**" },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readFragments: no changelog.d directory means no fragments", () => {
+  assert.deepEqual(readFragments(mkdtempSync(join(tmpdir(), "release-fragments-"))), []);
+});
+
+test("readFragments: refuses a file it cannot place, and names it", () => {
+  for (const [name, body, pattern] of [
+    ["no-category.md", "- x", /no-category\.md: a fragment is named/],
+    ["typo.fixd.md", "- x", /typo\.fixd\.md: a fragment is named/],
+    ["Upper.fixed.md", "- x", /Upper\.fixed\.md: a fragment is named/],
+    ["blank.fixed.md", "  \n", /blank\.fixed\.md is empty/],
+    ["heading.fixed.md", "### Fixed\n\n- x", /heading\.fixed\.md contains/],
+  ]) {
+    const dir = fragmentDir({ [name]: body });
+    try {
+      assert.throws(() => readFragments(dir), pattern);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("foldFragments: appends under an existing heading, opens missing ones in order", () => {
+  const before =
+    "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- by hand\n\n## [0.18.0]\n\n- older\n";
+  const after = foldFragments(before, [
+    { category: "security", body: "- s" },
+    { category: "fixed", body: "- f1" },
+    { category: "added", body: "- a" },
+    { category: "fixed", body: "- f2" },
+  ]);
+  assert.equal(
+    after,
+    "# Changelog\n\n## [Unreleased]\n\n" +
+      "### Fixed\n\n- by hand\n\n- f1\n\n- f2\n\n" +
+      "### Added\n\n- a\n\n" +
+      "### Security\n\n- s\n\n" +
+      "## [0.18.0]\n\n- older\n",
+  );
+});
+
+test("foldFragments: fills an empty Unreleased section, and is a no-op with no fragments", () => {
+  const before = "# Changelog\n\n## [Unreleased]\n\n## [0.18.0]\n\n- older\n";
+  assert.equal(foldFragments(before, []), before);
+  assert.equal(
+    foldFragments(before, [{ category: "changed", body: "- c" }]),
+    "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- c\n\n## [0.18.0]\n\n- older\n",
+  );
+});
+
+test("stampTree: folds fragments into the version section and deletes them", () => {
+  const dir = fixtureTree("0.19.0");
+  try {
+    writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## [0.19.0]\n\n- older\n");
+    mkdirSync(join(dir, "changelog.d"));
+    writeFileSync(join(dir, "changelog.d", "README.md"), "# how to\n");
+    writeFileSync(join(dir, "changelog.d", "sql.fixed.md"), "- **sql** fixed\n");
+    const changed = stampTree("0.19.1", dir);
+    assert.ok(changed.includes("changelog.d/sql.fixed.md (folded into CHANGELOG.md)"));
+    assert.ok(!existsSync(join(dir, "changelog.d", "sql.fixed.md")), "the fragment was not deleted");
+    assert.ok(existsSync(join(dir, "changelog.d", "README.md")), "README.md must survive a release");
+    assert.match(
+      readFileSync(join(dir, "CHANGELOG.md"), "utf8"),
+      /## \[Unreleased\]\n\n## \[0\.19\.1\]\n\n### Fixed\n\n- \*\*sql\*\* fixed\n\n## \[0\.19\.0\]/,
+    );
+    assert.deepEqual(verifyStamp("0.19.1", dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Fragments alone are enough to release; an empty Unreleased with no fragments is not.
+test("stampTree: refuses when there are neither Unreleased entries nor fragments", () => {
+  const dir = fixtureTree("0.19.0");
+  try {
+    writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## [0.19.0]\n\n- older\n");
+    assert.throws(() => stampTree("0.19.1", dir), /nothing to release/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A fragment merged between the prepare PR and the tag would ship its change unannounced.
+test("verifyStamp: refuses a fragment that was never folded", () => {
+  const dir = fixtureTree("0.19.1");
+  try {
+    mkdirSync(join(dir, "changelog.d"));
+    writeFileSync(join(dir, "changelog.d", "late.fixed.md"), "- late\n");
+    const problems = verifyStamp("0.19.1", dir);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /changelog\.d\/late\.fixed\.md was not folded/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The tripwire that runs on every PR: a misnamed fragment fails here, not in release-prepare.
+test("the real tree's changelog.d fragments are all well-formed", () => {
+  assert.doesNotThrow(() => readFragments(ROOT));
 });
