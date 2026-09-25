@@ -174,7 +174,7 @@ test("the real tree is in lockstep: root, every package and server.json agree", 
 
 // ---------------------------------------------------------------------------------------
 // verifyStamp — the pre-tag gate. Each case below is a way to reach a tag that publishes
-// eight packages and then fails, or publishes them under an empty release.
+// nine packages and then fails, or publishes them under an empty release.
 // ---------------------------------------------------------------------------------------
 
 /** A minimal but structurally real tree: root, two publishable packages, one private one,

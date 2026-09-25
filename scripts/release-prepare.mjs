@@ -207,7 +207,7 @@ export function stampTree(version, root = ROOT) {
  * release.yml asks a version of this question too, after the tag exists. The extra thing
  * asked here is the CHANGELOG, and that is not redundant: release.yml's own CHANGELOG check
  * lives in "Create the GitHub Release", which runs AFTER "Publish packages to npm". Failing
- * it there means eight packages are already on the registry, that version number is burned,
+ * it there means nine packages are already on the registry, that version number is burned,
  * and there is no clean re-run. Asked before the tag, it costs nothing.
  */
 export function verifyStamp(version, root = ROOT) {
