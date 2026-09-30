@@ -1,0 +1,506 @@
+openapi: 3.1.0
+
+# ROW-LEVEL ERRORS — ADD-12 §8.1 / §8.4 item 1: `oneOf[success, error]` under a `const`
+# discriminator, as the items of a list, maps onto `resource` + `onError.errorResource`.
+#
+# The first three operations are the accepted form (and its two `code`/`message` variants);
+# every other operation is one way of NOT being that form, and must come back with the
+# `oneof-*` code that names what is missing — never `unsupported-composition`, and never a
+# union silently flattened into its success shape.
+#
+# SYNTHETIC, like its siblings.
+
+info:
+  title: Acme Pricing — batch lookups that fail per row
+  version: 1.0.0
+
+servers:
+  - url: https://api.acme.test/v1
+
+paths:
+  /prices:
+    get:
+      summary: Price a batch of SKUs; an unknown SKU fails its own row, not the batch
+      operationId: listPrices
+      security: []
+      responses:
+        '200':
+          description: One row per requested SKU.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: '#/components/schemas/Price'
+                        - $ref: '#/components/schemas/PriceError'
+
+  /quotes:
+    get:
+      summary: Quote a batch; the error branch spells code and message the default way
+      operationId: listQuotes
+      security: []
+      responses:
+        '200':
+          description: A bare list of rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Quote'
+                    - $ref: '#/components/schemas/QuoteError'
+
+  /stocks:
+    get:
+      summary: Stock levels; the error branch has no `code`, so the discriminator is the code
+      operationId: listStocks
+      security: []
+      responses:
+        '200':
+          description: One row per warehouse.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StockRow'
+
+  /levels:
+    get:
+      summary: A numeric discriminator standing in as the code
+      operationId: listLevels
+      security: []
+      responses:
+        '200':
+          description: One row per bin.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Quote'
+                    - type: object
+                      required: [errno, message]
+                      properties:
+                        errno:
+                          type: integer
+                          const: 7
+                        message:
+                          type: string
+
+  /paged-prices:
+    get:
+      summary: The accepted union beside root scalars — only the list locus can carry it
+      operationId: listPagedPrices
+      security: []
+      responses:
+        '200':
+          description: A page of rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  total:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: '#/components/schemas/Price'
+                        - $ref: '#/components/schemas/PriceError'
+
+  /nested-union:
+    get:
+      summary: The accepted union, but inside each item rather than as the items
+      operationId: listNestedUnion
+      security: []
+      responses:
+        '200':
+          description: Each basket carries its own per-line rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  baskets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        lines:
+                          type: array
+                          items:
+                            oneOf:
+                              - $ref: '#/components/schemas/Price'
+                              - $ref: '#/components/schemas/PriceError'
+
+  /root-union:
+    get:
+      summary: The accepted union as the whole response — there is no row to classify
+      operationId: getRootUnion
+      security: []
+      responses:
+        '200':
+          description: One price, or one error.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Price'
+                  - $ref: '#/components/schemas/PriceError'
+
+  /property-union:
+    get:
+      summary: The accepted union in a single-object property
+      operationId: getPropertyUnion
+      security: []
+      responses:
+        '200':
+          description: A wrapper around one price or one error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requestId:
+                    type: string
+                  price:
+                    oneOf:
+                      - $ref: '#/components/schemas/Price'
+                      - $ref: '#/components/schemas/PriceError'
+
+  /too-many:
+    get:
+      summary: Three branches — only two can land
+      operationId: listTooMany
+      security: []
+      responses:
+        '200':
+          description: Rows of three kinds.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - $ref: '#/components/schemas/PriceError'
+                    - $ref: '#/components/schemas/Quote'
+
+  /no-discriminator:
+    get:
+      summary: Two object branches, and nothing says which is the error
+      operationId: listNoDiscriminator
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - $ref: '#/components/schemas/UnpinnedError'
+
+  /both-pinned:
+    get:
+      summary: Both branches pin `status` — which one is the error?
+      operationId: listBothPinned
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/PinnedPrice'
+                    - $ref: '#/components/schemas/PriceError'
+
+  /two-consts:
+    get:
+      summary: The error branch pins two properties
+      operationId: listTwoConsts
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: object
+                      properties:
+                        status:
+                          const: error
+                        kind:
+                          const: lookup
+                        message:
+                          type: string
+
+  /object-const:
+    get:
+      summary: The discriminator's const is an object
+      operationId: listObjectConst
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: object
+                      properties:
+                        status:
+                          const: { failed: true }
+                        message:
+                          type: string
+
+  /scalar-branch:
+    get:
+      summary: One branch is a bare string
+      operationId: listScalarBranch
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: string
+
+  /message-ambiguous:
+    get:
+      summary: No `message`, and two strings that could be one
+      operationId: listMessageAmbiguous
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: object
+                      properties:
+                        status:
+                          const: error
+                        code:
+                          type: string
+                        detail:
+                          type: string
+                        hint:
+                          type: string
+
+  /message-missing:
+    get:
+      summary: No `message`, and no string to read one from
+      operationId: listMessageMissing
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: object
+                      properties:
+                        status:
+                          const: error
+                        code:
+                          type: integer
+                        retryable:
+                          type: boolean
+
+  /boolean-code:
+    get:
+      summary: No `code`, and the discriminator is a boolean — true is not a code
+      operationId: listBooleanCode
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: object
+                      properties:
+                        failed:
+                          const: true
+                        message:
+                          type: string
+
+  /any-of:
+    get:
+      summary: The same two branches under anyOf — not the ratified form
+      operationId: listAnyOf
+      security: []
+      responses:
+        '200':
+          description: Rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  anyOf:
+                    - $ref: '#/components/schemas/Price'
+                    - $ref: '#/components/schemas/PriceError'
+
+  /nullable-rows:
+    get:
+      summary: The nullability idiom on list items still reduces
+      operationId: listNullableRows
+      security: []
+      responses:
+        '200':
+          description: Rows, any of which may be null.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Price'
+                    - type: 'null'
+
+  /price-errors:
+    get:
+      summary: Returns the error shape itself — whose component name is PriceError
+      operationId: getPriceError
+      security: []
+      responses:
+        '200':
+          description: The last error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceError'
+
+components:
+  schemas:
+    Price:
+      type: object
+      description: The price of one SKU.
+      required: [sku, amount, currency]
+      properties:
+        sku:
+          type: string
+          example: SKU-1
+        amount:
+          type: number
+          example: 12.5
+        currency:
+          type: string
+          example: EUR
+
+    PriceError:
+      type: object
+      description: Why one SKU could not be priced.
+      required: [status, code, msg]
+      properties:
+        status:
+          const: error
+        code:
+          type: string
+          example: UNKNOWN_SKU
+        msg:
+          type: string
+          example: No such SKU
+
+    PinnedPrice:
+      allOf:
+        - $ref: '#/components/schemas/Price'
+        - type: object
+          properties:
+            status:
+              const: ok
+
+    UnpinnedError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+    Quote:
+      type: object
+      required: [sku, amount]
+      properties:
+        sku:
+          type: string
+        amount:
+          type: number
+
+    QuoteError:
+      type: object
+      required: [status, code, message]
+      properties:
+        status:
+          const: error
+        code:
+          type: string
+        message:
+          type: string
+
+    Stock:
+      type: object
+      required: [warehouse, units]
+      properties:
+        warehouse:
+          type: string
+        units:
+          type: integer
+
+    StockRow:
+      oneOf:
+        - $ref: '#/components/schemas/Stock'
+        - type: object
+          required: [kind, reason]
+          properties:
+            kind:
+              const: failed
+            reason:
+              type: string

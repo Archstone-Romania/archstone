@@ -37,6 +37,7 @@
 import {
   isKnown,
   valueOrUndefined,
+  type DraftArrayNode,
   type DraftAuth,
   type DraftInputField,
   type DraftModel,
@@ -51,7 +52,7 @@ import {
 // nothing, it is a report line, and dropping it here would make the report unable to say what
 // the human turned down.
 import { authEnvVar, baseUrlEnvVar, providerId, type CapabilityDecision, type DecisionRecord } from "./decisions";
-import { classifyRequired, locusCandidates, locusLeaves, selectLocus, type LocusCandidate, type RequiredBasis } from "./d9";
+import { classifyRequired, locusCandidates, locusLeaves, propertyAccessor, selectLocus, type LocusCandidate, type RequiredBasis } from "./d9";
 import { note, skipsOperation, type Note, type ReasonCode } from "./reasons";
 import {
   CAPABILITY_ID_RE,
@@ -80,6 +81,8 @@ export interface EmittedCapability {
   effect: Effect;
   /** The resource this capability's response maps onto, when D-9 produced one. */
   resource?: string;
+  /** ADD-12 §8.1: the error-row resource its `response.onError` maps onto, when there is one. */
+  errorResource?: string;
   /** Relative paths this capability contributed to `files`. */
   files: string[];
   notes: Note[];
@@ -131,8 +134,9 @@ interface PlannedResource {
   name: string;
   description?: string;
   fields: PlannedResourceField[];
-  /** Where the name came from, for the file header. */
-  origin: "declared-component" | "collection-property" | "human";
+  /** Where the name came from, for the file header. `row-error` is the error half of a
+   *  `oneOf[success, error]` (ADD-12 §8.1): named `<success resource>Error`, never invented. */
+  origin: "declared-component" | "collection-property" | "human" | "row-error";
 }
 
 interface PlannedResourceField {
@@ -179,6 +183,10 @@ interface PlannedCapability {
   resource?: PlannedResource;
   /** Present iff a resource was planned. */
   response?: { collection?: string; outputField: string };
+  /** ADD-12 §8.1: present iff the chosen collection's items are `oneOf[success, error]`. The
+   *  error resource's fields carry their own paths; `onError.map` renders only the ones that
+   *  differ from the mapper's same-named-key default. */
+  onError?: { resource: PlannedResource; when: { path: string; property: string; equals: string | number | boolean } };
   /** JSONPaths a probe observed but that no resource was derived from — written into the
    *  binding as a TODO so the degraded path hands the human a starting point (product §5). */
   observedPaths?: string[];
@@ -431,6 +439,24 @@ function planCapability(
     return undefined;
   }
 
+  // ADD-12 §8.1 — a `oneOf[success, error]` list can land in exactly one place: `onError` on
+  // the collection this capability maps. Anywhere else (the root chosen instead, a list nested
+  // in an item, a second list, no locus at all) there is nowhere to put the error half, and
+  // mapping the success half alone would silently flatten a union the source stated.
+  const unions = rowErrorArrays(operation.response);
+  const chosenCollection = selection.kind === "selected" && selection.candidate.kind === "collection" ? selection.candidate : undefined;
+  const unionAtLocus = chosenCollection ? unions.find((a) => a.items === chosenCollection.locus) : undefined;
+  const stray = unions.filter((a) => a !== unionAtLocus);
+  if (stray.length > 0) {
+    skip(
+      "oneof-outside-collection",
+      `${stray.length} list(s) of oneOf[success, error] rows in this response are not the collection it maps` +
+        (selection.kind === "selected" ? ` (the locus is '${selection.candidate.id}')` : " (no locus was selected)") +
+        " — choose that list as the responseLocus if it is top-level, or map it by hand",
+    );
+    return undefined;
+  }
+
   if (selection.kind === "none") {
     return degraded(census.observedPaths && census.observedPaths.length > 0 ? `observed paths: ${census.observedPaths.join(", ")}` : undefined);
   }
@@ -487,6 +513,16 @@ function planCapability(
 
   const fields = leaves.map((leaf) => planResourceField(leaf.property, leaf.path, capabilityId, notes));
 
+  let onError: PlannedCapability["onError"];
+  if (unionAtLocus?.rowErrors) {
+    const planned = planRowErrors(unionAtLocus.rowErrors, resourceName, capabilityId, notes);
+    if ("code" in planned) {
+      skip(planned.code, planned.detail);
+      return undefined;
+    }
+    onError = planned;
+  }
+
   // D-15 — SAY WHAT THE CHOSEN LOCUS DROPPED.
   //
   // Fires on a confirmed collection locus whose response root still has mappable scalars: the
@@ -525,6 +561,7 @@ function planCapability(
       origin,
     },
     ...(droppedSiblings.length > 0 ? { droppedSiblings } : {}),
+    ...(onError ? { onError } : {}),
     response: {
       ...(locus.kind === "collection" ? { collection: locus.collection } : {}),
       outputField: outputFieldName(resourceName, locus.kind === "collection"),
@@ -537,6 +574,49 @@ function planCapability(
 function siblingScalarsOf(response: DraftNode, locus: LocusCandidate): string[] {
   if (response.kind !== "object" || locus.property === undefined) return [];
   return locusLeaves(response).leaves.map((leaf) => leaf.property.name);
+}
+
+/** Every array in a response tree that carries `rowErrors`, wherever it sits. */
+function rowErrorArrays(node: DraftNode): DraftArrayNode[] {
+  if (node.kind === "array") return [...(node.rowErrors ? [node] : []), ...rowErrorArrays(node.items)];
+  if (node.kind === "object") return node.properties.flatMap((p) => rowErrorArrays(p.node));
+  return [];
+}
+
+/**
+ * ADD-12 §8.1 — the error half of a `oneOf[success, error]` collection: an error resource with
+ * exactly the fields `code` and `message`, and the `when` that recognises its rows.
+ *
+ * Both fields go through `planResourceField`, the same function every success field does, so
+ * their type, required-ness and provenance comment follow the one rule rather than a second
+ * one written for errors. The name is the success resource's plus `Error` — derived, never
+ * invented, and never suffixed away from a collision (that is `resource-name-conflict`, raised
+ * by the caller exactly as for any other resource).
+ */
+function planRowErrors(
+  rowErrors: NonNullable<DraftArrayNode["rowErrors"]>,
+  resourceName: string,
+  capabilityId: string,
+  notes: Note[],
+): NonNullable<PlannedCapability["onError"]> | { code: ReasonCode; detail: string } {
+  const when = propertyAccessor(rowErrors.discriminator.property);
+  if (when === undefined) {
+    return { code: "oneof-no-discriminator", detail: `no JSONPath can address the discriminator '${rowErrors.discriminator.property}'` };
+  }
+  const sources = { code: rowErrors.code, message: rowErrors.message } as const;
+  const fields: PlannedResourceField[] = [];
+  for (const [name, property] of Object.entries(sources)) {
+    const accessor = propertyAccessor(property.name);
+    if (accessor === undefined) {
+      return { code: "oneof-error-fields-unresolved", detail: `no JSONPath can address '${property.name}', the error row's ${name}` };
+    }
+    fields.push(planResourceField({ ...property, name }, `$${accessor}`, capabilityId, notes));
+  }
+  const description = nonEmpty(valueOrUndefined(rowErrors.description));
+  return {
+    resource: { name: `${resourceName}Error`, ...(description !== undefined ? { description } : {}), fields, origin: "row-error" },
+    when: { path: `$${when}`, property: rowErrors.discriminator.property, equals: rowErrors.discriminator.equals },
+  };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -636,6 +716,12 @@ function renderCapabilityFile(draft: DraftModel, record: DecisionRecord, plan: P
           else fw.entry("type", plan.resource!.name);
         });
       });
+      if (plan.onError) {
+        cw.comment([
+          `Each row is a ${plan.resource.name}, or — where the backend marks the row itself as failed —`,
+          `a ${plan.onError.resource.name}. The binding's \`onError\` says which; rows are tagged \`$row: ok | error\`.`,
+        ]);
+      }
     } else {
       cw.blank();
       cw.comment([
@@ -658,7 +744,9 @@ function renderResourceFile(draft: DraftModel, resource: PlannedResource): strin
       ? "name supplied at the gate"
       : resource.origin === "declared-component"
         ? "name taken from the source's own component name"
-        : "name derived from the response's collection property";
+        : resource.origin === "row-error"
+          ? "the error rows of a oneOf[success, error] list; name derived from the success resource's"
+          : "name derived from the response's collection property";
   header(w, draft, `${resource.name} — ${origin}`);
   w.block("resource", (rw) => {
     rw.entry("name", resource.name);
@@ -760,6 +848,30 @@ function renderBindingFile(
         rw.block("map", (mw) => {
           for (const f of plan.resource!.fields) mw.entry(f.name, f.path, f.provenance);
         });
+        if (plan.onError) {
+          // ADD-12 §8.1 / §8.4 item 1: the source's `oneOf[success, error]`, lowered directly —
+          // its `const` discriminator becomes `when`, its error branch `errorResource`.
+          const { resource, when } = plan.onError;
+          rw.comment([
+            `The source's items are oneOf[success, error]: a row whose ${when.property} is ${JSON.stringify(when.equals)} is an error row,`,
+            `mapped onto ${resource.name} and never checked against ${plan.resource!.name}'s required fields.`,
+          ]);
+          rw.block("onError", (ow) => {
+            ow.entry("errorResource", resource.name);
+            ow.block("when", (ww) => {
+              ww.entry("path", when.path);
+              ww.entry("equals", when.equals);
+            });
+            // Only the fields whose source is NOT the mapper's default (`$.<field>`): an entry
+            // that restates the default is noise a reviewer has to check for nothing.
+            const diverging = resource.fields.filter((f) => f.path !== `$.${f.name}`);
+            if (diverging.length > 0) {
+              ow.block("map", (mw) => {
+                for (const f of diverging) mw.entry(f.name, f.path, f.provenance);
+              });
+            }
+          });
+        }
       });
     }
 
@@ -911,14 +1023,18 @@ export function emit(
     const plan = planCapability(draft, operation, decision, skipCandidate);
     if (!plan) continue;
 
-    if (plan.resource) {
-      const existing = resources.get(plan.resource.name);
-      if (existing && !sameFields(existing.resource, plan.resource)) {
-        skipCandidate("resource-name-conflict", `'${plan.resource.name}' is already emitted by ${existing.owner} with a different field set`);
-        continue;
-      }
-      if (!existing) resources.set(plan.resource.name, { resource: plan.resource, owner: decision.capabilityId });
+    // The success resource and, for a `oneOf[success, error]` collection, its error resource:
+    // both checked BEFORE either is claimed, so a conflict on the second leaves no half-claim.
+    const claims = [plan.resource, plan.onError?.resource].filter((r): r is PlannedResource => r !== undefined);
+    const conflict = claims.find((r) => {
+      const existing = resources.get(r.name);
+      return existing !== undefined && !sameFields(existing.resource, r);
+    });
+    if (conflict) {
+      skipCandidate("resource-name-conflict", `'${conflict.name}' is already emitted by ${resources.get(conflict.name)!.owner} with a different field set`);
+      continue;
     }
+    for (const r of claims) if (!resources.has(r.name)) resources.set(r.name, { resource: r, owner: decision.capabilityId });
 
     claimedIds.add(decision.capabilityId);
     plans.push(plan);
@@ -952,11 +1068,13 @@ export function emit(
       own.push(path);
     }
     if (plan.resource) own.push(`${plan.resource.name}.resource.yaml`);
+    if (plan.onError) own.push(`${plan.onError.resource.name}.resource.yaml`);
     return {
       capabilityId: plan.decision.capabilityId,
       operation: plan.operation.key,
       effect: plan.decision.effect,
       ...(plan.resource ? { resource: plan.resource.name } : {}),
+      ...(plan.onError ? { errorResource: plan.onError.resource.name } : {}),
       files: own,
       notes: plan.notes,
     };

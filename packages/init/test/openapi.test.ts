@@ -235,7 +235,11 @@ describe("D-10 — `allOf` is a merge, not a choice", () => {
     // `oneOf: [PartGeometry, {type: null}]` → PartGeometry, marked nullable. Reducing this is
     // what keeps the whole price capability alive.
     expect(geometry.node.kind).toBe("object");
-    expect(codes(quirks, "GET /api/v2/polymorphic")).toContain("unsupported-composition");
+    // `oneOf: [Alpha, Beta]` — two object branches and no `const` saying which row is which.
+    // Still refused; since ADD-12 §8.1 the code names what the ratified oneOf[success, error]
+    // form lacks, rather than the generic `unsupported-composition`.
+    expect(codes(quirks, "GET /api/v2/polymorphic")).toContain("oneof-no-discriminator");
+    expect(codes(quirks, "GET /api/v2/polymorphic")).not.toContain("unsupported-composition");
   });
 });
 

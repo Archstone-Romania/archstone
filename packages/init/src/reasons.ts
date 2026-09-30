@@ -94,13 +94,64 @@ export const REASON_CODES = {
    * `oneOf` was a category error: they are neighbours in OpenAPI's grammar, not in the
    * decision they demand.
    *
-   * What remains here genuinely demands a choice: a `oneOf`/`anyOf` with more than one
-   * non-null member is real polymorphism (which shape is it?), and a `discriminator` marks
-   * polymorphism explicitly — where it appears, the merged shape is stated not to be the whole
-   * story. Also raised when a D-10.4 conflict could change the D-9 step-1 locus census, which
-   * is the one place a field-level unknown may escalate to an operation skip.
+   * What remains here genuinely demands a choice: an `anyOf` with more than one non-null
+   * member is real polymorphism (which shape is it?), and a `discriminator` marks polymorphism
+   * explicitly — where it appears, the merged shape is stated not to be the whole story. Also
+   * raised when a D-10.4 conflict could change the D-9 step-1 locus census, which is the one
+   * place a field-level unknown may escalate to an operation skip.
+   *
+   * A `oneOf` with two or more non-null members no longer lands here: ADD-12 §8.1/§8.4 item 1
+   * ratified ONE form of it (`oneOf[success, error]` under a scalar `const`), and every other
+   * form is now refused with the `oneof-*` code that names what was missing — so the report
+   * says which part of the ratified form the document failed, rather than "polymorphism".
+   * A `oneOf` whose only member is not the null idiom (one member, or none) stays here.
    */
-  "unsupported-composition": { skipsOperation: true, summary: "oneOf/anyOf with more than one non-null member, or a discriminator" },
+  "unsupported-composition": { skipsOperation: true, summary: "anyOf with more than one non-null member, a discriminator, or composed members that disagree about structure" },
+  /**
+   * *(adapter)* A `oneOf` with MORE THAN TWO non-null members (ADD-12 §8.1).
+   *
+   * The ratified mapping is `oneOf[success, error]` → `resource` + `onError.errorResource`: a
+   * binding carries one success resource and one error resource. A third branch has nowhere to
+   * land, and choosing which two of three are "the" shapes is a guess.
+   */
+  "oneof-too-many-branches": { skipsOperation: true, summary: "oneOf with more than two non-null members — only oneOf[success, error] maps onto a response" },
+  /**
+   * *(adapter)* A two-branch `oneOf` with no usable `const` discriminator (§8.4 item 1).
+   *
+   * The ratified form needs the document itself to say which branch is the error row: exactly
+   * one branch declares exactly one property carrying a scalar `const`. Neither branch doing so,
+   * both doing so, one branch carrying several, or a non-scalar `const` — each leaves "which row
+   * is an error?" to a human, so the operation is refused rather than guessed at.
+   */
+  "oneof-no-discriminator": { skipsOperation: true, summary: "oneOf with no single scalar `const` property naming the error branch" },
+  /**
+   * *(adapter)* A `oneOf` member that is not an object shape — a scalar or an array branch.
+   *
+   * A success or error ROW is a resource, and a resource is an object with named fields. A
+   * branch without named fields cannot become either.
+   */
+  "oneof-non-object-branch": { skipsOperation: true, summary: "oneOf member is not an object shape, so it cannot become a row resource" },
+  /**
+   * *(adapter)* The error branch of an otherwise-accepted `oneOf[success, error]` offers no
+   * unambiguous source for the error resource's fields.
+   *
+   * `message` reads from `message` when the branch declares one, else from its ONE remaining
+   * plain string property; zero candidates or several is a choice nobody made. Also raised
+   * when `code` would have to come from a boolean discriminator (true/false is not a code), or
+   * when a source property no JSONPath can address.
+   */
+  "oneof-error-fields-unresolved": { skipsOperation: true, summary: "oneOf error branch has no unambiguous code/message source" },
+  /**
+   * *(adapter or emitter)* An acceptable `oneOf[success, error]` somewhere other than the item
+   * list the capability maps.
+   *
+   * `onError` classifies the rows of the binding's `collection:`, and nothing else (the
+   * compiler refuses it without one). The same union at the response root, in a single-object
+   * property, nested inside an item, or on a list the human did not choose as the locus has no
+   * `onError` to land in — and mapping it as the success shape alone would silently flatten a
+   * union the source stated, so the operation is refused instead.
+   */
+  "oneof-outside-collection": { skipsOperation: true, summary: "oneOf[success, error] is not the item list this capability maps — no onError can carry it" },
   /**
    * *(adapter)* Two `allOf` members supply DIFFERENT schemas for the same property key
    * (D-10.4). The merged property becomes `unknown` and is left out of the map.

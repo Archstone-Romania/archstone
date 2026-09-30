@@ -40,6 +40,7 @@ function loadSpec(primary = "catalog.yaml"): SourceInput {
 
 const spec = openApiAdapter.adapt(loadSpec());
 const quirks = openApiAdapter.adapt(loadSpec("quirks.yaml"));
+const rowErrors = openApiAdapter.adapt(loadSpec("row-errors.yaml"));
 
 const specDecisions: DecisionRecord = {
   version: "0",
@@ -258,6 +259,11 @@ describe("every `skipsOperation: true` code withholds FILES, not just raises a n
         "company-id-not-derivable",
         "declined",
         "empty-confirmed-set",
+        "oneof-error-fields-unresolved",
+        "oneof-no-discriminator",
+        "oneof-non-object-branch",
+        "oneof-outside-collection",
+        "oneof-too-many-branches",
         "resource-name-conflict",
         "resource-name-not-derivable",
         "unknown-candidate",
@@ -296,8 +302,45 @@ describe("every `skipsOperation: true` code withholds FILES, not just raises a n
 
     {
       code: "unsupported-composition",
+      capabilityId: "catalog.discriminated",
+      make: () => emit(quirks, { ...specDecisions, decisions: [{ operation: "GET /api/v2/discriminated", keep: true, capabilityId: "catalog.discriminated", effect: "read" }] }),
+    },
+    // ADD-12 §8.1: every two-branch `oneOf` that is not the ratified `oneOf[success, error]`
+    // form, and that form anywhere but a mapped collection's items (see row-errors.test.ts).
+    {
+      code: "oneof-no-discriminator",
       capabilityId: "catalog.poly",
       make: () => emit(quirks, { ...specDecisions, decisions: [{ operation: "GET /api/v2/polymorphic", keep: true, capabilityId: "catalog.poly", effect: "read" }] }),
+    },
+    {
+      code: "oneof-too-many-branches",
+      capabilityId: "pricing.too-many",
+      make: () => emit(rowErrors, { ...specDecisions, decisions: [{ operation: "GET /v1/too-many", keep: true, capabilityId: "pricing.too-many", effect: "read" }] }),
+    },
+    {
+      code: "oneof-non-object-branch",
+      capabilityId: "pricing.scalar-branch",
+      make: () => emit(rowErrors, { ...specDecisions, decisions: [{ operation: "GET /v1/scalar-branch", keep: true, capabilityId: "pricing.scalar-branch", effect: "read" }] }),
+    },
+    {
+      code: "oneof-error-fields-unresolved",
+      capabilityId: "pricing.message-ambiguous",
+      make: () =>
+        emit(rowErrors, { ...specDecisions, decisions: [{ operation: "GET /v1/message-ambiguous", keep: true, capabilityId: "pricing.message-ambiguous", effect: "read" }] }),
+    },
+    {
+      code: "oneof-outside-collection",
+      capabilityId: "pricing.page-prices",
+      make: () =>
+        emit(rowErrors, {
+          ...specDecisions,
+          decisions: [
+            { operation: "GET /v1/paged-prices", keep: true, capabilityId: "pricing.page-prices", effect: "read", responseLocus: "root" },
+            // Something else must survive, or the run refuses as a whole (D-7) and the table
+            // would be measuring `empty-confirmed-set` instead.
+            { operation: "GET /v1/quotes", keep: true, capabilityId: "pricing.list-quotes", effect: "read" },
+          ],
+        }),
     },
     {
       code: "unsupported-security-scheme",
@@ -317,6 +360,9 @@ describe("every `skipsOperation: true` code withholds FILES, not just raises a n
       const result = make();
       expect(filesFor(result.files, capabilityId), `${code} emitted files for a skipped candidate`).toEqual([]);
       expect(result.capabilities.map((c) => c.capabilityId)).not.toContain(capabilityId);
+      // And the files were withheld FOR THIS REASON — a case whose fixture stopped raising its
+      // code would otherwise keep passing on some other refusal.
+      expect(result.notes.map((n) => n.code), `${code} was not raised`).toContain(code);
     });
   }
 
