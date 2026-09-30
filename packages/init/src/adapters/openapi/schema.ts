@@ -3,15 +3,25 @@
 // THE ONE RULE THAT DECIDES WHAT IS IN HERE AND WHAT IS NOT: a construct is handled iff
 // reducing it requires NO CHOICE. `allOf` qualifies — the merged shape is a total,
 // order-independent function of its members — and that is why it moved in, not because the
-// only oracle happened to need it. `oneOf` with two real members does not qualify: which
-// shape is it? Nobody but a human can say, so it is refused. `discriminator` marks
-// polymorphism explicitly, so where it appears the merged shape is stated not to be the whole
-// story, and it is refused too.
+// only oracle happened to need it. `oneOf` with two real members does not, in general,
+// qualify: which shape is it? Nobody but a human can say, so it is refused. `discriminator`
+// marks polymorphism explicitly, so where it appears the merged shape is stated not to be the
+// whole story, and it is refused too.
+//
+// ONE `oneOf` FORM IS HANDLED, and it passes the same rule rather than bending it: the items of
+// a list as `oneOf[success, error]`, where exactly one of two object branches declares exactly
+// one property with a scalar `const` (ADD-12 §8.1, §8.4 item 1). There the document itself
+// answers "which shape is this row?" — a row carrying that value is the error row, every other
+// row is the success row — and the ADD ratified what that answer lowers to: `resource` +
+// `onError.errorResource`, with the `const` as `onError.when`. Nothing is chosen here. Every
+// other two-member `oneOf` is still refused, under a `oneof-*` code naming which part of that
+// form it lacks, and the accepted form anywhere but a list's items is refused too
+// (`oneof-outside-collection`) — it has no `onError` to land in.
 //
 // If the next argument for letting a construct in is "the oracle needs it", that is the wrong
 // argument and should be refused on sight.
 
-import { absent, declared, type DraftNode, type DraftObjectNode, type DraftProperty, type Fact } from "../../model";
+import { absent, declared, isKnown, type DraftArrayNode, type DraftNode, type DraftObjectNode, type DraftProperty, type DraftRowErrors, type Fact } from "../../model";
 import { note, type Note, type ReasonCode } from "../../reasons";
 import { DocumentSet, isObject, resolveRef, type JsonObject, type JsonValue } from "./document";
 import type { SemanticType } from "@archstone/compiler";
@@ -122,6 +132,11 @@ function reduceUnion(schema: JsonObject, key: "oneOf" | "anyOf"): { member: Json
   return "irreducible";
 }
 
+/** A union's members after D-10.6's discard — every member whose only assertion is null. */
+function nonNullMembers(raw: JsonValue | undefined): JsonValue[] {
+  return Array.isArray(raw) ? raw.filter((m) => !(isObject(m) && isNullOnly(m))) : [];
+}
+
 /**
  * The MERGED shape of one schema: its own keywords composed with every `allOf` member's,
  * recursively, depth-unbounded, cycle-checked (D-10.1–.3).
@@ -180,7 +195,22 @@ function mergeInto(target: Merged, located: Located, ctx: LowerContext, seen: Re
     const reduced = reduceUnion(schema, key);
     if (reduced === "absent") continue;
     if (reduced === "irreducible") {
-      fatal(ctx, "unsupported-composition", `\`${key}\` with more than one non-null member`);
+      if (key === "oneOf" && nonNullMembers(schema["oneOf"]).length >= 2) {
+        // Reaching a real `oneOf` HERE means it is being merged into a shape — it is not the
+        // bare `items` of a list, which `lowerRowUnionItems` intercepts before any merge. So
+        // even the ratified `oneOf[success, error]` form has no `onError` to land in. The
+        // form is still classified first, so the refusal names the most specific thing wrong.
+        const verdict = classifyRowUnion(schema, followed, ctx, nextSeen);
+        if (ctx.fatal) return;
+        if (verdict.kind === "refused") fatal(ctx, verdict.code, verdict.detail);
+        else fatal(ctx, "oneof-outside-collection", `${followed.source}: a oneOf[success, error] maps onto \`onError\` only as the bare \`items\` of a list — here it would be flattened into one shape`);
+        return;
+      }
+      fatal(
+        ctx,
+        "unsupported-composition",
+        key === "anyOf" ? "`anyOf` with more than one non-null member" : "`oneOf` whose members are neither the nullability idiom nor two branches",
+      );
       return;
     }
     target.nullableByUnion = true;
@@ -266,6 +296,107 @@ function merge(located: Located, ctx: LowerContext, seen: ReadonlySet<string>): 
   mergeInto(merged, located, ctx, seen, 0);
   if (!ctx.fatal) assertConsistentKind(merged, ctx);
   return merged;
+}
+
+// ---------------------------------------------------------------------------------------
+// ADD-12 §8.1 / §8.4 item 1 — `oneOf[success, error]` under a `const` discriminator
+// ---------------------------------------------------------------------------------------
+
+type Scalar = string | number | boolean;
+
+/** One branch of a two-way `oneOf`, merged, plus the properties it pins with a `const`. */
+interface RowBranch {
+  located: Located;
+  merged: Merged;
+  consts: Array<{ name: string; value: JsonValue; agreed: boolean }>;
+}
+
+type RowUnion =
+  | { kind: "accepted"; success: RowBranch; error: RowBranch; discriminator: { name: string; value: Scalar } }
+  | { kind: "refused"; code: ReasonCode; detail: string };
+
+/** The properties of a merged shape that carry a `const`. `agreed` is false when two composed
+ *  members pin the SAME property to different values — no single value names the row then. */
+function constPropertiesOf(m: Merged, ctx: LowerContext, seen: ReadonlySet<string>): RowBranch["consts"] {
+  const found: RowBranch["consts"] = [];
+  for (const [name, candidates] of m.properties) {
+    const values = candidates.map((c) => merge(c, ctx, seen).constValue).filter((v): v is JsonValue => v !== undefined);
+    if (ctx.fatal) return found;
+    if (values.length === 0) continue;
+    const first = JSON.stringify(values[0]);
+    found.push({ name, value: values[0]!, agreed: values.every((v) => JSON.stringify(v) === first) });
+  }
+  return found;
+}
+
+/** A lowering already refused while a branch was being merged; the caller returns on it. The
+ *  `LowerContext` re-read defeats TypeScript's narrowing of `ctx.fatal` across the call. */
+function fatalVerdict(ctx: LowerContext): RowUnion {
+  const raised = ctx.fatal as LowerContext["fatal"];
+  return { kind: "refused", code: raised?.code ?? "unsupported-composition", detail: raised?.detail ?? "" };
+}
+
+/**
+ * Is this `oneOf` the ratified `oneOf[success, error]` form — and if not, which part of it is
+ * missing? Position is NOT judged here: the caller knows whether it is standing on a list's
+ * items (accept) or anywhere else (`oneof-outside-collection`).
+ *
+ * The test is purely structural, and it is exactly the one §8.4 item 1 names: two object
+ * branches, and exactly ONE of them declares exactly ONE property with a scalar `const`. That
+ * branch is the error row, that property is `onError.when.path`, that value is `equals`. The
+ * success branch pinning nothing is what makes the direction unambiguous — a `status: ok` /
+ * `status: error` pair (both branches pinned) is refused, because the document then does not
+ * say which of the two is the error, only that they differ.
+ */
+function classifyRowUnion(schema: JsonObject, at: Located, ctx: LowerContext, seen: ReadonlySet<string>): RowUnion {
+  const refused = (code: ReasonCode, detail: string): RowUnion => ({ kind: "refused", code, detail: `${at.source}: ${detail}` });
+  const members = nonNullMembers(schema["oneOf"]);
+  if (members.length > 2) return refused("oneof-too-many-branches", `oneOf has ${members.length} non-null members; only oneOf[success, error] maps onto a response`);
+
+  const branches: RowBranch[] = [];
+  for (const [i, member] of members.entries()) {
+    if (!isObject(member)) return refused("oneof-non-object-branch", `oneOf member ${i} is not a schema object`);
+    const located: Located = { schema: member, docKey: at.docKey, source: `${at.source}/oneOf/${i}` };
+    const merged = merge(located, ctx, seen);
+    if (ctx.fatal) return fatalVerdict(ctx);
+    if (!isObjectShape(merged)) {
+      const kind = isArrayShape(merged) ? "an array" : merged.types.size > 0 ? [...merged.types].sort().join("/") : "a shape with no properties";
+      return refused("oneof-non-object-branch", `oneOf member ${i}${merged.componentName ? ` (${merged.componentName})` : ""} is ${kind}, not an object`);
+    }
+    const consts = constPropertiesOf(merged, ctx, seen);
+    if (ctx.fatal) return fatalVerdict(ctx);
+    branches.push({ located, merged, consts });
+  }
+
+  const pinned = branches.filter((b) => b.consts.length > 0);
+  if (pinned.length === 0) return refused("oneof-no-discriminator", "neither oneOf branch declares a `const` property, so nothing says which row is an error");
+  if (pinned.length === 2) {
+    return refused("oneof-no-discriminator", "both oneOf branches declare `const` properties, so neither is named as the error row");
+  }
+  const error = pinned[0]!;
+  const success = branches.find((b) => b !== error)!;
+  if (error.consts.length > 1) {
+    return refused("oneof-no-discriminator", `the error branch pins ${error.consts.length} properties with \`const\` (${error.consts.map((c) => c.name).join(", ")}); exactly one must name the row`);
+  }
+  const d = error.consts[0]!;
+  if (!d.agreed) return refused("oneof-no-discriminator", `composed members pin '${d.name}' to different \`const\` values`);
+  if (typeof d.value !== "string" && typeof d.value !== "number" && typeof d.value !== "boolean") {
+    return refused("oneof-no-discriminator", `'${d.name}' has a non-scalar \`const\` (${JSON.stringify(d.value)}), which no row value can be compared to as a code`);
+  }
+  return { kind: "accepted", success, error, discriminator: { name: d.name, value: d.value } };
+}
+
+/** Is a property of the merged error branch a plain string — not a boolean or number degraded
+ *  to `string`, not a closed set, not a `const`? The `message` fallback may only pick these. */
+function isPlainString(m: Merged, name: string, ctx: LowerContext, seen: ReadonlySet<string>): boolean {
+  const candidates = m.properties.get(name) ?? [];
+  // A scratch context: the branch was already lowered once with the real one, so any note this
+  // re-merge could raise has been raised — a second copy would only double the report line.
+  const scratch: LowerContext = { docs: ctx.docs, target: ctx.target, notes: [] };
+  return candidates.every((c) => {
+    const pm = merge(c, scratch, seen);
+    return pm.types.has("string") && !pm.types.has("boolean") && pm.enumValues === undefined && pm.constValue === undefined;
+  });
 }
 
 // ---------------------------------------------------------------------------------------
@@ -378,6 +509,125 @@ function isArrayOfObjects(node: DraftNode): boolean {
   return node.kind === "array" && node.items.kind === "object";
 }
 
+/** Keywords that may sit beside a list item's `oneOf` without changing the row shapes: they
+ *  annotate, they do not constrain. Anything else (`properties`, `allOf`, `discriminator`, …)
+ *  composes with the union, so the item is not the bare `oneOf[success, error]` form, and it
+ *  falls through to the ordinary merge — which refuses it. */
+const ROW_UNION_SIBLINGS = new Set([
+  "oneOf",
+  "description",
+  "title",
+  "example",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "externalDocs",
+  "xml",
+  "$comment",
+  "nullable",
+]);
+
+/**
+ * A list's items as `oneOf[success, error]` (ADD-12 §8.1): the array lowers to the SUCCESS
+ * branch's object as `items`, plus `rowErrors` saying how an error row is recognised and read.
+ *
+ * `undefined` means "not this form — lower the items the ordinary way", which is also how every
+ * refusal inside the items is reached. A refusal of the form itself (`oneof-*`) is raised on
+ * `ctx.fatal`.
+ */
+function lowerRowUnionItems(items: Located, ctx: LowerContext, seen: ReadonlySet<string>): DraftArrayNode | undefined {
+  // Followed with a scratch note list: when this is not the form, the ordinary path follows the
+  // same `$ref` again and raises any failure itself — once.
+  const followed = follow(items, { docs: ctx.docs, target: ctx.target, notes: [] }, seen);
+  if (!followed) return undefined;
+  const schema = followed.schema;
+  if (nonNullMembers(schema["oneOf"]).length < 2) return undefined;
+  const types = typeSet(schema);
+  if ([...types].some((t) => t !== "object" && t !== "null")) return undefined;
+  if (Object.keys(schema).some((k) => !ROW_UNION_SIBLINGS.has(k) && k !== "type" && !/^x-/i.test(k))) return undefined;
+
+  const nextSeen = new Set(seen);
+  if (followed.componentName) nextSeen.add(`${followed.docKey}#/components/schemas/${followed.componentName}`);
+
+  const verdict = classifyRowUnion(schema, followed, ctx, nextSeen);
+  if (ctx.fatal) return undefined;
+  if (verdict.kind === "refused") {
+    fatal(ctx, verdict.code, verdict.detail);
+    return undefined;
+  }
+
+  const { success, error, discriminator } = verdict;
+  const successNode = lowerSchema(success.located.schema, success.located.docKey, success.located.source, ctx, nextSeen);
+  const errorNode = lowerSchema(error.located.schema, error.located.docKey, error.located.source, ctx, nextSeen);
+  if (ctx.fatal) return undefined;
+  if (successNode.kind !== "object" || errorNode.kind !== "object") {
+    fatal(ctx, "oneof-non-object-branch", `${followed.source}: a oneOf branch did not lower to an object`);
+    return undefined;
+  }
+
+  const scalar = (name: string): DraftProperty | undefined => errorNode.properties.find((p) => p.name === name && p.node.kind === "scalar");
+
+  // `code` — the branch's own `code`, else the discriminator: its `const` is the one value every
+  // error row is guaranteed to carry, which is what a stable code is. The discriminator's facts
+  // are stated, not guessed: `when` matches only rows that carry it, and a scalar `const` is
+  // never null, so it is present and non-null on every error row by construction.
+  let code = scalar("code");
+  if (!code) {
+    if (typeof discriminator.value === "boolean") {
+      fatal(ctx, "oneof-error-fields-unresolved", `${followed.source}: the error branch has no \`code\`, and its discriminator '${discriminator.name}' is a boolean, which is not a code`);
+      return undefined;
+    }
+    const where = `${error.located.source}/properties/${discriminator.name}`;
+    code = {
+      name: discriminator.name,
+      declaredRequired: declared(true, `${where} (the onError discriminator — present on every error row)`),
+      node: {
+        kind: "scalar",
+        type: declared<SemanticType>(typeof discriminator.value === "number" ? "quantity" : "string", where),
+        nullable: declared(false, where),
+        description: absent<string>(),
+        example: declared<unknown>(discriminator.value, where),
+      },
+    };
+  }
+
+  // `message` — the branch's own `message`, else its ONE remaining plain string property. Zero
+  // or several is a choice nobody made, so it is refused rather than picked by position.
+  let message = scalar("message");
+  if (!message) {
+    const candidates = errorNode.properties.filter(
+      (p) =>
+        p.name !== discriminator.name &&
+        p.name !== code!.name &&
+        p.node.kind === "scalar" &&
+        isKnown(p.node.type) &&
+        p.node.type.value === "string" &&
+        isPlainString(error.merged, p.name, ctx, nextSeen),
+    );
+    if (candidates.length !== 1) {
+      fatal(
+        ctx,
+        "oneof-error-fields-unresolved",
+        candidates.length === 0
+          ? `${followed.source}: the error branch has no \`message\` and no other plain string property to read one from`
+          : `${followed.source}: the error branch has no \`message\`, and ${candidates.length} string properties could be it (${candidates.map((p) => p.name).join(", ")})`,
+      );
+      return undefined;
+    }
+    message = candidates[0]!;
+  }
+
+  const rowErrors: DraftRowErrors = {
+    name: errorNode.name,
+    description: errorNode.description,
+    discriminator: { property: discriminator.name, equals: discriminator.value },
+    code,
+    message,
+  };
+  return { kind: "array", items: successNode, rowErrors };
+}
+
 /**
  * Lower one schema to a Draft node.
  *
@@ -394,6 +644,9 @@ export function lowerSchema(schema: JsonObject, docKey: string, source: string, 
 
   if (isArrayShape(m)) {
     if (!m.items) return { kind: "unknown" };
+    const union = lowerRowUnionItems(m.items, ctx, nextSeen);
+    if (ctx.fatal) return { kind: "unknown" };
+    if (union) return union;
     const items = lowerSchema(m.items.schema, m.items.docKey, m.items.source, ctx, nextSeen);
     return { kind: "array", items };
   }

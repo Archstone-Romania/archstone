@@ -141,7 +141,43 @@ export interface DraftObjectNode {
 
 export interface DraftArrayNode {
   kind: "array";
+  /** The shape of one item. When `rowErrors` is present, this is the SUCCESS row's shape only —
+   *  which is what lets D-9's locus census see an ordinary array of objects. */
   items: DraftNode;
+  /**
+   * ADD-12 §8.1 / §8.4 item 1: the items are a two-way union — a success row (`items`) or an
+   * ERROR row — and the source names, per row, which one it is.
+   *
+   * Present only when that is a statement of the source, never an inference: an adapter sets it
+   * iff the document says so structurally (for OpenAPI, a `oneOf` of two object branches where
+   * exactly one carries a single scalar `const` property). The emitter must not quietly map
+   * this array as though it held success rows only — either it becomes the chosen collection
+   * and emits an `onError:` block, or the operation is refused (`oneof-outside-collection`).
+   */
+  rowErrors?: DraftRowErrors;
+}
+
+/**
+ * The error half of a row-level union (ADD-12 §8.1), stated structurally: which property says
+ * "this row is an error", the value it says it with, and where the error resource's two fields
+ * (`code`, `message`) come from on such a row.
+ *
+ * The error resource's field set is fixed at `code`/`message` — the ADD's "error-shaped
+ * resource" — so what an adapter supplies here is only their SOURCES, each as the property
+ * of the error branch it reads from. The emitter derives JSONPaths and required-ness from these
+ * exactly as it does for any other item-level property, so there is one rule, not two.
+ */
+export interface DraftRowErrors {
+  /** The error branch's own name, when the source gave one — for the report and file header. */
+  name: Fact<string>;
+  description: Fact<string>;
+  /** Rows whose `property` equals `equals` are error rows. */
+  discriminator: { property: string; equals: string | number | boolean };
+  /** Source of the error resource's `code`. Its `name` is the item property it is read from —
+   *  which may be the discriminator itself, when the error branch carries no `code`. */
+  code: DraftProperty;
+  /** Source of the error resource's `message`. `name` as for `code`. */
+  message: DraftProperty;
 }
 
 /** A shape no adapter could describe. `observedPaths` is the TODO list product §5 asks for:

@@ -33,6 +33,7 @@ export {
   type DraftObjectNode,
   type DraftOperation,
   type DraftProperty,
+  type DraftRowErrors,
   type DraftScalarNode,
   type DraftUnknownNode,
   type Effect,
