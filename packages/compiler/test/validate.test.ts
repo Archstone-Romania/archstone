@@ -328,6 +328,12 @@ describe("validateSemantics — response/extract mapping (ADD-12, extended by th
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("flags an @-anchored response path jsonpath-plus cannot evaluate (bad-response-path)", () => {
+    const dir = withBinding("  response:\n    resource: Widget\n    map:\n      name: \"@.name\"\n");
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-response-path");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("flags when no output field references the mapped resource (response-output-mismatch)", () => {
     // output is a scalar, so nothing references Widget → the mapped result has no home.
     const dir = withBinding("  response:\n    resource: Widget\n    map:\n      name: \"$.n\"\n", {
@@ -433,6 +439,14 @@ describe("validateSemantics — response/extract mapping (ADD-12, extended by th
 
   it("flags an invalid JSONPath in extract: (bad-extract-path)", () => {
     const dir = withBinding("  extract:\n    count: \"$.[\"\n", {
+      output: "  output:\n    count:\n      type: quantity\n",
+    });
+    expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-extract-path");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags an @-anchored path in extract: (bad-extract-path)", () => {
+    const dir = withBinding("  extract:\n    count: \"@.total\"\n", {
       output: "  output:\n    count:\n      type: quantity\n",
     });
     expect(codes(errors(validateSemantics(load(dir))))).toContain("bad-extract-path");

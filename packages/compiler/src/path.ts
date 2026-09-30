@@ -15,16 +15,23 @@ export type PathParse = { ok: true } | { ok: false; error: string };
  * Compile-time sanity check for a JSONPath string. `jsonpath-plus` ships no strict
  * parser (`toPathArray` never throws — it tokenizes anything, and eval silently returns
  * no matches), so a bad path would otherwise fail as a *runtime* VIOLATION, not a build
- * error. This does a best-effort STRUCTURAL check — non-empty, anchored at `$`/`@`, and
+ * error. This does a best-effort STRUCTURAL check — non-empty, anchored at `$`, and
  * balanced `()`/`[]` — which catches the gross authoring mistakes (`$.[`, `$.a[?(@.x`,
  * `foo.bar`); deeper semantic validity still surfaces at eval as an empty match set.
+ *
+ * Only `$` anchors a top-level path. `@` (current node) is meaningful inside a filter
+ * (`$.rooms[?(@.available)]`), but jsonpath-plus throws "Unknown value type" when a path
+ * *starts* with it, so an `@.name` accepted here would fail at every invocation instead.
+ * Item-relative paths (`collection:` + `map:`, `onError`) are already `$`-rooted against
+ * the item, so there is nothing `@` would add.
  */
 export function parsePath(path: string): PathParse {
   const p = path.trim();
   if (p === "") return { ok: false, error: "empty path" };
-  if (!p.startsWith("$") && !p.startsWith("@")) {
-    return { ok: false, error: "must start with '$' (root) or '@' (current node)" };
+  if (p.startsWith("@")) {
+    return { ok: false, error: "must start with '$' — '@' (current node) is only valid inside a filter expression" };
   }
+  if (!p.startsWith("$")) return { ok: false, error: "must start with '$' (root)" };
   let round = 0;
   let square = 0;
   for (const ch of p) {

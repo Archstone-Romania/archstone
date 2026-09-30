@@ -14,6 +14,15 @@ describe("parsePath — compile-time JSONPath syntax check", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBeTruthy();
   });
+
+  // jsonpath-plus throws "Unknown value type" when a top-level path starts with `@`, so an
+  // `@`-anchored path must be a binding error at apply time, not an invocation failure.
+  it.each(["@", "@.name", "@[0]", "@..name", " @.name"])("rejects @-anchored path %j", (p) => {
+    const r = parsePath(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/'\$'/);
+    expect(() => evalPath({ name: "A" }, p.trim())).toThrow();
+  });
 });
 
 describe("evalPath — runtime evaluation", () => {
