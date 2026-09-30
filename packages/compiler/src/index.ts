@@ -6,6 +6,7 @@ export * from "./resolve";
 export * from "./path";
 export * from "./fingerprint";
 export * from "./shape-diff";
+export * from "./exposure";
 export * from "./ir-diff";
 export * from "./validate";
 export * from "./compile";

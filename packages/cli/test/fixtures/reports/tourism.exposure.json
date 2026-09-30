@@ -1,0 +1,124 @@
+{
+  "exposure": [
+    {
+      "capabilityId": "tourism.search",
+      "effect": "read",
+      "receives": [
+        {
+          "name": "budget",
+          "type": {
+            "kind": "scalar",
+            "semantic": "money"
+          },
+          "required": false
+        },
+        {
+          "name": "dates",
+          "type": {
+            "kind": "scalar",
+            "semantic": "date-range"
+          },
+          "required": true
+        },
+        {
+          "name": "destination",
+          "type": {
+            "kind": "scalar",
+            "semantic": "location"
+          },
+          "required": true
+        },
+        {
+          "name": "travelers",
+          "type": {
+            "kind": "scalar",
+            "semantic": "party"
+          },
+          "required": true
+        }
+      ],
+      "exposes": [
+        {
+          "path": "stays[].location",
+          "name": "location",
+          "type": {
+            "kind": "scalar",
+            "semantic": "location"
+          },
+          "required": true,
+          "via": "response"
+        },
+        {
+          "path": "stays[].name",
+          "name": "name",
+          "type": {
+            "kind": "scalar",
+            "semantic": "text"
+          },
+          "required": true,
+          "via": "response"
+        },
+        {
+          "path": "stays[].pricePerNight",
+          "name": "pricePerNight",
+          "type": {
+            "kind": "scalar",
+            "semantic": "quantity"
+          },
+          "required": true,
+          "via": "response"
+        },
+        {
+          "path": "stays[].rating",
+          "name": "rating",
+          "type": {
+            "kind": "scalar",
+            "semantic": "quantity"
+          },
+          "required": false,
+          "via": "response"
+        },
+        {
+          "path": "totalMatches",
+          "name": "totalMatches",
+          "type": {
+            "kind": "scalar",
+            "semantic": "quantity"
+          },
+          "required": true,
+          "via": "extract"
+        }
+      ],
+      "withholds": [
+        {
+          "path": "$.stays[].boardType",
+          "observed": "string"
+        },
+        {
+          "path": "$.stays[].commission",
+          "observed": "number"
+        },
+        {
+          "path": "$.stays[].freeCancellationUntil",
+          "observed": "string"
+        },
+        {
+          "path": "$.stays[].id",
+          "observed": "string"
+        },
+        {
+          "path": "$.stays[].net",
+          "observed": "number"
+        },
+        {
+          "path": "$.stays[].roomDescription",
+          "observed": "string"
+        }
+      ],
+      "observation": {
+        "fixture": "fixtures/tourism.search.golden.json",
+        "fingerprint": "sha256:f5475f16fbc6d9f151b8cb565dfbe1243633929816aabdacdd40ec45bb89d241"
+      }
+    }
+  ]
+}
