@@ -51,6 +51,22 @@ export function parsePath(path: string): PathParse {
   return { ok: true };
 }
 
+/**
+ * The tokens of a JSONPath, as `jsonpath-plus` itself splits it — `$.stays[*].name` becomes
+ * `["$", "stays", "*", "name"]`. `undefined` for a path `parsePath` refuses. Exists so a
+ * STATIC reader of a mapping (ADD-309's exposure report) walks the same grammar `evalPath`
+ * evaluates, rather than a second string-level dialect of it. Returns a copy: jsonpath-plus
+ * caches the array it hands back.
+ */
+export function pathTokens(path: string): string[] | undefined {
+  if (!parsePath(path).ok) return undefined;
+  try {
+    return [...JSONPath.toPathArray(path.trim())].map(String);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Evaluate a (validated) JSONPath against a JSON value, always returning the match
  *  list (empty = no match). `wrap: true` keeps the return shape uniform for the mapper. */
 export function evalPath(json: unknown, path: string): unknown[] {

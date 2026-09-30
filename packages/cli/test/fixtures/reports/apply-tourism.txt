@@ -1,0 +1,15 @@
+
+archstone apply examples/manifests/tourism
+
+  company    Wanderlust Travel (wanderlust)
+  providers  booking-engine
+  declared   1 capabilities
+  loaded     1 capability docs, 1 bindings
+    ✓ tourism.search  [read] → booking-engine
+
+  ✓ shapes valid
+  semantic   0 error(s), 0 warning(s)
+  registry   IR v0 — 1 capabilities, 1 invocable (bound)
+
+  → run 'archstone serve examples/manifests/tourism' to expose 1 tool(s) to an AI agent over MCP
+
