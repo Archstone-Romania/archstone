@@ -18,6 +18,47 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.26.0]
+
+### Added
+
+- **Two CI checks on the changelog, for contributors** (`.github/workflows/ci.yml`). Every pull
+  request now either adds a `changelog.d/` fragment (or a line to `CHANGELOG.md`) or carries a
+  `Changelog: none — <reason>` line in a commit message or its description
+  (`changelog entry or waiver`, `scripts/check-changelog-entry.mjs`); and no pull request may
+  change a released `## [x.y.z]` section unless it declares
+  `Changelog-correction: <x.y.z> — <reason>` (`released changelog sections are unchanged`,
+  `scripts/check-changelog-history.mjs`). The second catches a silent failure: a branch that wrote
+  under `[Unreleased]` before a release, rebased after it, has its entries reattached under the
+  released heading by git with no conflict, so a shipped version appears to contain later work
+  and the next release's notes lack it. See `CONTRIBUTING.md` → "The changelog". No change to
+  any published package.
+
+- **`archstone init`: an OpenAPI list of `oneOf[success, error]` rows now maps onto
+  `response.onError`** (`@archstone/init`, ADD-12 §8.1 / §8.4 item 1). When a list's items are a
+  `oneOf` of two object branches and exactly one branch declares exactly one property with a
+  scalar `const`, that branch is the error row: the binding gets
+  `onError: { errorResource: <Success>Error, when: { path: $.<property>, equals: <const> } }`,
+  plus a `map:` only for a field whose source is not `$.code` / `$.message`, and a
+  `<Success>Error` resource with the fields `code` and `message` is emitted beside the success
+  resource. `code` reads from the error branch's `code`, else from the discriminator itself;
+  `message` from its `message`, else from its one remaining plain string property. Such an
+  operation used to be skipped as `unsupported-composition`. Every other two-branch `oneOf` is
+  still refused, now under a reason code naming what is missing — `oneof-too-many-branches`,
+  `oneof-no-discriminator`, `oneof-non-object-branch`, `oneof-error-fields-unresolved` — and the
+  accepted form anywhere but the items of the collection being mapped (the response root, a
+  single-object property, a nested list, or when the root locus is chosen) is refused as
+  `oneof-outside-collection` rather than flattened into its success shape. `anyOf`, a
+  `discriminator` keyword, and the nullability idiom (`oneOf: [X, {type: 'null'}]`) behave
+  exactly as before.
+
+- **`Release prepare` computes the version by default** (`bump: auto`,
+  `scripts/classify-bump.mjs`). It classifies the commits since the last `v*` tag by Conventional
+  Commits — breaking, then `feat`, then everything else, counting every commit listed in a
+  squash body — and names the commits that decided the bump in the run summary. Before 1.0 a
+  breaking change bumps the minor, so a computed default never produces 1.0.0; `patch` / `minor` /
+  `major` and an explicit `version` still override it. Maintainer tooling only.
+
 ## [0.25.0]
 
 ### Fixed
