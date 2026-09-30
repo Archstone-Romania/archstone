@@ -14,15 +14,8 @@ protocol and you regenerate rather than rewrite.
 ## Where development happens
 
 This repository is the home of the core — CDL, the compiler, the IR, emitters, runtime, CLI,
-embedded SDK and provider adapters. Issues, pull requests, CI and releases belong here.
-
-> **⚠️ Transitional, as of 2026-08-26.** The move is ratified but has not run. Until it does,
-> this repository still receives **release snapshots** from a private development repository, and
-> a snapshot's tree replaces this one wholesale. **A change merged here that is not also in the
-> development tree is erased at the next release, silently.** If you are an agent working for the
-> maintainer, make core changes in the development repository, not here. If you are an outside
-> contributor, open the PR here as `CONTRIBUTING.md` says — it will be re-applied upstream by
-> hand until the migration completes.
+embedded SDK and provider adapters. Issues, pull requests, CI and releases belong here, and so
+does every core change — there is no other tree it has to be made in first.
 
 Planning material — product strategy, commercial artifacts, pricing, research — lives in a
 private repository and always will. What reaches this one is the work and the technical argument
