@@ -410,6 +410,18 @@ directly: a collection field bound by an `onError`-bearing mapping advertises
 client validates either row kind without complaint. `onError` requires `collection:` — it
 classifies rows of a collection, and a single-object mapping has none to classify.
 
+`archstone init` writes this block for you when the OpenAPI document states it: a list whose
+`items` is a `oneOf` of two object schemas, where exactly one of them declares exactly one
+property with a scalar `const` (`status: { const: "error" }`). That branch is the error row.
+`init` emits a `<Success>Error` Resource with `code` and `message`, a `when:` of
+`{ path: $.status, equals: error }`, and an `onError.map` entry only for a field whose source
+is not `$.code` / `$.message`. `code` reads from the error branch's own `code`, else from the
+discriminator itself; `message` from its `message`, else from its one remaining plain string
+property. Any other `oneOf` still skips the operation, under a code naming what is missing:
+`oneof-too-many-branches`, `oneof-no-discriminator`, `oneof-non-object-branch`,
+`oneof-error-fields-unresolved`, or `oneof-outside-collection` (the accepted form anywhere but
+the items of the collection being mapped, where there is no `onError` to carry it).
+
 #### `rest.query` — renaming, list serialization, and query-alongside-body
 
 A REST connector's `rest.query` maps a CDL input field to its wire query-parameter name. The
