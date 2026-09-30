@@ -16,6 +16,10 @@
 //         scheduled by Archstone itself (wire it into your own CI/cron). A replay IS an
 //         invocation, so a `write`/`irreversible` binding is skipped by default and
 //         re-included only by `--sandbox`, an assertion the operator makes (#124).
+// diff: compare two compiled declarations (ADD-309, #77) — each side a built artifact or a
+//        manifest directory compiled on the spot — and classify every change for the agent by
+//        `diffIR`'s table. Exit 1 iff anything is breaking. Reads declarations only; the
+//        backend is `verify`'s question, and the report says so on its first line.
 // build: run the same compile pipeline as `apply`, strip each tool's `contract`
 //        (D-8 — the fingerprint/golden-fixture path is meaningless once the fixture
 //        file isn't shipping), and write the IR as a standalone JSON artifact —
@@ -30,7 +34,7 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { load } from "@archstone/schema";
-import { validateSemantics, compile, type IR } from "@archstone/compiler";
+import { validateSemantics, compile, diffIR, type IR, type IRDiff, type IRDiffEntry } from "@archstone/compiler";
 import { Registry, buildRegistry, serveStdio } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
 // ADR-0012 D-5: `runVerify`/`HealthStatus` now come from the dedicated `/verify` subpath, not
@@ -74,7 +78,7 @@ function printUsage(opts?: { toStderr?: boolean }): void {
     // `init` is named HERE, in the verb list, and not only in the block below it. It takes a
     // spec file rather than a manifest directory, so it cannot share the first line's shape —
     // which is exactly how it came to be missing from the one line a user actually scans.
-    "usage: archstone <apply|serve|verify|build|doctor|init|adopt|audit>\n\n" +
+    "usage: archstone <apply|serve|verify|build|diff|doctor|init|adopt|audit>\n\n" +
       "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
       "       archstone verify <manifest-dir> [--json] [--sandbox] [--identity-map <file>]\n" +
       "         --sandbox: also replay `write`/`irreversible` fixtures — they are skipped by default,\n" +
@@ -85,6 +89,9 @@ function printUsage(opts?: { toStderr?: boolean }): void {
       "         principal to sql session identity claims (ADR-0012) — required for any sql-bound capability\n" +
       "         to be invocable at all; absent means every sql invocation refuses (fail-closed)\n" +
       "         --sql-guc-prefix <prefix> / ARCHSTONE_SQL_GUC_PREFIX: session GUC name prefix (default \"app.\")\n" +
+      "       archstone diff <before> <after> [--json] [--all]\n" +
+      "         what changed for an agent between two declarations; each side is a built .json\n" +
+      "         artifact or a manifest dir. Exits 1 iff a change is breaking. --all lists compatible ones\n" +
       "       archstone doctor <manifest-dir> [--json]  — pre-production checks, offline\n" +
       "       archstone init <spec-file> --out <dir>   — start here if you have no manifest yet\n" +
       "       archstone adopt <manifest-dir>\n" +
@@ -750,6 +757,106 @@ function resolveConnectorOptions(argv: string[]): ConnectorInvokeOptions | undef
   return opts;
 }
 
+/** One side of a `diff`: the IR, or the reason there is none. A `.json` argument is read as a
+ *  built artifact; anything else is a manifest directory, compiled through the same
+ *  load → validateSemantics → compile path `apply` runs, and refused with `apply`'s own
+ *  messages when it does not get that far. */
+type DiffSide = { ir: IR } | { error: string; lines: string[]; issues?: unknown; errors?: unknown };
+
+function resolveDiffSide(arg: string): DiffSide {
+  if (arg.endsWith(".json")) {
+    let ir: IR;
+    try {
+      ir = JSON.parse(readFileSync(resolve(process.cwd(), arg), "utf8")) as IR;
+    } catch (err) {
+      return { error: "artifact_unreadable", lines: [`${arg}: could not be read as a built artifact — ${(err as Error).message}`] };
+    }
+    // `fromIR`'s own bar (version + a tool list); anything further is diffIR's business.
+    if (!ir || typeof ir !== "object" || typeof ir.version !== "string" || !Array.isArray(ir.tools)) {
+      return { error: "artifact_unreadable", lines: [`${arg}: not an Archstone IR artifact (no 'version' or 'tools')`] };
+    }
+    return { ir: { ...ir, resources: ir.resources ?? {} } };
+  }
+  const res = load(arg);
+  const diags = validateSemantics(res);
+  const errors = diags.filter((d) => d.severity === "error");
+  if (!res.ok || errors.length > 0) {
+    return {
+      error: "manifest_invalid",
+      lines: [
+        `${arg}: manifest invalid — run 'archstone apply ${arg}' for details`,
+        ...res.issues.map((i) => `  - ${i.file}: ${i.message}`),
+        ...errors.map((d) => `  ✗ ${d.message}`),
+      ],
+      issues: res.issues,
+      errors,
+    };
+  }
+  return { ir: compile(res) };
+}
+
+const DIFF_LABEL_WIDTH = "compatible".length;
+
+function diffLine(e: IRDiffEntry): string {
+  return `  ${e.severity.padEnd(DIFF_LABEL_WIDTH)} ${e.capabilityId ?? e.resource ?? "?"} — ${e.detail}`;
+}
+
+/**
+ * `archstone diff <before> <after> [--json] [--all]` (ADD-309, #77).
+ *
+ * Exit codes: 1 iff any entry is `breaking` — `notable` never fails the gate (D-4); 2 when either
+ * side could not be turned into an IR, or the two IR versions differ, so "cannot compare" is never
+ * mistaken for "compared, and it breaks".
+ *
+ * `--json` prints the `IRDiff` alone. There is deliberately no aggregate `ok` field: the exit code
+ * is the gate signal (ADD-20 D-2's precedent), and a refusal prints `{ error, … }`, a shape
+ * strictly disjoint from `IRDiff`.
+ */
+function runDiff(beforeArg: string, afterArg: string, json: boolean, all: boolean): void {
+  const refuse = (error: string, lines: string[], extra: Record<string, unknown> = {}): never => {
+    if (json) console.log(JSON.stringify({ error, message: lines[0], ...extra }));
+    else for (const l of lines) console.error(l.startsWith("  ") ? l : `archstone diff ${l}`);
+    process.exit(2);
+  };
+
+  const sides = [resolveDiffSide(beforeArg), resolveDiffSide(afterArg)];
+  for (const s of sides) {
+    if ("error" in s) refuse(s.error, s.lines, s.issues !== undefined ? { issues: s.issues, errors: s.errors } : {});
+  }
+  const [before, after] = sides.map((s) => (s as { ir: IR }).ir) as [IR, IR];
+
+  let diff: IRDiff;
+  try {
+    diff = diffIR(before, after);
+  } catch (err) {
+    return refuse("version_mismatch", [`${beforeArg} ${afterArg}: ${(err as Error).message}`]);
+  }
+  const exitCode = diff.summary.breaking > 0 ? 1 : 0;
+
+  if (json) {
+    console.log(JSON.stringify(diff));
+    process.exit(exitCode);
+  }
+
+  // D-5 / R-2: the first line says which of the two questions this answers, so nobody reads
+  // "compatible" as "the provider did not move".
+  console.log("archstone diff compares declarations, not backends — run 'archstone verify' for the backend.\n");
+  console.log(`  before  ${beforeArg} (${diff.before.company})`);
+  console.log(`  after   ${afterArg} (${diff.after.company})\n`);
+
+  const bySeverity = (s: IRDiffEntry["severity"]) => diff.entries.filter((e) => e.severity === s);
+  const shown = [...bySeverity("breaking"), ...bySeverity("notable"), ...(all ? bySeverity("compatible") : [])];
+  if (diff.entries.length === 0) console.log("  no changes");
+  for (const e of shown) console.log(diffLine(e));
+  if (!all && diff.summary.compatible > 0) {
+    console.log(`  compatible ${diff.summary.compatible} change(s) — pass --all to list them`);
+  }
+
+  const { breaking, notable, compatible } = diff.summary;
+  console.log(`\n  ${breaking} breaking, ${notable} notable, ${compatible} compatible — exit ${exitCode}\n`);
+  process.exit(exitCode);
+}
+
 /**
  * #102 — A-7 §5's pre-production checklist, run instead of read. Offline by construction: it
  * compiles the manifest and inspects the IR plus what sits beside it on disk. Nothing is
@@ -801,6 +908,7 @@ async function main(): Promise<void> {
   // supplying the one fact only they hold. It takes no target string because a target would
   // imply Archstone validates it against something, and there is nothing to validate against.
   const sandbox = argv.includes("--sandbox");
+  const all = argv.includes("--all");
   const out = flagArg(argv, "--out");
   const port = flagArg(argv, "--port");
   const token = flagArg(argv, "--token");
@@ -814,8 +922,8 @@ async function main(): Promise<void> {
       consumed.add(f.idx + 1);
     }
   }
-  const positional = argv.filter((a, i) => !consumed.has(i) && a !== "--json" && a !== "--http" && a !== "--sandbox");
-  const [cmd, dir] = positional;
+  const positional = argv.filter((a, i) => !consumed.has(i) && a !== "--json" && a !== "--http" && a !== "--sandbox" && a !== "--all");
+  const [cmd, dir, other] = positional;
 
   if (cmd === "apply" && dir) {
     runApply(dir);
@@ -862,6 +970,10 @@ async function main(): Promise<void> {
   }
   if (cmd === "build" && dir) {
     runBuild(dir, out.value);
+    return;
+  }
+  if (cmd === "diff" && dir && other) {
+    runDiff(dir, other, json, all);
     return;
   }
   if (cmd === "doctor" && dir) {

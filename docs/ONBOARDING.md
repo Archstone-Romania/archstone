@@ -1128,6 +1128,18 @@ values — `verify` can say *which* fields moved rather than only that the finge
 🟡 tourism.search — mapping still resolves; response shape gained 1 field(s): $.stays[].boardType (string)
 ```
 
+`verify` watches the backend. Your own releases move the contract too, and `archstone diff`
+is the check for those: give it the artifact you shipped last and the one you are about to ship
+(either side can also be a manifest directory), and it reports what changed for an agent, as
+`breaking`, `notable` or `compatible`, and exits 1 if anything is breaking. That covers a removed
+capability, a new required input, a dropped output field, an `effect` that moved, or a narrower
+policy. It compares declarations only, so a clean `diff` says nothing about the backend. Run
+both.
+
+```bash
+archstone diff ./released/archstone.ir.json ./my-manifest-dir
+```
+
 ### Declaring a field the backend started returning
 
 `verify` naming a new field does not give it to your agent. **An undeclared field never
