@@ -30,7 +30,7 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { load } from "@archstone/schema";
-import { validateSemantics, compile, type IR } from "@archstone/compiler";
+import { validateSemantics, compile, exposureOfIR, type IR } from "@archstone/compiler";
 import { Registry, buildRegistry, serveStdio } from "@archstone/runtime";
 import { createHttpHandler } from "@archstone/runtime/http";
 // ADR-0012 D-5: `runVerify`/`HealthStatus` now come from the dedicated `/verify` subpath, not
@@ -46,6 +46,7 @@ import { INIT_USAGE, runInitCmd } from "./init";
 import { runAuditCmd } from "./audit-cmd";
 import { diagnose, formatReport } from "./doctor";
 import { runAdoptCmd } from "./adopt";
+import { formatExposure } from "./exposure-report";
 
 /** `archstone --version` is the first thing a human types after installing, and until this
  *  existed it printed the usage block and exited 2 — which reads as "broken install" at the
@@ -76,6 +77,9 @@ function printUsage(opts?: { toStderr?: boolean }): void {
     // which is exactly how it came to be missing from the one line a user actually scans.
     "usage: archstone <apply|serve|verify|build|doctor|init|adopt|audit>\n\n" +
       "       archstone <apply|serve|verify|build> <manifest-dir> [--json] [--out path]\n" +
+      "       archstone apply <manifest-dir> --exposure [--json]\n" +
+      "         per capability: what a model receives, what it is shown, and what the backend was\n" +
+      "         observed to return that it never sees — names and types only (--json: that report alone)\n" +
       "       archstone verify <manifest-dir> [--json] [--sandbox] [--identity-map <file>]\n" +
       "         --sandbox: also replay `write`/`irreversible` fixtures — they are skipped by default,\n" +
       "         because a replay is a real invocation. Only for a backend you know is a sandbox tenant.\n" +
@@ -96,24 +100,38 @@ function printUsage(opts?: { toStderr?: boolean }): void {
   );
 }
 
-function runApply(dir: string): void {
+/**
+ * `exposure` adds ADD-309's exposure report after the registry line. `json` means something ONLY
+ * alongside it: `{ exposure }` alone on stdout, and the human report held back — written to
+ * stderr if the manifest does not compile, so the reason is never lost. Without `exposure`,
+ * every line below is exactly what `apply` printed before the flag existed, `--json` or not
+ * (pinned by `apply-exposure.test.ts`): this increment does not give the rest of `apply` a
+ * structured form, and does not half-do it.
+ */
+function runApply(dir: string, exposure = false, json = false): void {
+  const structured = exposure && json;
+  const held: string[] = [];
+  const say = (line: string): void => {
+    if (structured) held.push(line);
+    else console.log(line);
+  };
   const res = load(dir);
-  console.log(`\narchstone apply ${dir}\n`);
+  say(`\narchstone apply ${dir}\n`);
 
   if (res.capabilities) {
     const c = res.capabilities;
-    console.log(`  company    ${c.company.name ?? c.company.id} (${c.company.id})`);
-    console.log(`  providers  ${c.providers.join(", ")}`);
-    console.log(`  declared   ${c.capabilities.length} capabilities`);
+    say(`  company    ${c.company.name ?? c.company.id} (${c.company.id})`);
+    say(`  providers  ${c.providers.join(", ")}`);
+    say(`  declared   ${c.capabilities.length} capabilities`);
   }
-  console.log(`  loaded     ${res.capabilityDocs.length} capability docs, ${res.bindings.length} bindings`);
+  say(`  loaded     ${res.capabilityDocs.length} capability docs, ${res.bindings.length} bindings`);
   for (const d of res.capabilityDocs) {
-    console.log(`    ✓ ${d.capability.id}  [${d.capability.effect}] → ${d.capability.provider ?? "?"}`);
+    say(`    ✓ ${d.capability.id}  [${d.capability.effect}] → ${d.capability.provider ?? "?"}`);
   }
   // #43: a policy the author believes is enforced must never be invisible here — the whole
   // point of the semantic pass's scope diagnostics is that "attached to nothing" is loud.
   if (res.policyDocs.length > 0) {
-    console.log(`  policies   ${res.policyDocs.length} policy document(s)`);
+    say(`  policies   ${res.policyDocs.length} policy document(s)`);
     for (const p of res.policyDocs) {
       const target =
         p.metadata.scope === "capability"
@@ -121,25 +139,25 @@ function runApply(dir: string): void {
           : p.metadata.scope === "provider"
             ? `provider ${p.metadata.provider ?? "?"}`
             : "(no scope)";
-      console.log(`    ✓ ${p.metadata.id}  → ${target}`);
+      say(`    ✓ ${p.metadata.id}  → ${target}`);
     }
   }
 
   // Shape (schema) issues from #2 — "valid shapes" is not "deployable".
   if (res.issues.length > 0) {
-    console.log(`\n  ✗ ${res.issues.length} shape issue(s):`);
-    for (const i of res.issues) console.log(`    - ${i.file}: ${i.message}`);
+    say(`\n  ✗ ${res.issues.length} shape issue(s):`);
+    for (const i of res.issues) say(`    - ${i.file}: ${i.message}`);
   } else {
-    console.log(`\n  ✓ shapes valid`);
+    say(`\n  ✓ shapes valid`);
   }
 
   // Semantic pass (#3) — cross-file resolution; errors block, warnings inform.
   const diags = validateSemantics(res);
   const errors = diags.filter((d) => d.severity === "error");
   const warnings = diags.filter((d) => d.severity === "warning");
-  console.log(`  semantic   ${errors.length} error(s), ${warnings.length} warning(s)`);
-  for (const d of errors) console.log(`    ✗ ${d.message}`);
-  for (const d of warnings) console.log(`    ⚠ ${d.message}`);
+  say(`  semantic   ${errors.length} error(s), ${warnings.length} warning(s)`);
+  for (const d of errors) say(`    ✗ ${d.message}`);
+  for (const d of warnings) say(`    ⚠ ${d.message}`);
 
   const shapesAndSemanticsOk = res.ok && errors.length === 0;
 
@@ -150,9 +168,9 @@ function runApply(dir: string): void {
   const registry = shapesAndSemanticsOk ? new Registry(compile(res)) : undefined;
   const collisions = registry?.toolNameCollisions ?? [];
   if (collisions.length > 0) {
-    console.log(`\n  ✗ ${collisions.length} tool-name collision(s):`);
+    say(`\n  ✗ ${collisions.length} tool-name collision(s):`);
     for (const c of collisions) {
-      console.log(`    - tool name '${c.name}' is ambiguous — capabilities ${c.ids.join(", ")} all sanitize to it`);
+      say(`    - tool name '${c.name}' is ambiguous — capabilities ${c.ids.join(", ")} all sanitize to it`);
     }
   }
 
@@ -160,11 +178,20 @@ function runApply(dir: string): void {
 
   if (ok && registry) {
     const invocable = registry.listCapabilities().filter((t) => t.connector).length;
-    console.log(`  registry   IR v${registry.ir.version} — ${registry.size} capabilities, ${invocable} invocable (bound)`);
-    console.log(`\n  → run 'archstone serve ${dir}' to expose ${invocable} tool(s) to an AI agent over MCP`);
+    say(`  registry   IR v${registry.ir.version} — ${registry.size} capabilities, ${invocable} invocable (bound)`);
+    if (exposure) {
+      const report = exposureOfIR(registry.ir);
+      if (structured) {
+        console.log(JSON.stringify({ exposure: report }, null, 2));
+        process.exit(0);
+      }
+      for (const line of formatExposure(report)) say(line);
+    }
+    say(`\n  → run 'archstone serve ${dir}' to expose ${invocable} tool(s) to an AI agent over MCP`);
   }
 
-  console.log("");
+  say("");
+  if (structured) for (const line of held) console.error(line);
   process.exit(ok ? 0 : 1);
 }
 
@@ -793,6 +820,7 @@ async function main(): Promise<void> {
   }
 
   const json = argv.includes("--json");
+  const exposure = argv.includes("--exposure");
   const http = argv.includes("--http");
   // #124: boolean, takes no argument. NOT `--force`/`--yes`: those read as overriding a check
   // Archstone performed, and the honest situation is the opposite — Archstone performed no check
@@ -814,11 +842,11 @@ async function main(): Promise<void> {
       consumed.add(f.idx + 1);
     }
   }
-  const positional = argv.filter((a, i) => !consumed.has(i) && a !== "--json" && a !== "--http" && a !== "--sandbox");
+  const positional = argv.filter((a, i) => !consumed.has(i) && a !== "--json" && a !== "--exposure" && a !== "--http" && a !== "--sandbox");
   const [cmd, dir] = positional;
 
   if (cmd === "apply" && dir) {
-    runApply(dir);
+    runApply(dir, exposure, json);
     return;
   }
   const connectorOpts = resolveConnectorOptions(argv);

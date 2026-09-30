@@ -119,7 +119,9 @@ re-included only with `--sandbox`, an assertion that the backend is a sandbox te
 **A field your manifest does not name never reaches a model.** That is deliberate: your
 provider's payload very likely carries wholesale rates, commissions or internal ids beside the
 fields you publish, and a backend deploy adding one must not be a decision about what an
-assistant can say. Declaring a new field is a separate, deliberate act — `archstone adopt`
+assistant can say. `archstone apply <dir> --exposure` names both sides for each capability — the
+fields a model is shown, and the ones your backend was recorded returning that it never sees
+(`net`, `commission`, `boardType`, … for the tourism example). Declaring a new field is a separate, deliberate act — `archstone adopt`
 offers each one, asks you to describe it, writes it into your resource and binding, and
 recompiles before keeping anything. With stdin closed it refuses and writes nothing: it needs a
 person, which is the point rather than a limitation.

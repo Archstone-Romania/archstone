@@ -1,0 +1,23 @@
+
+archstone apply examples/manifests/tourism
+
+  company    Wanderlust Travel (wanderlust)
+  providers  booking-engine
+  declared   1 capabilities
+  loaded     1 capability docs, 1 bindings
+    ✓ tourism.search  [read] → booking-engine
+
+  ✓ shapes valid
+  semantic   0 error(s), 0 warning(s)
+  registry   IR v0 — 1 capabilities, 1 invocable (bound)
+
+  exposure   what a model sends, is shown, and never sees — names and types only
+
+  tourism.search  [read]
+    receives   budget (money, optional), dates (date-range), destination (location), travelers (party)
+    exposes    stays[].location (location), stays[].name (text), stays[].pricePerNight (quantity), stays[].rating (quantity, optional), totalMatches (quantity, extract)
+    withholds  $.stays[].boardType (string), $.stays[].commission (number), $.stays[].freeCancellationUntil (string), $.stays[].id (string), $.stays[].net (number), $.stays[].roomDescription (string)
+               as observed in fixtures/tourism.search.golden.json (sha256:f5475f…)
+
+  → run 'archstone serve examples/manifests/tourism' to expose 1 tool(s) to an AI agent over MCP
+
