@@ -18,6 +18,67 @@ All notable changes to Archstone are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.27.0]
+
+### Added
+
+- **`archstone apply <dir> --exposure [--json]`: what a model receives, is shown, and never
+  sees** (`@archstone/cli`, `@archstone/compiler`, ADD-309). For each capability the report lists
+  its inputs, the output fields a model is shown — each marked as filled by `response.map`, by
+  `extract`, or declared but never filled — and every path in the binding's recorded
+  `contract.shape` that no mapping reaches, with its observed JSON type and the fixture and
+  fingerprint it was observed in. Names and types only; no value appears. Where a binding records
+  no shape, the withheld set is reported as unknown rather than empty, and a binding with neither
+  `response:` nor `extract:` is reported as passing the provider body through whole. With
+  `--json`, `{ "exposure": [...] }` is printed alone on stdout. Without `--exposure`, `apply`
+  prints exactly what it printed before, `--json` included. The same report is available to code
+  as `exposureOf(tool, resources)` / `exposureOfIR(ir)` from `@archstone/compiler`, pure, with
+  `pathTokens(path)` added beside `parsePath` so a static reader of a mapping tokenises it with
+  the same grammar the runtime evaluates. For the tourism example: five fields shown, six withheld
+  (`boardType`, `commission`, `freeCancellationUntil`, `id`, `net`, `roomDescription`).
+
+- **`archstone diff <before> <after> [--json] [--all]`: what changed for an agent between two
+  declarations** (`@archstone/cli`, `@archstone/compiler`, ADD-309, #77). Each side is a built
+  `archstone.ir.json` or a manifest directory compiled on the spot (an invalid one is refused
+  with `apply`'s messages). Every change is classified `breaking`, `notable` or `compatible` by a
+  fixed table: a removed capability, any `effect` change, a new required input, a removed or
+  loosened output field, retirement or a narrower policy is breaking; deprecation, a wider
+  policy, a rate-limit or policy-token change is notable; additions, descriptions and binding
+  edits are compatible. A resource field change is reported once, on the resource, naming the
+  capabilities it reaches. The command exits 1 iff anything is breaking, and 2 when it cannot
+  compare (an unreadable side, or two different IR versions). The human report lists breaking
+  and notable changes and counts compatible ones unless `--all`; `--json` prints the diff alone,
+  with no aggregate `ok`. The comparison is `diffIR(before, after)`, pure and exported from
+  `@archstone/compiler`. It never reads `contract`, so two built artifacts diff completely, and
+  it says nothing about the backend: that is still `archstone verify`.
+
+### Fixed
+
+- **`archstone apply` accepted JSONPath expressions anchored at `@` that could never be
+  evaluated.** A `response.map`, `collection`, `extract` or `onError` path such as `@.name`
+  passed validation, then failed at every invocation because jsonpath-plus throws "Unknown value
+  type" for a path that starts with `@`. Such paths are now a `bad-response-path` /
+  `bad-extract-path` error at apply time; `@` remains valid inside a filter expression
+  (`$.rooms[?(@.available)]`).
+
+- **An `identityAdapter` returning claims that set no usable session GUC counted as a resolved
+  identity.** In `@archstone/provider-sql`, `invokeSql` ran the declared query when the adapter
+  returned an empty object `{}`, a claim with an empty-string or non-string value
+  (`{ tenantId: "" }`, `{ tenantId: null }`), or a non-object result (a string, an array, or
+  `Object` itself for the principal `constructor` in an `--identity-map`). In `@archstone/runtime`,
+  `archstone verify`'s negative isolation test passed vacuously for the same negative-identity
+  results, because RLS with no or an empty GUC returns zero rows. All of these now refuse exactly
+  like an unresolved identity — "no session identity resolved" before any connection is used, and
+  a red "negative identity did not resolve to any claims" in `verify` — which is the documented
+  ADR-0012 D-3 contract.
+
+- **`SUPPORT.md` named 0.17.x as the Current line through nine releases.** The "Today" table was
+  edited by hand in each release commit up to 0.17.0, and stopped being touched when stamping
+  moved into `scripts/release-prepare.mjs`. It now reads Current `0.26.x`, Maintenance `0.25.x`,
+  End of life `≤ 0.24.x`, and no longer names `release/X.Y.x` branches that were never cut.
+  `release-prepare` stamps the table from the minor on every release, and `verifyStamp` refuses a
+  tag whose `SUPPORT.md` names the wrong Current line.
+
 ## [0.26.0]
 
 ### Added
