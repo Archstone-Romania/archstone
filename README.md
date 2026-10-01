@@ -40,6 +40,9 @@ The entire integration that made this callable by an agent is
 [12 lines of business YAML](examples/manifests/tourism/tourism.search.capability.yaml) — no
 HTTP, no JSON Schema, no MCP SDK. Everything else was generated.
 
+Want the same in front of your own systems? Write to
+[hello@archstone.dev](mailto:hello@archstone.dev).
+
 ## Start from an API you already have
 
 Point `archstone init` at an OpenAPI document. It reads the spec, asks you the questions no
