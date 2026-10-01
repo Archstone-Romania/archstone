@@ -172,3 +172,104 @@ describe("verifyTool — ADR-0012 D-8 negative isolation test", () => {
       expect(r.status).not.toBe("red");
     }));
 });
+
+/**
+ * Options shaped exactly like the CLI's `resolveConnectorOptions` builds them from an
+ * `--identity-map`: an `identityAdapter` over a static map, and NO caller principal.
+ */
+function cliShapedOpts(pool: PgPool) {
+  const map: Record<string, Record<string, string>> = { "tenant-a": { tenantId: "acme" }, "tenant-b": { tenantId: "beta" } };
+  return {
+    env: { DATABASE_URL: "postgres://runtime@localhost/app" },
+    pgPoolFactory: () => pool,
+    connectionRegistry: new Map<string, ConnectionEntry>(),
+    identityAdapter: (principal: string | undefined) => (principal !== undefined ? map[principal] : undefined),
+  };
+}
+
+/** The tenant claim value each `SELECT ... portfolio_summary_v` ran under, in order. */
+function claimsPerQuery(pool: PgPool): Promise<string[]> {
+  return (async () => {
+    const client = await pool.connect();
+    const calls = (client.query as ReturnType<typeof vi.fn>).mock.calls as Array<[string, unknown[]?]>;
+    const seen: string[] = [];
+    let last: string | undefined;
+    for (const [text, params] of calls) {
+      if (text === "SELECT set_config($1, $2, true)" && params) last = params[1] as string;
+      if (text.includes("FROM reporting.portfolio_summary_v")) seen.push(last ?? "<none>");
+    }
+    return seen;
+  })();
+}
+
+describe("verifyTool — ADR-0012 D-8 positive leg under the fixture's identity", () => {
+  it("CLI-shaped options + a fixture recording identity and negativeIdentity: green when the negative replay is empty", () =>
+    withFixture(
+      {
+        capabilityId: "reporting.portfolio-summary",
+        request: { id: "1" },
+        identity: { principal: "tenant-a" },
+        negativeIdentity: { principal: "tenant-b" },
+      },
+      async (dir) => {
+        const pool = fakePool([{ id: "1" }], []);
+        const r = await verifyTool(sqlTool(), dir, resources, cliShapedOpts(pool));
+        expect(r.status).toBe("green");
+        expect(await claimsPerQuery(pool)).toEqual(["beta", "acme"]);
+      },
+    ));
+
+  it("CLI-shaped options + a fixture without identity: still refuses with no session identity resolved", () =>
+    withFixture(
+      { capabilityId: "reporting.portfolio-summary", request: { id: "1" }, negativeIdentity: { principal: "tenant-b" } },
+      async (dir) => {
+        const pool = fakePool([{ id: "1" }], []);
+        const r = await verifyTool(sqlTool(), dir, resources, cliShapedOpts(pool));
+        expect(r.status).toBe("red");
+        expect(r.detail).toMatch(/^live request failed: .*no session identity resolved/);
+      },
+    ));
+
+  it("a caller principal supplied by the host wins over the fixture's identity", () =>
+    withFixture(
+      {
+        capabilityId: "reporting.portfolio-summary",
+        request: { id: "1" },
+        identity: { principal: "tenant-b" },
+        negativeIdentity: { principal: "tenant-b" },
+      },
+      async (dir) => {
+        const pool = fakePool([{ id: "1" }], []);
+        // opts() supplies caller.principal "tenant-a" → claims "acme"; fixture.identity would
+        // have been "tenant-b" → "beta".
+        const r = await verifyTool(sqlTool(), dir, resources, opts(pool));
+        expect(r.status).toBe("green");
+        expect(await claimsPerQuery(pool)).toEqual(["beta", "acme"]);
+      },
+    ));
+
+  it("a rest binding ignores a recorded identity", () =>
+    withFixture({ capabilityId: "tourism.search", request: {}, identity: { principal: "tenant-a" } }, async (dir) => {
+      const restTool: IRTool = {
+        id: "tourism.search",
+        description: "",
+        effect: "read",
+        provider: "",
+        policies: [],
+        lifecycle: "stable",
+        input: [],
+        output: [],
+        connector: { type: "rest", rest: { baseUrl: "https://x.test", method: "GET", path: "/search?who=${caller.principal}" } },
+        contract: { fingerprint: fingerprintShape({}), probeFixture: "fixture.json" },
+      };
+      const urls: string[] = [];
+      const fetchImpl = async (url: string | URL | Request) => {
+        urls.push(String(url));
+        return new Response(JSON.stringify({}), { status: 200 });
+      };
+      const r = await verifyTool(restTool, dir, resources, { fetchImpl });
+      expect(r.status).toBe("green");
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).not.toContain("tenant-a");
+    }));
+});
