@@ -22,7 +22,7 @@ import {
   type ShapeDiff,
   type ShapeMap,
 } from "@archstone/compiler";
-import { evaluatePolicy, lifecycleExposure } from "@archstone/emitter-support";
+import { evaluatePolicy, hasIdentityClaims, lifecycleExposure } from "@archstone/emitter-support";
 import { applyResponseMapping } from "./mapping";
 import { invokeConnector, type ConnectorInvokeOptions } from "./connector";
 
@@ -211,7 +211,9 @@ function narrateShapeChange(
  * D-8 case 4 (confirmed behavior, not left implicit): a recorded `negativeIdentity` the
  * configured `identityAdapter` cannot resolve is the IDENTICAL build-failing outcome as an
  * absent one — distinguished only by the detail string, never a silent skip or an automatic
- * green.
+ * green. A negative identity that resolves to an EMPTY claims object `{}` counts as
+ * unresolved: with no session GUC set, RLS returns zero rows and isolation would be "proven"
+ * vacuously.
  */
 async function checkNegativeIsolation(tool: IRTool, fixture: GoldenFixture, opts?: InvokeOptions): Promise<string | undefined> {
   if (tool.connector?.type !== "sql") return undefined;
@@ -221,7 +223,7 @@ async function checkNegativeIsolation(tool: IRTool, fixture: GoldenFixture, opts
     return "isolation not verified: no negative identity recorded";
   }
   const claims = opts?.identityAdapter?.(negativeIdentity.principal);
-  if (!claims) {
+  if (!hasIdentityClaims(claims)) {
     return "isolation not verified: negative identity did not resolve to any claims";
   }
 

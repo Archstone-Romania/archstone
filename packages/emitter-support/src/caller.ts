@@ -58,9 +58,21 @@ export type FetchLike = typeof globalThis.fetch;
  *
  * `undefined` — an unset adapter, or one that cannot resolve this principal — is a fail-closed
  * refusal (D-3): a `sql`-bound invocation with no resolved identity claims never proceeds to a
- * connection. There is no "run with no session identity" path.
+ * connection. There is no "run with no session identity" path. An EMPTY claims object `{}` is
+ * "no claims" too, and refuses identically (see `hasIdentityClaims`): it would set no session
+ * GUC at all, which is exactly the unresolved case.
  */
 export type IdentityAdapter = (principal: string | undefined) => Record<string, string> | undefined;
+
+/**
+ * ADR-0012 D-3 — whether an `identityAdapter` result counts as RESOLVED session identity:
+ * a claims object with at least one own key. `undefined`, `null` and `{}` are all unresolved
+ * and must refuse the same way. The one predicate both `invokeSql` (`providers/sql`) and the
+ * D-8 negative isolation check (`@archstone/runtime`'s verify) use, so the two cannot drift.
+ */
+export function hasIdentityClaims(claims: Record<string, string> | null | undefined): claims is Record<string, string> {
+  return claims != null && Object.keys(claims).length > 0;
+}
 
 /**
  * The shared, connector-agnostic half of a per-invocation options bag (ADR-0012 D-3). Every

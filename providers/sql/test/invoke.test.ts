@@ -125,6 +125,15 @@ describe("invokeSql — D-3 identity-adapter fail-closed gate", () => {
     expect(pool.connect).not.toHaveBeenCalled();
   });
 
+  it("refuses before any connection is used when identityAdapter returns an empty claims object", async () => {
+    const { pool } = fakePool([]);
+    const result = await invokeSql(tool, { id: "1" }, baseOpts(pool, { identityAdapter: () => ({}) }));
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(0);
+    expect(result.error).toContain("no session identity resolved for this caller");
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
   it("a capability input literally named tenantId has no bearing on the session claim", async () => {
     const { pool, queries } = fakePool([]);
     await invokeSql(tool, { id: "1", tenantId: "attacker-supplied" }, baseOpts(pool));
