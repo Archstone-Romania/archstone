@@ -23,6 +23,7 @@ import {
   stampPackageJson,
   stampServerJson,
   stampChangelog,
+  stampSupport,
   stampTree,
   verifyStamp,
   readFragments,
@@ -172,12 +173,64 @@ test("the real tree is in lockstep: root, every package and server.json agree", 
   for (const p of server.packages ?? []) {
     assert.equal(p.version, root, `server.json packages[${p.identifier}] drifted`);
   }
+  const [maj, min] = root.split(".");
+  const support = readFileSync(join(ROOT, "SUPPORT.md"), "utf8");
+  assert.match(support, new RegExp(`^\\| Current \\| \`${maj}\\.${min}\\.x\` \\|`, "m"), "SUPPORT.md's Current line drifted");
 });
 
 // ---------------------------------------------------------------------------------------
 // verifyStamp — the pre-tag gate. Each case below is a way to reach a tag that publishes
 // nine packages and then fails, or publishes them under an empty release.
 // ---------------------------------------------------------------------------------------
+
+// SUPPORT.md's "Today" table, in the shape the real file has. Stamped to a version by the
+// fixture, so every tree starts consistent.
+const SUPPORT_SHAPE = `# Support
+
+| Line | Version | Status |
+|---|---|---|
+| Current | \`0.1.x\` | ✅ Supported · \`release/0.1.x\` |
+| Maintenance | \`0.0.x\` | ✅ Security and fail-closed fixes · \`release/0.0.x\` |
+| LTS | \`0.1.x\` | 🟢 **Available for designation** under a support agreement |
+| End of life | \`≤ 0.0.x\` | ⛔ |
+
+## What gets backported
+`;
+
+test("stampSupport: names the current, previous and end-of-life lines from the minor", () => {
+  const out = stampSupport(SUPPORT_SHAPE, "0.26.0");
+  assert.match(out, /^\| Current \| `0\.26\.x` \| ✅ Supported · `main` \|$/m);
+  assert.match(out, /^\| Maintenance \| `0\.25\.x` \| .*`release\/0\.25\.x`, cut when the first backport needs it \|$/m);
+  assert.match(out, /^\| LTS \| `0\.26\.x` \| 🟢 \*\*Available for designation\*\*/m);
+  assert.match(out, /^\| End of life \| `≤ 0\.24\.x` \| ⛔ \|$/m);
+  assert.ok(out.endsWith("## What gets backported\n"), "text outside the table must be untouched");
+});
+
+test("stampSupport: a patch release changes nothing, and a second stamp is a no-op", () => {
+  const once = stampSupport(SUPPORT_SHAPE, "0.26.0");
+  assert.equal(stampSupport(once, "0.26.3"), once);
+  assert.equal(stampSupport(once, "0.26.0"), once);
+});
+
+test("stampSupport: leaves a hand-added LTS row for a designated line alone", () => {
+  const withLts = SUPPORT_SHAPE.replace("| End of life", "| LTS (designated) | `0.20.x` | 🔒 until 2027-09 |\n| End of life");
+  assert.match(stampSupport(withLts, "0.26.0"), /^\| LTS \(designated\) \| `0\.20\.x` \| 🔒 until 2027-09 \|$/m);
+});
+
+test("stampSupport: refuses a new major and a table whose shape changed", () => {
+  assert.throws(() => stampSupport(SUPPORT_SHAPE, "1.0.0"), /new major/);
+  assert.throws(() => stampSupport(SUPPORT_SHAPE.replace(/^\| Maintenance .*$/m, ""), "0.26.0"), /"Maintenance" row/);
+});
+
+test("verifyStamp: catches a SUPPORT.md that still names the previous line", () => {
+  const dir = fixtureTree("0.19.0");
+  try {
+    writeFileSync(join(dir, "SUPPORT.md"), stampSupport(SUPPORT_SHAPE, "0.18.0"));
+    assert.deepEqual(verifyStamp("0.19.0", dir), ["SUPPORT.md names 0.18.x Current line, expected 0.19.x"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 /** A minimal but structurally real tree: root, two publishable packages, one private one,
  *  server.json with two entries, and a CHANGELOG. */
@@ -211,6 +264,7 @@ function fixtureTree(version, { changelogBody = "\n\n### Fixed\n\n- a thing\n" }
     ) + "\n",
   );
   writeFileSync(join(dir, "CHANGELOG.md"), `# Changelog\n\n## [Unreleased]\n\n## [${version}]${changelogBody}\n## [0.0.1]\n\n- old\n`);
+  writeFileSync(join(dir, "SUPPORT.md"), stampSupport(SUPPORT_SHAPE, version));
   return dir;
 }
 
@@ -218,6 +272,22 @@ test("verifyStamp: a fully stamped tree with notes has no complaints", () => {
   const dir = fixtureTree("0.19.1");
   try {
     assert.deepEqual(verifyStamp("0.19.1", dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stampTree: a minor release moves SUPPORT.md's lines with it", () => {
+  const dir = fixtureTree("0.19.0");
+  try {
+    writeFileSync(
+      join(dir, "CHANGELOG.md"),
+      "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- a thing\n\n## [0.19.0]\n\n- older\n",
+    );
+    const changed = stampTree("0.20.0", dir);
+    assert.ok(changed.includes("SUPPORT.md"), `SUPPORT.md was not stamped: ${changed}`);
+    assert.match(readFileSync(join(dir, "SUPPORT.md"), "utf8"), /^\| Maintenance \| `0\.19\.x` \|/m);
+    assert.deepEqual(verifyStamp("0.20.0", dir), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

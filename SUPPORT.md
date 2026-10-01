@@ -26,10 +26,10 @@ manifest, and it keeps working with no relationship to us.
 
 | Line | Version | Status |
 |---|---|---|
-| Current | `0.17.x` | ✅ Supported · `release/0.17.x` |
-| Maintenance | `0.16.x` | ✅ Security and fail-closed fixes · `release/0.16.x` |
-| LTS | `0.17.x` | 🟢 **Available for designation** under a support agreement — the current minor, so a line designated today starts at the newest code rather than one already superseded |
-| End of life | `≤ 0.11.x` | ⛔ |
+| Current | `0.26.x` | ✅ Supported · `main` |
+| Maintenance | `0.25.x` | ✅ Security and fail-closed fixes · `release/0.25.x`, cut when the first backport needs it |
+| LTS | `0.26.x` | 🟢 **Available for designation** under a support agreement — the current minor, so a line designated today starts at the newest code rather than one already superseded |
+| End of life | `≤ 0.24.x` | ⛔ |
 
 ---
 
