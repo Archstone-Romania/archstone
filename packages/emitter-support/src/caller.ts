@@ -58,20 +58,31 @@ export type FetchLike = typeof globalThis.fetch;
  *
  * `undefined` — an unset adapter, or one that cannot resolve this principal — is a fail-closed
  * refusal (D-3): a `sql`-bound invocation with no resolved identity claims never proceeds to a
- * connection. There is no "run with no session identity" path. An EMPTY claims object `{}` is
- * "no claims" too, and refuses identically (see `hasIdentityClaims`): it would set no session
- * GUC at all, which is exactly the unresolved case.
+ * connection. There is no "run with no session identity" path. Anything that is not a plain
+ * object of one or more non-empty string claims refuses identically (see `hasIdentityClaims`):
+ * an empty object `{}`, an empty-string or non-string claim value, or a non-object result (a
+ * string, an array, a function). Each would set no session GUC, an empty one, a NULL one, or
+ * meaningless ones, and RLS would then return zero rows — the unresolved case in disguise.
  */
 export type IdentityAdapter = (principal: string | undefined) => Record<string, string> | undefined;
 
 /**
  * ADR-0012 D-3 — whether an `identityAdapter` result counts as RESOLVED session identity:
- * a claims object with at least one own key. `undefined`, `null` and `{}` are all unresolved
- * and must refuse the same way. The one predicate both `invokeSql` (`providers/sql`) and the
- * D-8 negative isolation check (`@archstone/runtime`'s verify) use, so the two cannot drift.
+ * a plain object (prototype `Object.prototype` or `null`) with at least one own key, every own
+ * value a non-empty string. Everything else — `undefined`, `null`, `{}`, `{ tenantId: "" }`,
+ * a `null`/non-string value, a string, an array, or a function (e.g. `Object`, reached by
+ * looking up the principal `constructor` in a parsed identity map) — is unresolved and must
+ * refuse the same way. Takes `unknown` because adapters are often backed by `JSON.parse`d
+ * deployer input that the type system never checked. The one predicate both `invokeSql`
+ * (`providers/sql`) and the D-8 negative isolation check (`@archstone/runtime`'s verify) use,
+ * so the two cannot drift.
  */
-export function hasIdentityClaims(claims: Record<string, string> | null | undefined): claims is Record<string, string> {
-  return claims != null && Object.keys(claims).length > 0;
+export function hasIdentityClaims(claims: unknown): claims is Record<string, string> {
+  if (typeof claims !== "object" || claims === null || Array.isArray(claims)) return false;
+  const proto: unknown = Object.getPrototypeOf(claims);
+  if (proto !== Object.prototype && proto !== null) return false;
+  const values = Object.values(claims as Record<string, unknown>);
+  return values.length > 0 && values.every((v) => typeof v === "string" && v.length > 0);
 }
 
 /**
