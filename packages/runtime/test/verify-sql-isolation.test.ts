@@ -123,6 +123,36 @@ describe("verifyTool — ADR-0012 D-8 negative isolation test", () => {
       },
     ));
 
+  it("a negativeIdentity that resolves to an empty claims object is red, not a vacuous pass", () =>
+    withFixture(
+      { capabilityId: "reporting.portfolio-summary", request: { id: "1" }, negativeIdentity: { principal: "tenant-b" } },
+      async (dir) => {
+        const pool = fakePool([{ id: "1" }], []);
+        const base = opts(pool);
+        const r = await verifyTool(sqlTool(), dir, resources, {
+          ...base,
+          identityAdapter: (principal: string | undefined) => (principal === "tenant-b" ? {} : base.identityAdapter(principal)),
+        });
+        expect(r.status).toBe("red");
+        expect(r.detail).toBe("isolation not verified: negative identity did not resolve to any claims");
+      },
+    ));
+
+  it("a negativeIdentity that resolves to an empty-string claim value is red, not a vacuous pass", () =>
+    withFixture(
+      { capabilityId: "reporting.portfolio-summary", request: { id: "1" }, negativeIdentity: { principal: "tenant-b" } },
+      async (dir) => {
+        const pool = fakePool([{ id: "1" }], []);
+        const base = opts(pool);
+        const r = await verifyTool(sqlTool(), dir, resources, {
+          ...base,
+          identityAdapter: (principal: string | undefined) => (principal === "tenant-b" ? { tenantId: "" } : base.identityAdapter(principal)),
+        });
+        expect(r.status).toBe("red");
+        expect(r.detail).toBe("isolation not verified: negative identity did not resolve to any claims");
+      },
+    ));
+
   it("S-US5.4: the negative isolation test does not run for rest bindings (regression)", () =>
     withFixture({ capabilityId: "tourism.search", request: {} }, async (dir) => {
       const restTool: IRTool = {

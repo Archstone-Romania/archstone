@@ -125,6 +125,40 @@ describe("invokeSql — D-3 identity-adapter fail-closed gate", () => {
     expect(pool.connect).not.toHaveBeenCalled();
   });
 
+  it("refuses before any connection is used when identityAdapter returns an empty claims object", async () => {
+    const { pool } = fakePool([]);
+    const result = await invokeSql(tool, { id: "1" }, baseOpts(pool, { identityAdapter: () => ({}) }));
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(0);
+    expect(result.error).toContain("no session identity resolved for this caller");
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an empty-string claim value", { tenantId: "" }],
+    ["a null claim value", { tenantId: null }],
+    ["a string instead of a claims object", "beta"],
+    ["an array instead of a claims object", ["acme"]],
+  ])("refuses before any connection is used when identityAdapter returns %s", async (_label, claims) => {
+    const { pool } = fakePool([]);
+    const result = await invokeSql(tool, { id: "1" }, baseOpts(pool, { identityAdapter: () => claims }));
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no session identity resolved for this caller");
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("refuses the principal 'constructor' looked up in a parsed identity map (resolves to Object, not claims)", async () => {
+    const { pool } = fakePool([]);
+    const map = JSON.parse('{"tenant-a":{"tenantId":"acme"}}') as Record<string, Record<string, string>>;
+    const result = await invokeSql(tool, { id: "1" }, baseOpts(pool, {
+      identityAdapter: (principal: string | undefined) => (principal !== undefined ? map[principal] : undefined),
+      caller: { principal: "constructor" },
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no session identity resolved for this caller");
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
   it("a capability input literally named tenantId has no bearing on the session claim", async () => {
     const { pool, queries } = fakePool([]);
     await invokeSql(tool, { id: "1", tenantId: "attacker-supplied" }, baseOpts(pool));

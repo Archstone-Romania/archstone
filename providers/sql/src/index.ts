@@ -9,7 +9,7 @@
 
 import { Pool, type PoolConfig } from "pg";
 import type { IRTool } from "@archstone/compiler";
-import type { InvokeOptions as BaseInvokeOptions } from "@archstone/emitter-support";
+import { hasIdentityClaims, type InvokeOptions as BaseInvokeOptions } from "@archstone/emitter-support";
 
 export interface InvokeResult {
   ok: boolean;
@@ -194,9 +194,10 @@ export async function invokeSql(tool: IRTool, input: Record<string, unknown>, op
 
   // D-3: fail closed BEFORE any connection is used. No `identityAdapter` configured, or one
   // that cannot resolve THIS principal, refuses the call outright — there is no "run with no
-  // session identity" path.
+  // session identity" path. An empty claims object `{}` is unresolved too: it would set no
+  // session GUC, so it refuses with the same message as `undefined`.
   const claims = opts.identityAdapter?.(opts.caller?.principal);
-  if (!claims) {
+  if (!hasIdentityClaims(claims)) {
     return {
       ok: false,
       status: 0,
