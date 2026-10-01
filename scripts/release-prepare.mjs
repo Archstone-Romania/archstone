@@ -1,5 +1,5 @@
 // Stamp the repository for a release: every publishable package.json, the root
-// package.json, server.json, and the CHANGELOG heading.
+// package.json, server.json, SUPPORT.md's version table, and the CHANGELOG heading.
 //
 // This is the half of the release that release.yml deliberately does NOT do. That workflow
 // VERIFIES the tagged commit is stamped and refuses to publish otherwise (see its "Assert
@@ -119,6 +119,59 @@ export function stampServerJson(text, version) {
         `rewrote ${n}. The manifest's shape changed — update this script rather than shipping a ` +
         `half-stamped registry manifest.`,
     );
+  }
+  return out;
+}
+
+/**
+ * SUPPORT.md's "Today" table names the Current, Maintenance and LTS-eligible lines and where
+ * End of life starts. It was edited by hand in each release commit up to 0.17.0; once the
+ * stamping moved into this script nothing touched it, and it said 0.17.x through nine
+ * releases. It is the page a buyer reads before signing a support agreement, so it is
+ * stamped like everything else.
+ *
+ * The rows follow from the minor alone, so a patch release changes nothing. A designated LTS
+ * line gets its own row by hand; this rewrites only the four rows below and leaves any other
+ * row alone.
+ */
+export function stampSupport(text, version) {
+  const v = parseVersion(version);
+  if (!v) throw new Error(`version must be X.Y.Z with no leading "v": got "${version}"`);
+  if (v.minor === 0) {
+    throw new Error(
+      `SUPPORT.md: ${version} opens a new major, so the Maintenance line is a decision, not ` +
+        `arithmetic — edit the "Today" table by hand and stamp the rest.`,
+    );
+  }
+  const line = (minor) => `\`${v.major}.${minor}.x\``;
+  const eol = v.minor >= 2 ? `\`≤ ${v.major}.${v.minor - 2}.x\`` : "none yet";
+  const rows = [
+    ["Current", `| Current | ${line(v.minor)} | ✅ Supported · \`main\` |`],
+    [
+      "Maintenance",
+      `| Maintenance | ${line(v.minor - 1)} | ✅ Security and fail-closed fixes · ` +
+        `\`release/${v.major}.${v.minor - 1}.x\`, cut when the first backport needs it |`,
+    ],
+    [
+      "LTS",
+      `| LTS | ${line(v.minor)} | 🟢 **Available for designation** under a support agreement — ` +
+        `the current minor, so a line designated today starts at the newest code rather than ` +
+        `one already superseded |`,
+    ],
+    ["End of life", `| End of life | ${eol} | ⛔ |`],
+  ];
+  let out = text;
+  for (const [label, row] of rows) {
+    const re = new RegExp(`^\\| ${label} \\| (?:\`[^\`]*\`|none yet) \\|.*$`, "gm");
+    const hits = out.match(re) ?? [];
+    if (hits.length !== 1) {
+      throw new Error(
+        `SUPPORT.md: expected exactly one "${label}" row in the "Today" table, found ` +
+          `${hits.length}. The table's shape changed — update this script rather than ` +
+          `shipping a support page that names the wrong versions.`,
+      );
+    }
+    out = out.replace(re, row);
   }
   return out;
 }
@@ -279,6 +332,9 @@ export function stampTree(version, root = ROOT) {
   const serverAbs = join(root, "server.json");
   pending.push([serverAbs, "server.json", stampServerJson(readFileSync(serverAbs, "utf8"), version)]);
 
+  const supportAbs = join(root, "SUPPORT.md");
+  pending.push([supportAbs, "SUPPORT.md", stampSupport(readFileSync(supportAbs, "utf8"), version)]);
+
   const changelogAbs = join(root, "CHANGELOG.md");
   const fragments = readFragments(root);
   pending.push([
@@ -336,6 +392,13 @@ export function verifyStamp(version, root = ROOT) {
         `server.json .packages[${i}] (${p.identifier ?? "?"}) is ${p.version}, expected ${version}`,
       );
     }
+  }
+
+  const { major, minor } = parseVersion(version);
+  const support = readFileSync(join(root, "SUPPORT.md"), "utf8");
+  const current = /^\| Current \| `([^`]*)` \|/m.exec(support)?.[1];
+  if (current !== `${major}.${minor}.x`) {
+    problems.push(`SUPPORT.md names ${current ?? "no"} Current line, expected ${major}.${minor}.x`);
   }
 
   // A fragment still here at tag time was merged after the release was prepared: its change
