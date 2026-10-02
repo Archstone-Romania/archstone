@@ -1,7 +1,27 @@
 # ADR-0012: A Database Is a First-Class Backend — the `sql` Provider
 
-**Status:** 🚧 Draft — not accepted. Circulated for review; nothing in this document is
-implemented and no schema/IR change described here has landed.
+**Status:** 🚧 Draft — not accepted. Circulated for review. The decision is still a draft, but
+D-1–D-9 have partly shipped ahead of acceptance (`providers/sql`, `IRSqlConnector`,
+`invokeConnector`); where shipped code and this text disagreed, the amendments below say which
+one moved.
+
+**Amended (2026-10-02),** from the design for #87 (`archstone init` from a Postgres catalog).
+Decision text is edited in place; this list is what moved:
+
+1. **D-10, introspection path.** `init` reads the catalog through `providers/sql`'s
+   `introspectCatalog`, which shares `ensureConnection` (D-9 layers 3–4) and D-4's read-only
+   transaction — not through `invokeConnector` over a synthetic `IRTool`. "D-9 runs for `init`
+   for free" is unchanged.
+2. **D-10, effect.** The effect *hint* is always `read`; the confirmed effect is recorded as the
+   human gave it.
+3. **D-3/D-8, identity.** `GoldenFixture` gains `identity?: { principal }`, the positive leg's
+   principal when no caller principal is supplied. D-3 now defines "resolved claims" exactly
+   (a plain object with at least one key, every value a non-empty string); D-8 points at it.
+4. **D-10, scoping.** Catalog scoping is by `has_table_privilege`/`has_column_privilege`
+   (`SELECT`), not by catalog visibility; partitions fold into their parent; foreign tables are
+   deferred.
+5. **D-6, location.** `invokeConnector` ships from `@archstone/runtime/connector`, not an
+   `@archstone/emitter-support/connector` subpath — correcting drift, no behaviour change.
 
 **Note:** two independent architect drafts of this decision existed. This one — with connector
 dispatch centralized once in a new subpath (D-6) — was chosen by Adrian on 2026-09-24 over the
@@ -198,12 +218,19 @@ identityAdapter?: (principal: string | undefined) => Record<string, string> | un
   (`identityAdapter` lives on the shared invoke-context type), but *acting on resolved identity*
   is connector-specific mechanics, exactly as `${caller.principal}` interpolation is REST-only
   mechanics over the same shared `CallerContext.principal`.
-- **Absence fails closed.** A `sql`-bound capability whose `identityAdapter` returns `undefined`
+- **Absence fails closed.** A `sql`-bound capability whose `identityAdapter` returns no claims
   (unset adapter, or an adapter that cannot resolve this principal) refuses the call before any
   connection is used — `invokeSql`'s equivalent of ADD-32's "no caller credential" gate. There is
   no silent "run with no session identity" path; a `SELECT` executed with no GUC set would rely
   entirely on the DBA's RLS policy defaulting to deny-on-absent, which this design does not want
   to depend on as its only safety net.
+- **"Returned no claims" is defined by shape, not truthiness.** Claims count as resolved only
+  when the result is a plain object with at least one key and every value a non-empty string.
+  Anything else — `undefined`, `{}`, `{ tenantId: "" }`, a `null` or non-string value, a string,
+  an array, a function — is unresolved and refuses identically, because each would set no GUC,
+  an empty one, or a meaningless one, and RLS would then return zero rows: the unresolved case in
+  disguise. One predicate (`hasIdentityClaims`, in `@archstone/emitter-support`) decides this for
+  both `invokeSql` and D-8's negative replay, so the two cannot drift.
 - **This closes the ADD-30/ADD-42-class drift risk by construction, not by discipline**: because
   `identityAdapter` needs no new per-surface wiring (it rides the same shared `InvokeOptions` bag
   every entry point already forwards, and is invoked from the one dispatch function in D-6),
@@ -297,19 +324,25 @@ switches on `tool.connector?.type` and calls the right adapter (or returns a cle
 `invokeConnector`; none imports `invokeRest`/`invokeSql` directly any more except
 `invokeConnector` itself.
 
-**Where it lives, and why not `@archstone/emitter-support`'s root.** `emitter-support`'s own
-header states its purity contract: "IR-only: no MCP SDK, no fs, no HTTP." `invokeConnector`
+**Where it lives, and why not `@archstone/emitter-support`.** `emitter-support`'s own header
+states its purity contract: "IR-only: no MCP SDK, no fs, no HTTP." `invokeConnector`
 necessarily depends on both an HTTP-capable package (`providers/rest`) and a TCP-capable one
 (`providers/sql`) — putting it in the pure root would break that contract for every existing
-consumer of `emitter-support`'s neutral pieces (Registry, the mapper, the policy evaluator). The
-fix reuses a precedent this codebase already applied once, for exactly this shape of problem:
-internal ADD-37 R-2 kept `@archstone/runtime`'s root pure while adding an I/O-touching
+consumer of `emitter-support`'s neutral pieces (Registry, the mapper, the policy evaluator). A
+subpath of `emitter-support` does not work either: both providers depend on `emitter-support`
+for the shared `CallerContext`/`InvokeOptions` base (D-3), so a subpath there importing them back
+would be a circular *workspace* dependency, and `pnpm -r build` would have no topological order.
+The fix reuses a precedent this codebase already applied once, for exactly this shape of
+problem: internal ADD-37 R-2 kept `@archstone/runtime`'s root pure while adding an I/O-touching
 `recordContract` behind a dedicated `@archstone/runtime/verify` subpath — "a bundler can
 tree-shake an import, not a method," so a separate subpath keeps the pure root pure for anyone
-who never imports the new one. This ADR does the same: `invokeConnector` ships from a new
-`@archstone/emitter-support/connector` subpath, in its own source file, leaving `src/index.ts`
-(the pure root) untouched. `agent`, `runtime`, and `cli` import the subpath; nobody who imports
-only the root pulls in `pg` or `fetch`-adjacent code.
+who never imports the new one. `@archstone/runtime` already sits above both providers, so
+`invokeConnector` ships from the `@archstone/runtime/connector` subpath, in its own source file.
+Beside it, `@archstone/runtime/connector-rest` is the edge-safe half (`rest` plus the
+not-implemented and no-connector results, never `pg`), and is the default dispatcher for
+`callTool` and `agent`'s `execute()`, so neither gains a static edge to `pg` (D-5). Node-only
+callers — `verify`, and the CLI's stdio `serve` — use or inject the full `./connector`. Nobody
+who imports only a root pulls in `pg`.
 
 ### D-7. Contract/fixture shape — reused verbatim, no IR/schema change
 
@@ -365,14 +398,23 @@ only for `sql`-connector bindings:
 ```ts
 interface GoldenFixture {
   // ...existing fields unchanged...
+  identity?: { principal: string };         // the positive leg's principal, sql bindings only
   negativeIdentity?: { principal: string }; // a DIFFERENT tenant's principal, sql bindings only
 }
 ```
 
+`identity` exists because the claims half of a verify-time identity is configurable from the CLI
+(an identity map behind `identityAdapter`) but the principal half is not: `archstone verify`
+supplies no caller principal, so without it `identityAdapter(undefined)` resolves nothing and
+every contract-bearing `sql` binding is red before isolation is considered. The fixture records
+the positive principal next to the negative one, and the replay uses it only when no caller
+principal was supplied. No new `verify` flag.
+
 **Mechanics, inside `runVerify`'s existing per-binding loop, for `sql` connectors only:**
 
-1. Replay the fixture's `request` under the operator's configured verify-time identity (resolved
-   through the same `identityAdapter`) — the existing green/yellow/red path, unchanged.
+1. Replay the fixture's `request` under the caller principal if one was supplied, otherwise
+   under the fixture's `identity` (either resolved through the same `identityAdapter`) — the
+   existing green/yellow/red path, unchanged.
 2. If `negativeIdentity` is present, replay the **identical** request under that principal
    (resolved through the same `identityAdapter`, but the different principal produces different
    claims) and assert the result set is **empty**. A non-empty result here is a hard `🔴`, with a
@@ -382,9 +424,10 @@ interface GoldenFixture {
    `🔴` — "isolation not verified: no negative identity recorded" — mirroring success criterion 4
    verbatim ("a binding without a recorded negative result is not verified").
 4. **Confirmed behavior, not left implicit:** if `negativeIdentity` **is** present but the
-   configured `identityAdapter` cannot resolve it — returns `undefined` for that principal, the
-   same "cannot resolve" outcome D-3 already treats as a fail-closed refusal for a real
-   invocation — the binding is `🔴`, with its own distinct detail
+   configured `identityAdapter` cannot resolve it — returns anything D-3 does not count as
+   resolved claims (`undefined`, `{}`, an empty-string value, a non-object), the same "cannot
+   resolve" outcome D-3 already treats as a fail-closed refusal for a real invocation — the
+   binding is `🔴`, with its own distinct detail
    ("isolation not verified: negative identity did not resolve to any claims"). This is
    deliberately **the same outcome as case 3 (absent)**, not a separate, softer status and never
    a silent skip or an automatic green: an isolation test that cannot be run is exactly as
@@ -486,17 +529,32 @@ Follows the precedent internal ADD-37 already established for the OpenAPI adapte
 its machinery rather than duplicating it:
 
 - **A new `SourceAdapter` under `packages/init/src/adapters/postgres/`.** Unlike the OpenAPI
-  adapter (a pure, static document parse), this adapter is inherently *live*: it reads
-  `information_schema.tables`/`information_schema.columns`/`information_schema.views` over a
-  real, read-only connection using the runtime role — so `init` can only ever propose what the
-  runtime role can already `SELECT`, which is precisely what makes the curated-view topology the
-  path of least resistance rather than a lecture (the product brief's journey 5.1).
-- **Reuses `invokeConnector`/`invokeSql` (D-6), not a bespoke ad-hoc `pg` client inside
-  `packages/init`.** The adapter issues its `information_schema` queries through the same
-  dispatch function `verify` uses, over a synthetic, ephemeral `IRTool`-shaped query — never a
-  second, parallel connection/session/role-check implementation. This means D-9's over-privileged
-  check runs for `init`'s own introspection connection for free: pointing `init` at a superuser
-  DSN refuses immediately, consistently with everywhere else.
+  adapter (a pure, static document parse), this adapter's input is *live*: the catalog, read
+  over a real, read-only connection using the runtime role. Scoping is by the role's effective
+  privileges — `has_table_privilege(…, 'SELECT')` and `has_column_privilege(…, 'SELECT')`,
+  which count `PUBLIC` and inherited membership, the same visibility D-9 layer 4 relies on — not
+  by what the catalog merely lets the role *see*. Tables, partitioned tables, views and
+  materialized views are proposed; partitions fold into their parent; foreign tables are
+  reported and deferred (RLS cannot be enabled on them, and reading one reaches a third host).
+  So `init` can only ever propose what the runtime role can already `SELECT`, which is
+  precisely what makes the curated-view topology the path of least resistance rather than a
+  lecture (the product brief's journey 5.1).
+- **Reads the catalog through `providers/sql`, not a bespoke ad-hoc `pg` client inside
+  `packages/init`.** The host issues its catalog queries through `providers/sql`'s
+  `introspectCatalog`, which shares `ensureConnection` (D-9 layers 3–4: the same pool cache, the
+  same check, the same messages) and D-4's read-only transaction; the adapter itself stays a
+  pure function of the snapshot it is handed. It sets no session identity because it runs no
+  declared query: D-3's gate protects tenant rows read by a declared query, and the catalog has
+  no tenant rows, is not subject to RLS, and is read with constant query text no author or
+  caller can influence. It does **not** go through `invokeConnector` over a synthetic
+  `IRTool` — that would need a fabricated `identityAdapter` to pass D-3's gate (a hole in the
+  very gate it exists for), would move SQL authoring out of the one package that owns `pg`, and
+  would push a meaningless tool through the policy evaluator and response mapper. An
+  "introspection" flag on the invocation path was refused for the same reason: a flag on the
+  invocation path is a flag someone will set on a real invocation. Either way there is never a
+  second, parallel connection/role-check implementation, so D-9's over-privileged check runs
+  for `init`'s own introspection connection for free: pointing `init` at a superuser DSN
+  refuses immediately, consistently with everywhere else.
 - **Column → CDL semantic type**, from `information_schema.columns` ground truth (`is_nullable`,
   `data_type`) rather than a spec's possibly-stale declaration — actually *more* reliable than
   the OpenAPI adapter's declared/observed distinction, since this is the catalog itself. Required
@@ -508,24 +566,29 @@ its machinery rather than duplicating it:
   (`column-type-not-expressible`), mirroring ADD-37's own precedent for an unmappable OpenAPI
   construct (`field-path-not-expressible`) — a tool limitation, not a CDL gap, and not proposed
   as a new semantic type here.
-- **`effect` is always `read`** (v1 is read-only by construction) but is still routed through the
+- **The effect hint is always `read`** (v1 is read-only by construction), routed through the
   same human-confirmed Decision Record ADD-37 D-3/D-4 established, for one-mental-model
-  consistency across adapters rather than a special case.
+  consistency across adapters rather than a special case. **The confirmed effect is recorded as
+  the human gave it.** `effect` is human-confirmed, never inferred; an `init` that rewrote a
+  confirmed `write` to `read` would be inferring it. Over-declaration is the safe direction —
+  more confirmation, no probe — and refusing it would make `init` reject an answer the compiler
+  accepts.
 - **The probe leg extends `recordContract`, and a SQL capability is never proposed with a
   contract but no isolation test.** When `init` offers to record a fixture for a proposed SQL
   capability, it also prompts for (or, non-interactively, requires) a second identity to record
-  as `negativeIdentity` (D-8) in the same step. If the negative probe cannot be attempted — no
-  second identity available, non-interactive mode with none supplied — `init` records **no**
-  `contract:` for that capability at all (extending the existing "contract is all-or-nothing,"
-  ADD-37 Challenge 2 item 3, rather than emitting a testable-looking contract with no isolation
-  proof).
+  as `negativeIdentity` (D-8) in the same step, and records the positive principal as the
+  fixture's `identity` so a later `verify` can replay both legs. If the negative probe cannot
+  be attempted — no second identity available, non-interactive mode with none supplied —
+  `init` records **no** `contract:` for that capability at all (extending the existing
+  "contract is all-or-nothing," ADD-37 Challenge 2 item 3, rather than emitting a
+  testable-looking contract with no isolation proof).
 - **Loop structure is identical to the OpenAPI adapter's**: temp-dir materialize → `load` →
   `validateSemantics` → `compile` → `new Registry()` (tool-name collision refusal, ADD-30) →
   record-and-verify-green-before-commit → write only on success. "Adding an adapter must touch no
   file outside `adapters/`" (ADD-37 D-1) holds here more cleanly than it did for OpenAPI — there
-  is no multi-document `$ref`-closure problem — **provided `providers/sql`/`invokeConnector`
-  (D-1–D-6 of this ADR) land first**; this adapter is a downstream consumer of this ADR's core
-  work, not a parallel effort.
+  is no multi-document `$ref`-closure problem — **provided `providers/sql` (with
+  `introspectCatalog`) and `invokeConnector` (D-1–D-6 of this ADR) land first**; this adapter
+  is a downstream consumer of this ADR's core work, not a parallel effort.
 
 ---
 
@@ -537,10 +600,10 @@ its machinery rather than duplicating it:
 | `compiler/src/ir.ts` | `IRSqlConnector`; `IRConnector.sql?` | Yes — `IR.version` stays `"0"` |
 | `compiler/src/validate.ts` | New error `connector-type-not-implemented` for `graphql`/`grpc`/`soap`; new checks for `sql.query`/`params` consistency and `statementKind` vs. leading keyword | Yes (new diagnostics only) |
 | `response.schema.json`, `contract.schema.json`, `IRContract`, `IRResponseMapping` | **Unchanged** | n/a |
-| `GoldenFixture` (TS interface, unschema'd) | `negativeIdentity?: { principal: string }` | Yes |
+| `GoldenFixture` (TS interface, unschema'd) | `identity?: { principal: string }`, `negativeIdentity?: { principal: string }` | Yes |
 | `@archstone/emitter-support` root (`CallerContext`, base `InvokeOptions`) | Relocated from `providers/rest`; `identityAdapter?` added to the base | Additive; `providers/rest` re-exports the type for compatibility |
-| `@archstone/emitter-support/connector` (new subpath) | `invokeConnector(tool, input, opts)` | New surface, pure root untouched |
-| `providers/sql` (new package) | `invokeSql`, mirroring `invokeRest`'s `InvokeResult` shape | New package |
+| `@archstone/runtime/connector` (new subpath) | `invokeConnector(tool, input, opts)`; edge-safe `rest`-only half at `@archstone/runtime/connector-rest` | New surface, pure root untouched |
+| `providers/sql` (new package) | `invokeSql`, mirroring `invokeRest`'s `InvokeResult` shape; `ensureConnection`; `introspectCatalog` for `init` (D-10) | New package |
 | `packages/init/src/adapters/postgres/` (new) | Postgres `SourceAdapter` | New, downstream of the above |
 
 No change to `cdl.schema.json` — capabilities remain implementation-blind by construction; every
@@ -574,7 +637,8 @@ change above is binding/provider/IR-side.
 | Identity carried as a query parameter (`WHERE tenant_id = $1` bound from `caller.tenantId`) | Puts the isolation boundary back in binding-authored text — exactly what "the YAML author is not part of the security boundary" forbids. A forgotten predicate would leak; the session-GUC/RLS design makes the predicate irrelevant to correctness |
 | `${caller.NAME}`-style templating inside `sql.query`, symmetric with REST's header/body templating | Reintroduces string-built SQL text at the one place it must never exist; REST's templating is safe because it only ever changes *where a request goes or what it carries*, never *what a database executes* |
 | Dispatch logic duplicated in each of the four invocation call sites | The exact defect class internal ADD-30 already found and fixed once (two independently-buggy hand-rolled indexes); centralizing in one new subpath costs one file |
-| Putting `invokeConnector` in `@archstone/emitter-support`'s pure root | Breaks that package's own "IR-only: no MCP SDK, no fs, no HTTP" contract for every existing pure consumer; the subpath precedent (ADD-37 R-2) solves this for free |
+| Putting `invokeConnector` in `@archstone/emitter-support` (root or subpath) | The root breaks that package's own "IR-only: no MCP SDK, no fs, no HTTP" contract for every existing pure consumer; a subpath makes a circular workspace dependency, since both providers depend on `emitter-support`. A `@archstone/runtime` subpath (precedent: ADD-37 R-2) solves both |
+| `init` introspection through `invokeConnector` over a synthetic `IRTool`, or an "introspection" flag on `invokeSql` | The first needs a fabricated `identityAdapter` to pass D-3's gate and authors SQL outside `providers/sql`; the second is a flag on the invocation path that someone will set on a real invocation. `introspectCatalog` shares `ensureConnection` and D-4's read-only transaction instead (D-10) |
 | RLS/GUC session state as an explicit binding-authored `SET LOCAL` statement, symmetric with the declared query | Reopens exactly the "manifest author is part of the security boundary" problem this design exists to close — a binding author could omit or mis-author the `SET`, and nothing would catch it |
 
 ---
@@ -587,7 +651,7 @@ change above is binding/provider/IR-side.
 | R-2 | A DBA-authored RLS policy defaults to permissive when the session GUC is unset, silently widening the boundary if `identityAdapter` is ever accidentally left unconfigured | M | H | D-3's fail-closed-on-absent-identity gate means an unconfigured adapter refuses every `sql` invocation rather than running with no GUC set — the two failure modes must both hold, and are documented together in the topology guide (a docs follow-up, not code) |
 | R-3 | The negative-isolation fixture format (`negativeIdentity`, unschema'd) drifts from what `verify` expects, the same class of risk ADD-37 already named for the golden-fixture format generally | M | M | Pin with a round-trip test (record → `runVerify` → red-without/green-with, per D-8); schema question deferred exactly as ADD-37 O-11 deferred it for the base fixture |
 | R-4 | Postgres native-type → JSON coercion (bigint, numeric, timestamp, uuid) disagrees between what `init` observes at probe time and what a later driver version produces, causing a false drift signal | M | M | Pin the driver's type-parser configuration explicitly (no reliance on ambient defaults) as part of `providers/sql`'s own test suite, not left to each deployer's `pg` version |
-| R-5 | `init`'s Postgres adapter ships before `providers/sql`/`invokeConnector` (D-1–D-6), forcing it to open its own ad-hoc connection and duplicating the exact mechanism this ADR centralizes | L (sequencing is stated) | H | D-10 states the dependency order explicitly; implementation guidance below sequences accordingly |
+| R-5 | `init`'s Postgres adapter ships before `providers/sql` (`ensureConnection`, `introspectCatalog`) (D-1–D-6, D-10), forcing it to open its own ad-hoc connection and duplicating the exact mechanism this ADR centralizes | L (sequencing is stated) | H | D-10 states the dependency order explicitly; implementation guidance below sequences accordingly |
 | R-6 | Premature Phase-2 (edge/Hyperdrive) complexity creeps into v1 because "it would be nice to also run this on Workers" | L | M | D-5 draws the exclusion boundary now and builds no accommodation for it; a data-proxy decision is explicitly deferred to a real customer demand, per the product brief |
 | R-7 | The ownership check (D-9, layer 4) misses a grant the connecting role holds but that is not visible in the checking session — most plausibly a `NOINHERIT` role membership the connection has not `SET ROLE`'d into, or a path to data reached through a `SECURITY DEFINER` function rather than a direct table/view grant | L | H | Named explicitly in D-9 rather than folded into a general "best effort" disclaimer, so the topology guide can say precisely what is and is not covered. The mitigation is operational, not code: the documented default topology (a runtime role granted directly on a curated view schema, no role-membership indirection, no `SECURITY DEFINER` in the exposed surface) is exactly the shape under which this check is complete, and `archstone init`'s own output never produces the shape that would evade it |
 
@@ -595,11 +659,13 @@ change above is binding/provider/IR-side.
 
 ## Open Questions
 
-1. **Verify-time identity source.** D-8 assumes an operator/CI-configured "verify identity" the
-   positive replay runs under, resolved through the same `identityAdapter`. This needs a concrete
-   CLI/CI wiring (an env var? a `--verify-caller` flag?) that this ADR has not fully specified —
-   left for the implementation issue, since it does not affect the IR/schema/dispatch design
-   above. Confirmed as genuinely open, not a gap in this ADR: whichever wiring is chosen, D-8's
+1. **Verify-time identity source.** *Partly answered (2026-10-02).* D-8's positive replay needs
+   claims and a principal. The claims half is the CLI's identity map behind `identityAdapter`;
+   the principal half is now the fixture's own `identity` (D-8), used when no caller principal
+   is supplied — no `--verify-caller` flag. Still open: whether `verify` should also accept a
+   caller principal from the environment for hand-written fixtures that record none — left for
+   the implementation issue, since it does not affect the IR/schema/dispatch design above.
+   Whichever wiring is chosen, D-8's
    fourth case (negative identity present but unresolved ⇒ 🔴, same as absent) already fixes the
    *behavior* independent of *how* the identity is supplied, so the BA's acceptance criteria can
    be written against that behavior now without waiting on this question.
@@ -619,7 +685,7 @@ change above is binding/provider/IR-side.
 
 1. **`@archstone/emitter-support`**: relocate `CallerContext` and the connector-agnostic half of
    `InvokeOptions`; add `identityAdapter?`; `providers/rest` re-exports the type. New
-   `@archstone/emitter-support/connector` subpath housing `invokeConnector` — stubbed to call
+   `@archstone/runtime/connector` subpath housing `invokeConnector` (D-6) — stubbed to call
    `invokeRest` only, for now, so this step is independently shippable and non-breaking.
 2. **`connector.schema.json` + `compiler/src/ir.ts`/`compile.ts`/`validate.ts`**: add the `sql`
    object, `IRSqlConnector`, the query/params/statementKind static checks, and the
@@ -629,8 +695,11 @@ change above is binding/provider/IR-side.
 4. **`runtime/src/verify.ts`**: route `verifyTool`/`recordContract` through `invokeConnector`;
    implement the negative-isolation replay (D-8) for `sql` connectors.
 5. **`agent/src/execute.ts`, `runtime/src/server.ts`**: route `executeCapability`/`callTool`
-   through `invokeConnector`.
-6. **`packages/init/src/adapters/postgres/`**: build only after steps 1–4 land, per D-10/R-5.
+   through the edge-safe `@archstone/runtime/connector-rest` by default, accepting the full
+   `invokeConnector` only as a caller-supplied override (D-5/D-6).
+6. **`packages/init/src/adapters/postgres/`**: build only after steps 1–4 land, per D-10/R-5,
+   with `introspectCatalog` added to `providers/sql` and `GoldenFixture.identity` to
+   `runtime/src/verify.ts` in the same series.
 7. **Docs**: the topology guide (curated-view default, RLS-on-base-tables alternative, the
    fail-closed role check's exact error text) — a tech-writer follow-up once the mechanism above
    is implemented, not before.
