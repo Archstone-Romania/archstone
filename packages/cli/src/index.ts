@@ -759,6 +759,10 @@ function flagArg(argv: string[], name: string): { value?: string; idx: number } 
  * integration — a deployer embedding Archstone directly still supplies a real
  * `identityAdapter` function (SF-7 remains a programmatic, non-CLI surface there).
  *
+ * The map is only the claims half of a verify-time identity: `archstone verify` supplies no
+ * caller principal, so a `sql` fixture names the positive leg's principal itself in
+ * `identity: { principal }`, beside `negativeIdentity` (ADR-0012 D-8; see `GoldenFixture`).
+ *
  * `--sql-guc-prefix`/`ARCHSTONE_SQL_GUC_PREFIX` is the same treatment for D-4's
  * `sqlSessionGucPrefix` (default `"app."`, unchanged if neither is set).
  *
