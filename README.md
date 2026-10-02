@@ -391,6 +391,6 @@ pnpm 11+; `pnpm typecheck && pnpm test` should be green before you open a PR.
 
 ## License
 
-[Apache-2.0](LICENSE).
+Copyright 2026 NousVigil LLC. Licensed under [Apache-2.0](LICENSE); see also [NOTICE](NOTICE).
 
 *Archstone · schema-first · Capability Platform*
