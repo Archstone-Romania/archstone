@@ -200,7 +200,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add -A
-          git commit -m "chore(release): stamp $V
+          git commit -s -m "chore(release): stamp $V
 
           Stamped by .github/workflows/release-prepare.yml. Versions only — no behaviour
           change. Merging this makes main's tree agree with the tag that follows, which is
