@@ -160,6 +160,15 @@ export interface GoldenFixture {
   request: Record<string, unknown>;
   expects?: { collectionNonEmpty?: boolean };
   /**
+   * ADR-0012 D-8 — the positive leg's principal, `sql`-connector bindings only. Used by
+   * `verifyTool` to replay the fixture's `request` ONLY when no caller principal was supplied
+   * (`archstone verify` supplies none: an `--identity-map` configures the claims half of a
+   * verify-time identity, and this records the principal half). A caller principal supplied by
+   * the host always wins; `rest` bindings ignore this field. Unschema'd, like
+   * `negativeIdentity`.
+   */
+  identity?: { principal: string };
+  /**
    * ADR-0012 D-8 — a DIFFERENT tenant's principal, `sql`-connector bindings only. Every `sql`
    * binding with a recorded `contract` must also have this recorded, or `runVerify` marks it
    * 🔴 (BR-17). Unschema'd, exactly like the rest of `GoldenFixture` (internal ADD-37 O-11) —
@@ -244,8 +253,27 @@ async function checkNegativeIsolation(tool: IRTool, fixture: GoldenFixture, opts
   return undefined;
 }
 
+/**
+ * ADR-0012 D-8 mechanics step 1 — the options the positive leg replays under. For a `sql`
+ * binding with no caller principal (the CLI's case) and a recorded `fixture.identity`, the
+ * fixture's principal stands in, resolved through the same `identityAdapter`. Otherwise —
+ * a caller principal supplied, no `identity` recorded, or a non-`sql` binding — `opts` is
+ * returned untouched, so an old `sql` fixture still refuses with "no session identity
+ * resolved" exactly as before.
+ */
+function positiveLegOptions(tool: IRTool, fixture: GoldenFixture, opts?: InvokeOptions): InvokeOptions | undefined {
+  if (tool.connector?.type !== "sql") return opts;
+  if (opts?.caller?.principal !== undefined || !fixture.identity) return opts;
+  return { ...opts, caller: { ...opts?.caller, principal: fixture.identity.principal } };
+}
+
 /** Verify one tool's contract against the live backend. Returns green/yellow/red — never
- *  throws (a network/fs failure is itself a red result, not an exception the CLI must catch). */
+ *  throws (a network/fs failure is itself a red result, not an exception the CLI must catch).
+ *
+ *  For a `sql` binding, the positive replay runs under the caller principal when one is
+ *  supplied, otherwise under the fixture's recorded `identity` (ADR-0012 D-8); the negative
+ *  isolation leg always runs under `negativeIdentity`. Policy evaluation still sees only the
+ *  caller principal. */
 export async function verifyTool(tool: IRTool, dir: string, resources: IRResourceRegistry, opts?: InvokeOptions): Promise<ToolVerification> {
   const base = { capabilityId: tool.id };
   const contract = tool.contract;
@@ -299,7 +327,7 @@ export async function verifyTool(tool: IRTool, dir: string, resources: IRResourc
   const isolationDetail = await checkNegativeIsolation(tool, fixture, opts);
   if (isolationDetail) return { ...base, status: "red", detail: isolationDetail };
 
-  const result = await invokeConnector(tool, fixture.request, opts);
+  const result = await invokeConnector(tool, fixture.request, positiveLegOptions(tool, fixture, opts));
   if (!result.ok) return { ...base, status: "red", detail: `live request failed: ${result.error ?? `status ${result.status}`}` };
 
   const liveFingerprint = fingerprintShape(result.data);
