@@ -28,7 +28,9 @@ Node 22+ · pnpm 11+. When running a single test file directly with `pnpm exec v
    `<slug>.<category>.md`, or say why there is nothing to record — see
    [The changelog](#the-changelog). Don't edit `CHANGELOG.md`'s `[Unreleased]` section directly:
    every PR editing it conflicts with every other one, and the release folds the files in for you.
-4. Open a PR against `main`. CI runs typecheck, test and the release-script tests on every PR,
+4. Sign off every commit with `git commit -s` — see
+   [Licensing of contributions](#licensing-of-contributions).
+5. Open a PR against `main`. CI runs typecheck, test and the release-script tests on every PR,
    plus the two changelog checks.
 
 Small, focused PRs merge fastest. For anything larger (a new provider type, a change to the
@@ -166,7 +168,21 @@ ADR — alternatives considered, argued by a person. Open an issue first.
 
 By participating you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## License
+## Licensing of contributions
 
-By contributing, you agree that your contributions are licensed under the
-[Apache-2.0 License](LICENSE).
+Archstone is licensed under the [Apache License 2.0](LICENSE). Under section 5 of that licence,
+anything you submit is licensed under Apache-2.0 too ("inbound = outbound"). You keep the
+copyright in your contribution: the project asks for no copyright assignment and no CLA.
+
+Instead, every commit carries a sign-off certifying the
+[Developer Certificate of Origin 1.1](https://developercertificate.org):
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+`git commit -s` adds it from your git config; `git rebase --signoff main` adds it to every commit
+on a branch you already wrote. By signing off you certify that you wrote the contribution, or
+otherwise have the right to submit it under Apache-2.0 — including any AI-generated material in it
+(see [Generative AI](#generative-ai)). Use your real name, and don't sign off on code you cannot
+vouch for. A PR with an unsigned commit is asked to fix it before it merges.
